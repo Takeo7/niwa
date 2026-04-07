@@ -400,6 +400,10 @@ class WizardConfig:
         self.password: str = ""
         self.register_claude: bool = False
         self.register_openclaw: bool = False
+        self.mode: str = "local-only"  # or "remote"
+        self.public_domain: str = ""
+        self.cloudflared_tunnel_id: str = ""
+        self.cloudflared_config_path: Path = Path.home() / ".cloudflared" / "config.yml"
 
 
 def step_detection(cfg: WizardConfig) -> None:
@@ -588,8 +592,53 @@ def step_ports(cfg: WizardConfig) -> None:
             break
 
 
+def step_remote(cfg: WizardConfig) -> None:
+    header("Step 8 — Public exposure (optional)")
+    print("By default, Niwa is local-only (loopback). To access from outside (mobile,")
+    print("ChatGPT, n8n in another machine), you can opt in to remote exposure via")
+    print("Cloudflare Tunnel + Caddy bearer auth.")
+    print()
+    if not prompt_bool("Enable remote access via Cloudflare Tunnel?", default=False):
+        cfg.mode = "local-only"
+        return
+
+    if not cfg.detected.get("cloudflared"):
+        warn("cloudflared is NOT installed. You can:")
+        print("  - Install it (brew install cloudflared / apt install cloudflared)")
+        print("  - Or skip remote for now and run './niwa install' again later")
+        if not prompt_bool("Continue with remote setup anyway?", default=False):
+            cfg.mode = "local-only"
+            return
+
+    cfg.mode = "remote"
+    cfg.public_domain = prompt(
+        "Public domain (must be on a Cloudflare-managed zone you own)",
+        validator=lambda v: None if "." in v and " " not in v else "must be a valid domain like mcp.example.com",
+    )
+
+    print()
+    print("Cloudflare Tunnel:")
+    choice = prompt_choice(
+        "How do you want to provide the tunnel?",
+        [
+            "Use an existing tunnel (you provide the tunnel ID)",
+            "Skip — I'll configure cloudflared manually after install",
+        ],
+        default=0,
+    )
+    if choice == 0:
+        cfg.cloudflared_tunnel_id = prompt(
+            "Tunnel ID (UUID, find with 'cloudflared tunnel list')",
+            validator=lambda v: None if re.fullmatch(r"[0-9a-f-]{36}", v) else "must be a UUID like 590d0340-d087-402b-a813-32e7e239c863",
+        )
+    else:
+        cfg.cloudflared_tunnel_id = ""
+        info("You can wire the tunnel manually after install. The Caddy reverse proxy")
+        info(f"will be ready at http://localhost:{cfg.caddy_port}/mcp — point your tunnel there.")
+
+
 def step_clients(cfg: WizardConfig) -> None:
-    header("Step 8 — Auto-register MCP clients")
+    header("Step 9 — Auto-register MCP clients")
     if cfg.detected["claude"]:
         cfg.register_claude = prompt_bool(
             "Register Niwa with Claude Code (user scope, claude mcp add)?", default=True
@@ -605,7 +654,7 @@ def step_clients(cfg: WizardConfig) -> None:
 
 
 def step_summary(cfg: WizardConfig) -> bool:
-    header("Step 9 — Summary")
+    header("Step 10 — Summary")
     print(f"  Instance name:      {cfg.instance_name}")
     print(f"  Install location:   {cfg.niwa_home}")
     print(f"  Database:           {cfg.db_mode} at {cfg.db_path}")
@@ -619,6 +668,10 @@ def step_summary(cfg: WizardConfig) -> bool:
           f"sse={cfg.gateway_sse_port}, caddy={cfg.caddy_port}, isu={cfg.isu_port}")
     print(f"  Tokens:             auto-generated, stored in niwa.env (chmod 600)")
     print(f"  Isu login:          {cfg.username}")
+    print(f"  Mode:               {cfg.mode}")
+    if cfg.mode == "remote":
+        print(f"  Public domain:      {cfg.public_domain}")
+        print(f"  Tunnel ID:          {cfg.cloudflared_tunnel_id or '(skip — manual config)'}")
     print(f"  Register Claude:    {cfg.register_claude}")
     print(f"  Register OpenClaw:  {cfg.register_openclaw}")
     print()
@@ -640,6 +693,9 @@ def execute_install(cfg: WizardConfig) -> None:
 
     # Build env vars dict
     env_vars = {
+        "NIWA_MODE": cfg.mode,
+        "NIWA_PUBLIC_DOMAIN": cfg.public_domain,
+        "NIWA_CLOUDFLARE_TUNNEL_ID": cfg.cloudflared_tunnel_id,
         "INSTANCE_NAME": cfg.instance_name,
         "NIWA_HOME": str(cfg.niwa_home),
         "NIWA_LOGS_DIR": str(cfg.niwa_home / "logs"),
@@ -730,7 +786,7 @@ def execute_install(cfg: WizardConfig) -> None:
         ok(f"Fresh DB created at {cfg.db_path}")
 
     # Build images
-    header("Step 11 — Building Docker images")
+    header("Step 13 — Building Docker images")
     images = [
         ("niwa-mcp", REPO_ROOT / "servers" / "niwa-mcp", f"{cfg.instance_name}-niwa-mcp:latest"),
         ("isu-mcp", REPO_ROOT / "servers" / "isu-mcp", f"{cfg.instance_name}-isu-mcp:latest"),
@@ -755,7 +811,7 @@ def execute_install(cfg: WizardConfig) -> None:
     ok("Pulled mcp/filesystem")
 
     # docker compose up
-    header("Step 12 — Starting the stack")
+    header("Step 14 — Starting the stack")
     result = subprocess.run(
         ["docker", "compose", "-f", str(cfg.niwa_home / "docker-compose.yml"), "up", "-d"],
         capture_output=True, text=True,
@@ -781,6 +837,10 @@ def execute_install(cfg: WizardConfig) -> None:
     except Exception as e:
         warn(f"Gateway health check failed: {e}")
         warn(f"  Run: docker logs {cfg.instance_name}-mcp-gateway")
+
+    # Configure cloudflared if remote mode
+    if cfg.mode == "remote" and cfg.cloudflared_tunnel_id:
+        configure_cloudflared(cfg)
 
     # Register clients
     if cfg.register_claude:
@@ -819,6 +879,8 @@ def print_summary(cfg: WizardConfig) -> None:
     print(f"    Local (SSE legacy):      http://localhost:{cfg.gateway_sse_port}/sse")
     print(f"    Caddy reverse proxy:     http://localhost:{cfg.caddy_port}/mcp (bearer auth)")
     print(f"    Isu web UI:              http://localhost:{cfg.isu_port}")
+    if cfg.mode == "remote" and cfg.public_domain:
+        print(f"    Public (remote):         https://{cfg.public_domain}/mcp (bearer NIWA_REMOTE_TOKEN)")
     print()
     print(f"  {BOLD}Tokens:{RESET}")
     print(f"    Remote (for public/external clients): {cfg.tokens['NIWA_REMOTE_TOKEN'][:16]}...")
@@ -837,6 +899,85 @@ def print_summary(cfg: WizardConfig) -> None:
 
 
 # ────────────────────────── subcommands ──────────────────────────
+def configure_cloudflared(cfg: WizardConfig) -> None:
+    """Add Niwa hostname to cloudflared config and create the DNS route."""
+    info("Configuring cloudflared tunnel...")
+    config_path = cfg.cloudflared_config_path
+    if not config_path.exists():
+        warn(f"cloudflared config not found at {config_path}")
+        warn("Skipping tunnel config — wire it manually after install:")
+        warn(f"  Add to {config_path} ingress: hostname={cfg.public_domain} → http://localhost:{cfg.caddy_port}")
+        return
+
+    # Read current config (simple parser — assume well-formed)
+    content = config_path.read_text()
+    new_entry = f"  - hostname: {cfg.public_domain}\n    service: http://localhost:{cfg.caddy_port}\n"
+
+    if cfg.public_domain in content:
+        info(f"Hostname {cfg.public_domain} already in cloudflared config — skipping ingress add")
+    else:
+        # Insert after "ingress:" line
+        if "\ningress:\n" in content or content.startswith("ingress:\n"):
+            lines = content.split("\n")
+            out = []
+            inserted = False
+            for line in lines:
+                out.append(line)
+                if line.strip() == "ingress:" and not inserted:
+                    out.append(new_entry.rstrip())
+                    inserted = True
+            if inserted:
+                # Backup before write
+                config_path.with_suffix(".yml.bak").write_text(content)
+                config_path.write_text("\n".join(out))
+                ok(f"Added {cfg.public_domain} to cloudflared ingress (backup at .yml.bak)")
+            else:
+                warn("Could not find 'ingress:' anchor in cloudflared config")
+                return
+        else:
+            warn("cloudflared config has no 'ingress:' section — skipping")
+            return
+
+    # DNS route
+    info(f"Creating DNS route for {cfg.public_domain}...")
+    result = subprocess.run(
+        ["cloudflared", "tunnel", "route", "dns",
+         cfg.cloudflared_tunnel_id, cfg.public_domain],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        ok(f"DNS route created: {cfg.public_domain} → tunnel {cfg.cloudflared_tunnel_id[:8]}...")
+    else:
+        warn(f"DNS route failed: {result.stderr.strip()[:300]}")
+        warn("If the route already exists, this is fine. Otherwise create it manually:")
+        warn(f"  cloudflared tunnel route dns {cfg.cloudflared_tunnel_id} {cfg.public_domain}")
+
+    # Reload cloudflared
+    info("Reloading cloudflared service...")
+    if sys.platform == "darwin":
+        # macOS launchctl
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.cloudflare.cloudflared"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok("cloudflared restarted via launchctl")
+        else:
+            warn(f"launchctl restart failed (cloudflared may not be running as a service): {result.stderr.strip()[:200]}")
+            warn("Restart manually: launchctl kickstart -k gui/$(id -u)/com.cloudflare.cloudflared")
+    else:
+        # Linux systemd
+        result = subprocess.run(
+            ["systemctl", "restart", "cloudflared"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok("cloudflared restarted via systemctl")
+        else:
+            warn("Could not restart cloudflared automatically. Restart manually:")
+            warn("  sudo systemctl restart cloudflared")
+
+
 def cmd_install(args) -> None:
     print(f"{BOLD}🌿 Niwa installer{RESET}")
     print(f"{DIM}Interactive setup for the Niwa MCP gateway + Isu lite web UI{RESET}\n")
@@ -849,6 +990,7 @@ def cmd_install(args) -> None:
     step_tokens(cfg)
     step_credentials(cfg)
     step_ports(cfg)
+    step_remote(cfg)
     step_clients(cfg)
     if not step_summary(cfg):
         info("Aborted — nothing was installed")
