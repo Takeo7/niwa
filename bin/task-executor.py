@@ -27,6 +27,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -72,6 +73,7 @@ LLM_COMMAND = ENV.get("NIWA_LLM_COMMAND", "").strip()
 POLL_SECONDS = int(ENV.get("NIWA_EXECUTOR_POLL_SECONDS", "30"))
 TIMEOUT_SECONDS = int(ENV.get("NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
 MAX_OUTPUT_CHARS = int(ENV.get("NIWA_EXECUTOR_MAX_OUTPUT", "10000"))
+HEARTBEAT_SECONDS = int(ENV.get("NIWA_EXECUTOR_HEARTBEAT_SECONDS", "60"))
 
 
 # ────────────────────────── logging ──────────────────────────
@@ -90,8 +92,19 @@ log = logging.getLogger("niwa-executor")
 
 # ────────────────────────── DB helpers ──────────────────────────
 def _conn() -> sqlite3.Connection:
+    """Open a sqlite connection with WAL + busy_timeout. WAL allows concurrent
+    readers/writers (the heartbeat thread + the main loop + the web app), and
+    busy_timeout=10s makes the rare contention non-fatal."""
     c = sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory = sqlite3.Row
+    # WAL is persistent — set once and the file stays in WAL mode across opens.
+    # Set it on every connection anyway (it's idempotent and free) so a fresh
+    # install or a DB recreated by the web app also gets it.
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=10000")
+    except sqlite3.OperationalError:
+        pass
     return c
 
 
@@ -142,6 +155,38 @@ def _resolve_project_dir(project_id: Optional[str]) -> Optional[Path]:
             if p.is_dir():
                 return p
     return None
+
+
+class HeartbeatThread(threading.Thread):
+    """Daemon thread that bumps tasks.updated_at every HEARTBEAT_SECONDS while
+    a task is executing. Without this, long-running LLM calls or deploys can
+    leave the row stale for 20+ minutes — making the web UI think the task is
+    frozen and any future watchdog reset it as 'stuck'.
+
+    Uses its own sqlite connection (WAL mode permits this safely)."""
+
+    def __init__(self, task_id: str):
+        super().__init__(daemon=True)
+        self.task_id = task_id
+        # NOTE: don't name this `_stop` — Thread has an internal `_stop` method
+        # used by join(). Naming our Event `_stop` shadows it and breaks join.
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self) -> None:
+        while not self._stop_event.wait(HEARTBEAT_SECONDS):
+            try:
+                with _conn() as c:
+                    c.execute(
+                        "UPDATE tasks SET updated_at = ? WHERE id = ? AND status = 'en_progreso'",
+                        (_now_iso(), self.task_id),
+                    )
+                    c.commit()
+            except Exception as e:
+                # Don't crash the worker if a heartbeat fails — just log and keep going.
+                log.warning("heartbeat failed for %s: %s", self.task_id, e)
 
 
 def _record_event(task_id: str, event_type: str, payload: dict) -> None:
@@ -250,7 +295,14 @@ def main() -> None:
             project_dir = _resolve_project_dir(task["project_id"])
             cwd = project_dir or Path.home()
             prompt = _build_prompt(task, project_dir)
-            success, output = _run_llm(prompt, cwd)
+            # Heartbeat keeps updated_at fresh while the LLM runs (could be 20+ min).
+            heartbeat = HeartbeatThread(task["id"])
+            heartbeat.start()
+            try:
+                success, output = _run_llm(prompt, cwd)
+            finally:
+                heartbeat.stop()
+                heartbeat.join(timeout=2)
             if success:
                 _finish_task(task["id"], "hecha", output)
                 _record_event(task["id"], "completed", {"executor": "niwa-executor"})

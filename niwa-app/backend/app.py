@@ -161,8 +161,16 @@ def client_ip(handler) -> str:
 
 
 def db_conn():
-    conn = sqlite3.connect(DB_PATH)
+    # WAL mode lets the executor (separate process) and the web app write
+    # concurrently without blocking each other. busy_timeout=10s makes the
+    # rare contention non-fatal. Both PRAGMAs are idempotent.
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
