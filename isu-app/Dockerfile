@@ -8,10 +8,11 @@ COPY frontend/ /app/frontend/
 COPY db/ /app/db/
 COPY config/ /app/config/
 
-# Defaults — override via env at runtime
-ENV ISU_HOST=0.0.0.0 \
-    ISU_PORT=8080 \
-    ISU_DB_PATH=/data/desk.sqlite3
+# Defaults — override via env at runtime.
+# These match the env vars read by backend/app.py (DESK_HOST, DESK_PORT, DESK_DB_PATH).
+ENV DESK_HOST=0.0.0.0 \
+    DESK_PORT=8080 \
+    DESK_DB_PATH=/data/desk.sqlite3
 
 EXPOSE 8080
 CMD ["python", "/app/backend/app.py"]

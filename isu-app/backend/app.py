@@ -169,39 +169,11 @@ def db_conn():
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db_conn() as conn:
+        # Single source of truth: db/schema.sql.
+        # Tables that used to be defined inline (kanban_columns, login_attempts, notes)
+        # now live in schema.sql with the up-to-date enums (incl 'revision' status,
+        # 'sistema' area, english priority aliases) and the Phase 5 typed-notes columns.
         conn.executescript(SCHEMA_PATH.read_text(encoding='utf-8'))
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS kanban_columns (
-                id TEXT PRIMARY KEY,
-                status TEXT NOT NULL UNIQUE CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','hecha','archivada')),
-                label TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                color TEXT,
-                is_terminal INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-        ''')
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS login_attempts (
-                key TEXT PRIMARY KEY,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                last_attempt_at TEXT NOT NULL,
-                blocked_until TEXT
-            );
-        ''')
-        conn.executescript('''
-            CREATE TABLE IF NOT EXISTS notes (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                content TEXT,
-                project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-                tags TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_notes_project_id ON notes(project_id);
-        ''')
         ts = now_iso()
         for column_id, status, label, position, color, is_terminal in DEFAULT_KANBAN_COLUMNS:
             conn.execute(

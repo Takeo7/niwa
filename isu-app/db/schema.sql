@@ -1,5 +1,11 @@
+-- Niwa pack — Isu lite schema
+-- Authoritative schema reflecting Phase 5 (typed notes) + Niwa MCP requirements.
+-- Used by isu-app/backend/app.py init_db() and the Niwa MCP servers (niwa-mcp, isu-mcp).
+-- Fresh installs run this once. Bumping requires a versioned migration in db/migrations/.
+
 PRAGMA foreign_keys = ON;
 
+-- ── Projects ──
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
@@ -8,17 +14,20 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  directory TEXT,
+  url TEXT
 );
 
+-- ── Tasks ──
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT,
-  area TEXT NOT NULL CHECK (area IN ('personal','empresa','proyecto')),
+  area TEXT NOT NULL CHECK (area IN ('personal','empresa','proyecto','sistema')) DEFAULT 'proyecto',
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-  status TEXT NOT NULL CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','hecha','archivada')) DEFAULT 'inbox',
-  priority TEXT NOT NULL CHECK (priority IN ('baja','media','alta','critica')) DEFAULT 'media',
+  status TEXT NOT NULL CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','hecha','archivada')) DEFAULT 'inbox',
+  priority TEXT NOT NULL CHECK (priority IN ('baja','media','alta','critica','low','medium','high','critical')) DEFAULT 'media',
   urgent INTEGER NOT NULL DEFAULT 0,
   scheduled_for TEXT,
   due_at TEXT,
@@ -26,13 +35,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   source TEXT,
   notes TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  assigned_to_yume INTEGER NOT NULL DEFAULT 0,
+  assigned_to_claude INTEGER NOT NULL DEFAULT 0,
+  attachments TEXT
 );
 
-
+-- ── Kanban columns ──
 CREATE TABLE IF NOT EXISTS kanban_columns (
   id TEXT PRIMARY KEY,
-  status TEXT NOT NULL UNIQUE CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','hecha','archivada')),
+  status TEXT NOT NULL UNIQUE CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','hecha','archivada')),
   label TEXT NOT NULL,
   position INTEGER NOT NULL,
   color TEXT,
@@ -41,12 +53,14 @@ CREATE TABLE IF NOT EXISTS kanban_columns (
   updated_at TEXT NOT NULL
 );
 
+-- ── Task labels ──
 CREATE TABLE IF NOT EXISTS task_labels (
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   label TEXT NOT NULL,
   PRIMARY KEY (task_id, label)
 );
 
+-- ── Task events / history timeline ──
 CREATE TABLE IF NOT EXISTS task_events (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -55,6 +69,7 @@ CREATE TABLE IF NOT EXISTS task_events (
   created_at TEXT NOT NULL
 );
 
+-- ── Day focus (Mi día) ──
 CREATE TABLE IF NOT EXISTS day_focus (
   day TEXT PRIMARY KEY,
   summary TEXT,
@@ -69,6 +84,7 @@ CREATE TABLE IF NOT EXISTS day_focus_tasks (
   PRIMARY KEY (day, task_id)
 );
 
+-- ── Inbox items (quick captures, used by isu-mcp inbox_create/list) ──
 CREATE TABLE IF NOT EXISTS inbox_items (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('task','note','email','calendar','file','message')),
@@ -81,6 +97,8 @@ CREATE TABLE IF NOT EXISTS inbox_items (
   updated_at TEXT NOT NULL
 );
 
+-- ── Notes (typed, Phase 5) ──
+-- Used by isu-mcp for note_*, decision_*, idea_*, research_*, diary_* verbs.
 CREATE TABLE IF NOT EXISTS notes (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -88,12 +106,33 @@ CREATE TABLE IF NOT EXISTS notes (
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   tags TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'note' CHECK (type IN ('decision','idea','research','diary','note')),
+  metadata TEXT,
+  status TEXT,
+  linked_tasks TEXT,
+  linked_decisions TEXT
 );
 
+-- ── Login attempts (auth rate limiting) ──
+CREATE TABLE IF NOT EXISTS login_attempts (
+  key TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TEXT NOT NULL,
+  blocked_until TEXT
+);
+
+-- ── Indices ──
 CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_notes_project_id ON notes(project_id);
+CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
+CREATE INDEX IF NOT EXISTS idx_notes_status ON notes(status);
+CREATE INDEX IF NOT EXISTS idx_inbox_items_kind ON inbox_items(kind);
+CREATE INDEX IF NOT EXISTS idx_inbox_items_source ON inbox_items(source);
