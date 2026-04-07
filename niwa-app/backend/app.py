@@ -341,62 +341,6 @@ def fetch_flows_overview():
             'alias_count': len(aliases),
         })
 
-    flow_items.append({
-        'id': 'desk-deploy-close',
-        'type': 'deploy',
-        'title': 'Cierre verificado de cambios en Desk',
-        'summary': 'Validación local, commit, recreate si aplica, verificación post-deploy y cierre real de la tarea.',
-        'steps': [
-            'código aplicado',
-            'validación local',
-            'commit',
-            'deploy/recreate si aplica',
-            'verificación post-deploy',
-            'marcar hecha con desk-deploy:verified',
-        ],
-        'doc_path': 'Desk/docs/DEPLOY_FLOW.md',
-        'script': 'Desk/scripts/desk_change_flow.sh',
-    })
-
-    flow_items.append({
-        'id': 'automation-boundary',
-        'type': 'architecture',
-        'title': 'Dónde vive cada flujo',
-        'summary': 'n8n para automatización determinista entre servicios; Desk/OpenClaw para routing, estado y decisiones con contexto.',
-        'steps': [
-            'n8n detecta o mueve datos',
-            'OpenClaw/Yume decide o delega',
-            'Desk muestra estado y trazabilidad',
-        ],
-        'doc_path': 'config/RUTINAS-PROTOCOL.md',
-    })
-
-    # n8n workflows from exported JSON files
-    ws = _OPENCLAW_HOME / 'workspace'
-    n8n_dirs = [ws / 'n8n', ws / 'Workspace-Yume' / 'automatizaciones' / 'n8n']
-    seen_names = set()
-    for d in n8n_dirs:
-        if not d.is_dir():
-            continue
-        for f in sorted(d.glob('*workflow*.json')):
-            try:
-                wf = json.loads(f.read_text(encoding='utf-8'))
-                name = wf.get('name', f.stem)
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-                nodes = wf.get('nodes', [])
-                node_names = [n.get('type', '').split('.')[-1] for n in nodes]
-                flow_items.append({
-                    'id': f'n8n-{f.stem}',
-                    'type': 'n8n',
-                    'title': name,
-                    'summary': f'{len(nodes)} nodos: {", ".join(node_names[:5])}{"..." if len(node_names) > 5 else ""}',
-                    'steps': [n.get('name', n.get('type', '?')) for n in nodes],
-                })
-            except Exception:
-                pass
-
     return {'flows': flow_items, 'updated_at': now_iso()}
 
 

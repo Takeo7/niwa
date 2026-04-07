@@ -219,9 +219,12 @@ def detect_docker() -> dict:
 
 def detect_socket_path() -> Optional[str]:
     candidates = [
-        Path.home() / ".orbstack" / "run" / "docker.sock",
-        Path("/var/run/docker.sock"),
-        Path.home() / ".colima" / "default" / "docker.sock",
+        Path.home() / ".orbstack" / "run" / "docker.sock",          # OrbStack (macOS)
+        Path("/var/run/docker.sock"),                               # Docker Desktop / system
+        Path.home() / ".colima" / "default" / "docker.sock",        # Colima
+        Path.home() / ".docker" / "run" / "docker.sock",            # Docker Desktop newer / rootless
+        Path(f"/run/user/{os.getuid()}/docker.sock"),               # Linux rootless Docker
+        Path(f"/run/user/{os.getuid()}/podman/podman.sock"),        # Podman rootless
     ]
     for c in candidates:
         if c.exists():
@@ -966,7 +969,6 @@ def execute_install(cfg: WizardConfig) -> None:
         with urllib.request.urlopen(f"http://localhost:{cfg.gateway_streaming_port}/mcp", timeout=5) as r:
             ok(f"Gateway responding on port {cfg.gateway_streaming_port}")
     except urllib.error.HTTPError as e:
-        # 4xx is OK — means server is up but rejected the GET (expected for /mcp without proper handshake)
         if e.code in (400, 405, 406):
             ok(f"Gateway responding on port {cfg.gateway_streaming_port} (HTTP {e.code} expected for GET)")
         else:
@@ -974,6 +976,26 @@ def execute_install(cfg: WizardConfig) -> None:
     except Exception as e:
         warn(f"Gateway health check failed: {e}")
         warn(f"  Run: docker logs {cfg.instance_name}-mcp-gateway")
+
+    # Niwa app healthcheck
+    try:
+        with urllib.request.urlopen(f"http://localhost:{cfg.app_port}/health", timeout=5) as r:
+            if r.status == 200:
+                ok(f"Niwa app responding on port {cfg.app_port}")
+            else:
+                warn(f"Niwa app returned HTTP {r.status}")
+    except Exception as e:
+        warn(f"Niwa app health check failed: {e}")
+        warn(f"  Run: docker logs {cfg.instance_name}-app")
+
+    # Caddy healthcheck (no auth needed for /health)
+    try:
+        with urllib.request.urlopen(f"http://localhost:{cfg.caddy_port}/health", timeout=5) as r:
+            if r.status == 200:
+                ok(f"Caddy responding on port {cfg.caddy_port}")
+    except Exception as e:
+        warn(f"Caddy health check failed: {e}")
+        warn(f"  Run: docker logs {cfg.instance_name}-caddy")
 
     # Bootstrap projects table with the user's chosen projects
     if cfg.projects:
@@ -1477,6 +1499,19 @@ def cmd_logs(args) -> None:
     env = _read_env_file(install_dir / "secrets" / "mcp.env")
     instance = env.get("INSTANCE_NAME", "niwa")
     role = args.service or "mcp-gateway"
+    # Special: 'executor' is the host-side launchd/systemd worker, not a container
+    if role == "executor":
+        log_path = install_dir / "logs" / "executor.log"
+        if not log_path.exists():
+            err(f"Executor log not found at {log_path}")
+            sys.exit(1)
+        info(f"Tailing {log_path} (Ctrl+C to exit)...")
+        try:
+            subprocess.run(["tail", "-n", str(args.tail), "-f", str(log_path)])
+        except KeyboardInterrupt:
+            pass
+        return
+    # Otherwise: docker container logs
     container = f"{instance}-{role}"
     info(f"Showing last {args.tail} lines of {container} (Ctrl+C to exit)...")
     try:

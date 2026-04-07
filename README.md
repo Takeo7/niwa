@@ -2,19 +2,20 @@
 
 > Personal MCP gateway with built-in task management, notes, platform ops and filesystem access — installable on any machine with Docker.
 
-**Status:** alpha — usable but unpolished. Tested on macOS (OrbStack). Should work on Linux + Docker; not yet validated.
+**Status:** beta — feature-complete (install/uninstall/status, autonomous task execution, public exposure via Cloudflare). Validated on macOS (OrbStack). Linux paths included but not yet tested on a real fresh Linux machine.
 
 ## What is Niwa
 
 Niwa is a self-contained Docker stack you install on your machine. It gives you:
 
 - **44 MCP tools** that any Claude/LLM client can call to manage your tasks, notes, projects, containers, and files.
-- **A web UI** (Isu lite) with 6 views: dashboard, kanban, projects, notes, history, system.
+- **A web UI** (Niwa app) with 6 views: dashboard, kanban, projects, notes, history, system.
 - **Two MCP gateway transports** (streamable HTTP + legacy SSE) so it works with both modern and older MCP clients (Claude Code, OpenClaw, custom builds).
-- **A bearer-authed reverse proxy** (Caddy) for optional public exposure (P8 — coming).
+- **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.
+- **Optional task executor** (host-side launchd/systemd worker) that runs pending tasks via Claude / GPT (via `llm` CLI) / Gemini / custom command.
 - **Aislamiento Docker** via socket-proxy: only one container ever touches the Docker socket.
 
-It runs as 5 long-lived containers + spawns ephemeral MCP server containers per tool call.
+It runs as 5 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`) + spawns ephemeral MCP server containers per tool call. With the optional executor enabled, also a host-side launchd/systemd worker that polls the DB.
 
 ## What you can do with it
 
@@ -94,69 +95,80 @@ All commands accept `--dir <path>` to point at a non-default install location.
               (7 tools)    (22 tools)  (4 tools)    (11 tools)
                   │           │           │           │
                   ▼           ▼           ▼           ▼
-                desk.sqlite3 (RW)    socket-proxy   /workspace + /memory
+                niwa.sqlite3 (RW)    socket-proxy   /workspace + /memory
                                                     (scoped paths)
 
 
-            isu (web UI, port 8080)        caddy (reverse proxy, bearer auth)
-            ────────────────────           ─────────────────────────────────
-            niwa-app:latest                 caddy:2-alpine
-            backend/app.py                 fronts mcp-gateway for public access
-            frontend (vanilla JS SPA)      validates Authorization: Bearer
+            niwa-app (web UI, port 8080)   caddy (reverse proxy, bearer auth)
+            ─────────────────────────       ─────────────────────────────────
+            <instance>-app:latest           caddy:2-alpine
+            backend/app.py                  fronts mcp-gateway for public access
+            frontend (vanilla JS SPA)       validates Authorization: Bearer
+
+            task-executor (host-side, optional, launchd/systemd)
+            ────────────────────────────────────────────────────
+            bin/task-executor.py
+            polls niwa.sqlite3 for status='pendiente' tasks
+            dispatches via configured LLM CLI (claude/llm/gemini/custom)
 ```
 
 ## Renameable
 
-The 4 MCP servers are nameable per install. Defaults: `niwa`, `isu`, `platform`, `filesystem`. You can rename them in the wizard (e.g. `tasks`, `vault`, `ops`, `files`). The instance name (default `niwa`) prefixes container/image/network names.
+The 4 MCP servers are nameable per install. Defaults: `tasks`, `notes`, `platform`, `filesystem`. You can rename them in the wizard. The instance name (default `niwa`) prefixes container/image/network names so multiple installs can coexist on the same machine.
 
 ## Project structure
 
 ```
 niwa/
-├── README.md                       # this file
-├── INSTALL.md                      # detailed install guide (coming)
-├── niwa                            # CLI wrapper (bash → setup.py)
-├── setup.py                        # interactive installer
-├── docker-compose.yml.tmpl         # template (filled at install time)
-├── niwa.env.example                # example env vars
-├── caddy/Caddyfile                 # reverse proxy config
+├── README.md                      # this file
+├── INSTALL.md                     # detailed install guide
+├── niwa                           # CLI wrapper (bash → setup.py)
+├── setup.py                       # interactive installer (~1500 lines, stdlib only)
+├── docker-compose.yml.tmpl        # template (filled at install time)
+├── niwa.env.example               # example env vars
+├── caddy/Caddyfile                # reverse proxy config
+├── bin/
+│   └── task-executor.py           # host-side executor (optional)
 ├── servers/
-│   ├── tasks-mcp/                   # tasks/projects MCP (Python + mcp SDK)
-│   ├── notes-mcp/                    # notes/inbox MCP
-│   └── platform-mcp/               # docker ops MCP
-├── niwa-app/                        # Isu lite web UI (Python stdlib)
-│   ├── backend/app.py              # ~1600 lines, 6 views
-│   ├── frontend/                   # vanilla JS SPA
-│   ├── db/schema.sql               # authoritative schema
+│   ├── tasks-mcp/                 # tasks/projects MCP (Python + mcp SDK)
+│   ├── notes-mcp/                 # typed notes MCP (decision/idea/research/diary)
+│   └── platform-mcp/              # docker ops MCP
+├── niwa-app/                      # web UI (Python stdlib, no framework)
+│   ├── backend/app.py             # all routes + handlers
+│   ├── frontend/                  # vanilla JS SPA, 6 views
+│   ├── db/schema.sql              # authoritative schema
 │   └── Dockerfile
 └── docs/
-    ├── PORTABILITY-PLAN.md
-    └── ISU-AUDIT.md
+    ├── PORTABILITY-PLAN.md        # internal: design history
+    └── ISU-AUDIT.md               # internal: strip plan
 ```
 
 ## What's in / out of the install
 
 **Installed by default:**
 - 4 MCP servers (44 tools)
-- Isu web UI on port 8080 (configurable)
+- Niwa app web UI on port 8080 (configurable)
 - Caddy reverse proxy on port 18811
 - Two MCP gateway twins (streaming + SSE) on 18810/18812
 
 **Not installed (optional, ask in the wizard):**
-- Cloudflare Tunnel for public exposure (P8 — coming)
-- GitHub MCP catalog server (needs PAT)
+- Cloudflare Tunnel for public exposure (needs cloudflared + a tunnel ID)
+- Task executor (needs an LLM CLI: claude / llm / gemini / custom command)
+- GitHub MCP catalog server (needs PAT, currently skipped)
 - Auto-registration with Claude Code or OpenClaw (only if detected and you say yes)
 
 **Excluded entirely from the portable version:**
-- The 5 Isu views that aren't part of the core: calendar, email, agents, connections, terminal
+- The 5 legacy views removed during the port: calendar, email, agents, connections, terminal
 - Google/Outlook OAuth flows
 - The full original Yume agent ecosystem (this pack ships the schema and the web UI; the agents themselves stay in your other systems)
 
 ## Known limitations
 
-- Caddy bearer auth + Cloudflare Tunnel for remote access is **not yet wired into the wizard** (P8). The Caddyfile is already there, but the wizard only configures local-only mode.
-- No automated test on a fresh Linux machine yet (P11). macOS+OrbStack is the validated path.
-- Schema migrations: only "fresh DB" or "use as-is" — no auto-migrate of an old DB to the latest schema.
+- **No fresh-machine test on Linux** yet. macOS + OrbStack is the validated path. Linux paths (systemd unit, rootless socket detection) are written but unverified end-to-end.
+- **Schema migrations**: only "fresh DB" or "use as-is" — no auto-migrate of an old DB to the latest schema.
+- **Image tags use `:latest`** for upstream containers (`docker/mcp-gateway`, `caddy:2-alpine`, `tecnativa/docker-socket-proxy`, `mcp/filesystem`). Bump risk — pin in compose if you need stability.
+- **No backup or upgrade subcommand** yet. Back up `~/.niwa/data/niwa.sqlite3` yourself; update via `git pull && ./niwa uninstall --keep-data && ./niwa install`.
+- **Token rotation** not exposed as a command. Edit `~/.niwa/secrets/mcp.env` and `niwa restart`.
 - Single-user, single-instance per install location.
 
 ## Security model
@@ -178,7 +190,7 @@ Built on top of:
 - [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) — socket isolation
 - [Caddy](https://caddyserver.com/) — reverse proxy
 - [@modelcontextprotocol/server-filesystem](https://hub.docker.com/r/mcp/filesystem) — filesystem MCP
-- The Isu web UI is a stripped-down derivative of a personal kanban app, ported and parameterized for portability.
+- The web app is a stripped-down derivative of a personal kanban app, ported and parameterized for portability.
 
 ---
 

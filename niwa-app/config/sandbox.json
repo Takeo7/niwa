@@ -42,9 +42,11 @@
   "allowed_workspace": "/instance/.openclaw/workspace",
 
   "critical_env_vars": [
-    "DESK_PASSWORD",
-    "DESK_SESSION_SECRET",
-    "CLAUDE_BRIDGE_TOKEN"
+    "NIWA_APP_PASSWORD",
+    "NIWA_APP_SESSION_SECRET",
+    "NIWA_LOCAL_TOKEN",
+    "NIWA_REMOTE_TOKEN",
+    "MCP_GATEWAY_AUTH_TOKEN"
   ],
 
   "dangerous_commands_blocklist": [

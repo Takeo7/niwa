@@ -1,7 +1,8 @@
 # Caddy reverse proxy for the Niwa MCP gateway.
 # Validates Authorization: Bearer <NIWA_REMOTE_TOKEN> on every request.
-# The local gateway at niwa-mcp-gateway:8811 has auth disabled (container mode
-# limitation of docker/mcp-gateway), so this is the only enforcement point.
+# Uses the compose service name `mcp-gateway` (resolvable inside the docker
+# network) instead of a hardcoded container name, so it works regardless of
+# the install's INSTANCE_NAME prefix.
 
 {
 	admin off
@@ -18,7 +19,7 @@
 	# Authed MCP endpoint
 	@authed header Authorization "Bearer {$NIWA_REMOTE_TOKEN}"
 	handle @authed {
-		reverse_proxy http://niwa-mcp-gateway:8811 {
+		reverse_proxy http://mcp-gateway:8811 {
 			# MCP uses streamable HTTP / SSE — disable buffering
 			flush_interval -1
 			transport http {

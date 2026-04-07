@@ -1,6 +1,6 @@
--- Niwa pack — Isu lite schema
+-- Niwa schema
 -- Authoritative schema reflecting Phase 5 (typed notes) + Niwa MCP requirements.
--- Used by isu-app/backend/app.py init_db() and the Niwa MCP servers (niwa-mcp, isu-mcp).
+-- Used by niwa-app/backend/app.py init_db() and the Niwa MCP servers (tasks-mcp, notes-mcp).
 -- Fresh installs run this once. Bumping requires a versioned migration in db/migrations/.
 
 PRAGMA foreign_keys = ON;
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS day_focus_tasks (
   PRIMARY KEY (day, task_id)
 );
 
--- ── Inbox items (quick captures, used by isu-mcp inbox_create/list) ──
+-- ── Inbox items (quick captures, used by notes-mcp inbox_create/list) ──
 CREATE TABLE IF NOT EXISTS inbox_items (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('task','note','email','calendar','file','message')),
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 );
 
 -- ── Notes (typed, Phase 5) ──
--- Used by isu-mcp for note_*, decision_*, idea_*, research_*, diary_* verbs.
+-- Used by notes-mcp for note_*, decision_*, idea_*, research_*, diary_* verbs.
 CREATE TABLE IF NOT EXISTS notes (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,

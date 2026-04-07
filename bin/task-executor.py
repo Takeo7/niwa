@@ -100,15 +100,18 @@ def _now_iso() -> str:
 
 
 def _claim_next_task() -> Optional[sqlite3.Row]:
-    """Atomically pick the oldest pending task and mark it in_progress."""
+    """Atomically pick the oldest pending task and mark it in_progress.
+
+    Picks any task with status='pendiente'. If you want to mark some tasks as
+    "do not auto-execute" (e.g. tasks for the human to do manually), set their
+    status to 'inbox' instead and only move to 'pendiente' when you want the
+    executor to take them.
+    """
     with _conn() as c:
-        # Pending + assigned to a worker (yume or claude). If neither, the task
-        # is for Arturo to do manually — we don't pick it.
         row = c.execute(
             """
             SELECT * FROM tasks
             WHERE status = 'pendiente'
-              AND (assigned_to_yume = 1 OR assigned_to_claude = 1)
             ORDER BY priority DESC, created_at ASC
             LIMIT 1
             """
