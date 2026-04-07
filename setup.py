@@ -561,8 +561,35 @@ def step_credentials(cfg: WizardConfig) -> None:
     cfg.password = prompt("Password (visible — write it down or pick something temporary)")
 
 
+def step_ports(cfg: WizardConfig) -> None:
+    header("Step 7 — Ports")
+    print("All ports are bound to 127.0.0.1 (loopback only) by default.")
+    defaults = [
+        ("Gateway streaming HTTP", "gateway_streaming_port", 18810),
+        ("Gateway SSE legacy", "gateway_sse_port", 18812),
+        ("Caddy reverse proxy", "caddy_port", 18811),
+        ("Isu web UI", "isu_port", 8080),
+    ]
+    for label, attr, default in defaults:
+        in_use = not detect_port_free(default)
+        suffix = f" {YELLOW}(default in use!){RESET}" if in_use else ""
+        while True:
+            answer = prompt(f"{label} port{suffix}", default=str(default), validator=valid_port)
+            n = int(answer)
+            if not detect_port_free(n):
+                if n == default and not prompt_bool(
+                    f"  Port {n} appears to be in use. Continue anyway?", default=False
+                ):
+                    continue
+                if n != default:
+                    warn(f"  Port {n} appears to be in use. Pick another.")
+                    continue
+            setattr(cfg, attr, n)
+            break
+
+
 def step_clients(cfg: WizardConfig) -> None:
-    header("Step 7 — Auto-register MCP clients")
+    header("Step 8 — Auto-register MCP clients")
     if cfg.detected["claude"]:
         cfg.register_claude = prompt_bool(
             "Register Niwa with Claude Code (user scope, claude mcp add)?", default=True
@@ -578,7 +605,7 @@ def step_clients(cfg: WizardConfig) -> None:
 
 
 def step_summary(cfg: WizardConfig) -> bool:
-    header("Step 8 — Summary")
+    header("Step 9 — Summary")
     print(f"  Instance name:      {cfg.instance_name}")
     print(f"  Install location:   {cfg.niwa_home}")
     print(f"  Database:           {cfg.db_mode} at {cfg.db_path}")
@@ -600,7 +627,7 @@ def step_summary(cfg: WizardConfig) -> bool:
 
 # ────────────────────────── execution ──────────────────────────
 def execute_install(cfg: WizardConfig) -> None:
-    header("Step 9 — Building install")
+    header("Step 10 — Building install")
     cfg.niwa_home.mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "config").mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "data").mkdir(parents=True, exist_ok=True)
@@ -623,6 +650,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_GATEWAY_STREAMING_PORT": str(cfg.gateway_streaming_port),
         "NIWA_GATEWAY_SSE_PORT": str(cfg.gateway_sse_port),
         "NIWA_CADDY_PORT": str(cfg.caddy_port),
+        "NIWA_ISU_PORT": str(cfg.isu_port),
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],
@@ -636,6 +664,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "DESK_PASSWORD": cfg.password,
         "DESK_SESSION_SECRET": generate_token(),
         "DESK_PUBLIC_BASE_URL": f"http://localhost:{cfg.isu_port}",
+        "DESK_AUTH_REQUIRED": "1",
     }
 
     # Write secrets file
@@ -699,7 +728,7 @@ def execute_install(cfg: WizardConfig) -> None:
         ok(f"Fresh DB created at {cfg.db_path}")
 
     # Build images
-    header("Step 10 — Building Docker images")
+    header("Step 11 — Building Docker images")
     images = [
         ("niwa-mcp", REPO_ROOT / "servers" / "niwa-mcp", f"{cfg.instance_name}-niwa-mcp:latest"),
         ("isu-mcp", REPO_ROOT / "servers" / "isu-mcp", f"{cfg.instance_name}-isu-mcp:latest"),
@@ -724,7 +753,7 @@ def execute_install(cfg: WizardConfig) -> None:
     ok("Pulled mcp/filesystem")
 
     # docker compose up
-    header("Step 11 — Starting the stack")
+    header("Step 12 — Starting the stack")
     result = subprocess.run(
         ["docker", "compose", "-f", str(cfg.niwa_home / "docker-compose.yml"), "up", "-d"],
         capture_output=True, text=True,
@@ -817,6 +846,7 @@ def cmd_install(args) -> None:
     step_restart_whitelist(cfg)
     step_tokens(cfg)
     step_credentials(cfg)
+    step_ports(cfg)
     step_clients(cfg)
     if not step_summary(cfg):
         info("Aborted — nothing was installed")

@@ -1,6 +1,6 @@
 # Niwa MCP stack — template (parameterized)
 # Generated docker-compose.yml is produced by `niwa install` by substituting
-# ${VAR} from niwa.env. Do NOT edit the generated file directly — re-run install.
+# dollar-brace placeholders from niwa.env. Do NOT edit the generated file directly — re-run install.
 #
 # Variables expected (set by setup.py):
 #   INSTANCE_NAME                    e.g. "niwa" — prefix for container names
@@ -101,6 +101,30 @@ services:
       - ${NIWA_LOGS_DIR}:/logs:rw
     ports:
       - "127.0.0.1:${NIWA_GATEWAY_SSE_PORT}:8811"
+    networks:
+      - niwa-mcp
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  isu:
+    # Isu lite — web UI for tasks/projects/notes/system
+    image: ${INSTANCE_NAME}-isu:latest
+    container_name: ${INSTANCE_NAME}-isu
+    restart: unless-stopped
+    env_file:
+      - ${NIWA_SECRETS_DIR}/mcp.env
+    environment:
+      DESK_DB_PATH: /data/desk.sqlite3
+      DESK_HOST: 0.0.0.0
+      DESK_PORT: "8080"
+    volumes:
+      - ${NIWA_DB_PATH}:/data/desk.sqlite3
+    ports:
+      - "127.0.0.1:${NIWA_ISU_PORT}:8080"
     networks:
       - niwa-mcp
     mem_limit: 256m
