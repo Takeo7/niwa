@@ -609,6 +609,14 @@ def step_remote(cfg: WizardConfig) -> None:
         if not prompt_bool("Continue with remote setup anyway?", default=False):
             cfg.mode = "local-only"
             return
+    else:
+        # Cloudflared is installed — verify it's logged in
+        cf_problem = _check_cloudflared_authenticated()
+        if cf_problem:
+            warn(cf_problem)
+            if not prompt_bool("Continue anyway? (the wizard will skip the tunnel reload)", default=False):
+                cfg.mode = "local-only"
+                return
 
     cfg.mode = "remote"
     cfg.public_domain = prompt(
@@ -637,12 +645,37 @@ def step_remote(cfg: WizardConfig) -> None:
         info(f"will be ready at http://localhost:{cfg.caddy_port}/mcp — point your tunnel there.")
 
 
+def _check_claude_authenticated() -> Optional[str]:
+    """Returns None if claude is auth'd, else a message describing what's missing."""
+    # ~/.claude.json exists when claude is configured at all
+    config = Path.home() / ".claude.json"
+    if not config.exists():
+        return "Claude Code is installed but not configured. Run 'claude' once interactively before installing Niwa so it can register the MCP server."
+    return None
+
+
+def _check_cloudflared_authenticated() -> Optional[str]:
+    """Returns None if cloudflared has cert/credentials, else a message."""
+    cert = Path.home() / ".cloudflared" / "cert.pem"
+    if not cert.exists():
+        return "cloudflared is installed but not logged in. Run 'cloudflared login' interactively (it opens a browser) before continuing."
+    return None
+
+
 def step_clients(cfg: WizardConfig) -> None:
     header("Step 9 — Auto-register MCP clients")
     if cfg.detected["claude"]:
-        cfg.register_claude = prompt_bool(
-            "Register Niwa with Claude Code (user scope, claude mcp add)?", default=True
-        )
+        # Verify claude is configured
+        claude_problem = _check_claude_authenticated()
+        if claude_problem:
+            warn(claude_problem)
+            cfg.register_claude = prompt_bool(
+                "Try to register anyway?", default=False
+            )
+        else:
+            cfg.register_claude = prompt_bool(
+                "Register Niwa with Claude Code (user scope, claude mcp add)?", default=True
+            )
     if cfg.detected["openclaw"]:
         cfg.register_openclaw = prompt_bool(
             "Register Niwa with OpenClaw (openclaw mcp set)?", default=True
