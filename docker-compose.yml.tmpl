@@ -7,12 +7,14 @@
 #   NIWA_HOME                        e.g. ~/.niwa — install root
 #   NIWA_LOGS_DIR                    e.g. $NIWA_HOME/logs
 #   NIWA_SECRETS_DIR                 e.g. $NIWA_HOME/secrets
+#   NIWA_DB_PATH                     e.g. $NIWA_HOME/data/niwa.sqlite3
 #   NIWA_GATEWAY_STREAMING_PORT      e.g. 18810 — host port for streamable HTTP gateway
 #   NIWA_GATEWAY_SSE_PORT            e.g. 18812 — host port for SSE gateway
 #   NIWA_CADDY_PORT                  e.g. 18811 — host port for Caddy reverse proxy
-#   PLATFORM_RESTART_WHITELIST       e.g. "isu,my-app,arturo-cron" — comma-separated
+#   NIWA_APP_PORT                    e.g. 8080  — host port for the Niwa web app
+#   PLATFORM_RESTART_WHITELIST       e.g. "my-app,arturo-cron" — comma-separated
 #                                    (read by platform-mcp at spawn time, not by compose)
-#   NIWA_ENABLED_SERVERS             e.g. "niwa,isu,platform,filesystem" — passed via --servers
+#   NIWA_ENABLED_SERVERS             e.g. "tasks,notes,platform,filesystem" — passed via --servers
 
 services:
   socket-proxy:
@@ -31,7 +33,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - niwa-mcp
+      - niwa-net
     mem_limit: 64m
     logging:
       driver: json-file
@@ -65,7 +67,7 @@ services:
     ports:
       - "127.0.0.1:${NIWA_GATEWAY_STREAMING_PORT}:8811"
     networks:
-      - niwa-mcp
+      - niwa-net
     mem_limit: 256m
     logging:
       driver: json-file
@@ -102,7 +104,7 @@ services:
     ports:
       - "127.0.0.1:${NIWA_GATEWAY_SSE_PORT}:8811"
     networks:
-      - niwa-mcp
+      - niwa-net
     mem_limit: 256m
     logging:
       driver: json-file
@@ -110,23 +112,23 @@ services:
         max-size: "20m"
         max-file: "3"
 
-  isu:
-    # Isu lite — web UI for tasks/projects/notes/system
-    image: ${INSTANCE_NAME}-isu:latest
-    container_name: ${INSTANCE_NAME}-isu
+  app:
+    # Niwa app — web UI for tasks/projects/notes/system
+    image: ${INSTANCE_NAME}-app:latest
+    container_name: ${INSTANCE_NAME}-app
     restart: unless-stopped
     env_file:
       - ${NIWA_SECRETS_DIR}/mcp.env
     environment:
-      DESK_DB_PATH: /data/desk.sqlite3
-      DESK_HOST: 0.0.0.0
-      DESK_PORT: "8080"
+      NIWA_DB_PATH: /data/niwa.sqlite3
+      NIWA_APP_HOST: 0.0.0.0
+      NIWA_APP_PORT: "8080"
     volumes:
-      - ${NIWA_DB_PATH}:/data/desk.sqlite3
+      - ${NIWA_DB_PATH}:/data/niwa.sqlite3
     ports:
-      - "127.0.0.1:${NIWA_ISU_PORT}:8080"
+      - "127.0.0.1:${NIWA_APP_PORT}:8080"
     networks:
-      - niwa-mcp
+      - niwa-net
     mem_limit: 256m
     logging:
       driver: json-file
@@ -147,7 +149,7 @@ services:
     ports:
       - "127.0.0.1:${NIWA_CADDY_PORT}:8443"
     networks:
-      - niwa-mcp
+      - niwa-net
     mem_limit: 64m
     logging:
       driver: json-file
@@ -156,6 +158,6 @@ services:
         max-file: "2"
 
 networks:
-  niwa-mcp:
+  niwa-net:
     driver: bridge
-    name: ${INSTANCE_NAME}-mcp
+    name: ${INSTANCE_NAME}-net

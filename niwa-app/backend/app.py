@@ -25,23 +25,23 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = Path(os.environ.get('DESK_DB_PATH', str(BASE_DIR / 'data' / 'desk.sqlite3')))
+DB_PATH = Path(os.environ.get('NIWA_DB_PATH', str(BASE_DIR / 'data' / 'niwa.sqlite3')))
 SCHEMA_PATH = BASE_DIR / 'db' / 'schema.sql'
-HOST = os.environ.get('DESK_HOST', '0.0.0.0')
-PORT = int(os.environ.get('DESK_PORT', '8080'))
-DESK_USERNAME = os.environ.get('DESK_USERNAME', 'arturo')
-DESK_PASSWORD = os.environ.get('DESK_PASSWORD', 'yume1234')
-DESK_AUTH_REQUIRED = os.environ.get('DESK_AUTH_REQUIRED', '1') != '0'
-DESK_SESSION_SECRET = os.environ.get('DESK_SESSION_SECRET', 'desk-dev-secret-change-me')
-DESK_SESSION_COOKIE = os.environ.get('DESK_SESSION_COOKIE', 'desk_session')
-DESK_SESSION_TTL_HOURS = int(os.environ.get('DESK_SESSION_TTL_HOURS', '168'))
+HOST = os.environ.get('NIWA_APP_HOST', '0.0.0.0')
+PORT = int(os.environ.get('NIWA_APP_PORT', '8080'))
+NIWA_APP_USERNAME = os.environ.get('NIWA_APP_USERNAME', 'arturo')
+NIWA_APP_PASSWORD = os.environ.get('NIWA_APP_PASSWORD', 'change-me')
+NIWA_APP_AUTH_REQUIRED = os.environ.get('NIWA_APP_AUTH_REQUIRED', '1') != '0'
+NIWA_APP_SESSION_SECRET = os.environ.get('NIWA_APP_SESSION_SECRET', 'niwa-dev-secret-change-me')
+NIWA_APP_SESSION_COOKIE = os.environ.get('NIWA_APP_SESSION_COOKIE', 'niwa_session')
+NIWA_APP_SESSION_TTL_HOURS = int(os.environ.get('NIWA_APP_SESSION_TTL_HOURS', '168'))
 # Cookie Domain attribute. Empty (default) = host-only cookie, works on any domain.
 # Set to e.g. ".example.com" only for multi-subdomain SSO across the same parent.
-DESK_COOKIE_DOMAIN = os.environ.get('DESK_COOKIE_DOMAIN', '').strip()
-_COOKIE_DOMAIN_ATTR = f'Domain={DESK_COOKIE_DOMAIN}; ' if DESK_COOKIE_DOMAIN else ''
-LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('DESK_LOGIN_ATTEMPTS', '5'))
-LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('DESK_LOGIN_WINDOW_SECONDS', '900'))
-DESK_PUBLIC_BASE_URL = os.environ.get('DESK_PUBLIC_BASE_URL', f'http://127.0.0.1:{PORT}')
+NIWA_APP_COOKIE_DOMAIN = os.environ.get('NIWA_APP_COOKIE_DOMAIN', '').strip()
+_COOKIE_DOMAIN_ATTR = f'Domain={NIWA_APP_COOKIE_DOMAIN}; ' if NIWA_APP_COOKIE_DOMAIN else ''
+LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('NIWA_APP_LOGIN_ATTEMPTS', '5'))
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('NIWA_APP_LOGIN_WINDOW_SECONDS', '900'))
+NIWA_APP_PUBLIC_BASE_URL = os.environ.get('NIWA_APP_PUBLIC_BASE_URL', f'http://127.0.0.1:{PORT}')
 _OPENCLAW_HOME = Path(os.environ.get('OPENCLAW_HOME', '/instance/.openclaw'))
 OPENCLAW_CONFIG_PATH = _OPENCLAW_HOME / 'openclaw.json'
 OPENCLAW_AGENTS_DIR = _OPENCLAW_HOME / 'agents'
@@ -92,7 +92,7 @@ LOGIN_PAGE_HTML = r'''<!doctype html>
       </div>
       <button type="submit">Entrar</button>
     </form>
-    <div class="note">Configurable con DESK_USERNAME, DESK_PASSWORD y DESK_SESSION_SECRET.</div>
+    <div class="note">Configurable con NIWA_APP_USERNAME, NIWA_APP_PASSWORD y NIWA_APP_SESSION_SECRET.</div>
   </div>
 </body>
 </html>'''
@@ -103,11 +103,11 @@ def now_iso():
 
 
 def _sign_session_payload(payload: str) -> str:
-    return hmac.new(DESK_SESSION_SECRET.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    return hmac.new(NIWA_APP_SESSION_SECRET.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
 
 def build_session_token(username: str) -> str:
-    expires_at = int((datetime.now(timezone.utc) + timedelta(hours=DESK_SESSION_TTL_HOURS)).timestamp())
+    expires_at = int((datetime.now(timezone.utc) + timedelta(hours=NIWA_APP_SESSION_TTL_HOURS)).timestamp())
     nonce = secrets.token_hex(16)
     payload = f'{username}|{expires_at}|{nonce}'
     return f'{payload}|{_sign_session_payload(payload)}'
@@ -119,7 +119,7 @@ def verify_session_token(token: str) -> bool:
         payload = f'{username}|{expires_at}|{nonce}'
     except ValueError:
         return False
-    if username != DESK_USERNAME:
+    if username != NIWA_APP_USERNAME:
         return False
     expected = _sign_session_payload(payload)
     if not hmac.compare_digest(signature, expected):
@@ -146,10 +146,10 @@ def parse_cookies(handler):
 
 
 def is_authenticated(handler) -> bool:
-    if not DESK_AUTH_REQUIRED:
+    if not NIWA_APP_AUTH_REQUIRED:
         return True
     cookies = parse_cookies(handler)
-    morsel = cookies.get(DESK_SESSION_COOKIE)
+    morsel = cookies.get(NIWA_APP_SESSION_COOKIE)
     return bool(morsel and verify_session_token(morsel.value))
 
 
@@ -180,44 +180,13 @@ def init_db():
                 "INSERT OR IGNORE INTO kanban_columns (id, status, label, position, color, is_terminal, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (column_id, status, label, position, color, is_terminal, ts, ts),
             )
-        conn.execute(
-            "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-            ('proj-desk', 'desk', 'Desk', 'proyecto', 'Proyecto Desk', ts, ts),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-            ('proj-yume', 'yume', 'Yume', 'proyecto', 'Tareas operativas de Yume', ts, ts),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            ('task-yume-1', 'Hacer login de Desk', 'Implementar autenticación para acceder a Desk', 'proyecto', 'proj-yume', 'pendiente', 'alta', 0, None, None, 'desk-seed', '', ts, ts),
-        )
         conn.commit()
 
 
 def seed_if_empty():
-    with db_conn() as conn:
-        count = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
-        if count:
-            return
-        ts = now_iso()
-        sample = [
-            ('task-1', 'Definir columnas del kanban', 'Pulir la lógica del tablero principal', 'proyecto', 'proj-desk', 'en_progreso', 'alta', 0, date.today().isoformat(), None),
-            ('task-2', 'Cerrar MVP de Desk', 'Validar pantallas, interacción y flujo base', 'proyecto', 'proj-desk', 'pendiente', 'critica', 1, date.today().isoformat(), date.today().isoformat()),
-            ('task-3', 'Preparar My Day', 'Ordenar prioridades del día', 'personal', None, 'pendiente', 'media', 0, date.today().isoformat(), None),
-            ('task-4', 'Separar tareas de empresa', 'Limpiar backlog general', 'empresa', None, 'inbox', 'media', 0, None, None),
-            ('task-5', 'Revisar referencia visual Desk', 'Tomar decisiones de diseño', 'proyecto', 'proj-desk', 'bloqueada', 'alta', 0, None, None),
-            ('task-6', 'Conectar calendario más adelante', 'Fuera del MVP visual', 'empresa', None, 'pendiente', 'baja', 0, None, None),
-        ]
-        for row in sample:
-            conn.execute(
-                'INSERT OR IGNORE INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (*row, 'desk-seed', '', ts, ts),
-            )
-        conn.execute('INSERT OR IGNORE INTO day_focus (day, summary, created_at, updated_at) VALUES (?, ?, ?, ?)', (date.today().isoformat(), 'Cerrar el núcleo útil de Desk', ts, ts))
-        for i, task_id in enumerate(['task-2', 'task-1', 'task-3']):
-            conn.execute('INSERT OR IGNORE INTO day_focus_tasks (day, task_id, position) VALUES (?, ?, ?)', (date.today().isoformat(), task_id, i))
-        conn.commit()
+    """No-op for the portable Niwa pack. Projects and tasks are added via the
+    setup wizard or the web app — there's no demo data."""
+    return
 
 
 def is_login_blocked(key: str) -> bool:
@@ -669,7 +638,6 @@ tasks_service._make_deps(db_conn, now_iso, UPLOADS_DIR)
 health_service._make_deps(db_conn)
 from tasks_helpers import (
     record_task_event, load_delegations_index, enrich_tasks_with_agent_info,
-    DESK_DEPLOY_CLOSURE_MARKER, is_desk_project_task, task_has_desk_deploy_closure,
 )
 from tasks_service import (
     fetch_tasks, get_task, create_task, update_task, delete_task,
@@ -1249,7 +1217,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect('/')
             return self._html(render_login_page())
         if path == '/logout':
-            return self._redirect('/login', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age=0'})
+            return self._redirect('/login', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age=0'})
         if path.startswith('/static/'):
             rel = path[len('/static/'):]
             return self._serve_static(rel)
@@ -1264,7 +1232,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(401)
             self.send_header('Content-Type', 'text/html')
             self.end_headers()
-            _login_url = f'{DESK_PUBLIC_BASE_URL.rstrip("/")}/login'
+            _login_url = f'{NIWA_APP_PUBLIC_BASE_URL.rstrip("/")}/login'
             _redirect_html = f'<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={_login_url}"></head><body>Redirecting to login...</body></html>'
             self.wfile.write(_redirect_html.encode('utf-8'))
             return
@@ -1428,10 +1396,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(render_login_page('Demasiados intentos. Espera unos minutos y vuelve a probar.'), 429)
             username = (payload.get('username') or '').strip()
             password = payload.get('password') or ''
-            if hmac.compare_digest(username, DESK_USERNAME) and hmac.compare_digest(password, DESK_PASSWORD):
+            if hmac.compare_digest(username, NIWA_APP_USERNAME) and hmac.compare_digest(password, NIWA_APP_PASSWORD):
                 register_login_attempt(key, True)
                 token = build_session_token(username)
-                return self._redirect('/', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}={token}; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age={DESK_SESSION_TTL_HOURS * 3600}'})
+                return self._redirect('/', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}={token}; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age={NIWA_APP_SESSION_TTL_HOURS * 3600}'})
             register_login_attempt(key, False)
             return self._html(render_login_page('Usuario o contraseña incorrectos.'), 401)
         if path.startswith('/api/') and self._require_auth():

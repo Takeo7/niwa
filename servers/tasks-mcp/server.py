@@ -1,12 +1,10 @@
 """
-Niwa MCP server — Phase 2 (read + write)
+Tasks MCP server — projects + tasks for Niwa
 
 Read verbs:  task_list, task_get, project_list, project_get, pipeline_status
 Write verbs: task_create, task_update_status
 
-Backing store: /data/desk.sqlite3 (mounted RW; reads still use mode=ro URI).
-Respects the proj-desk close gate: tasks belonging to proj-desk cannot be marked
-'hecha' unless notes contain the marker `desk-deploy:verified`.
+Backing store: /data/niwa.sqlite3 (mounted RW; reads still use mode=ro URI).
 """
 
 import asyncio
@@ -21,13 +19,13 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/desk.sqlite3")
+DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 
 VALID_AREAS = ("personal", "empresa", "proyecto", "sistema")
 VALID_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "hecha", "archivada")
 VALID_PRIORITIES = ("baja", "media", "alta", "critica", "low", "medium", "high", "critical")
 
-server = Server("niwa")
+server = Server("tasks")
 
 
 def _ro_conn() -> sqlite3.Connection:
@@ -117,9 +115,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="task_update_status",
             description=(
-                "Update a task's status. Required: task_id, status. Optional: notes (appended to existing). "
-                "For tasks belonging to proj-desk, status='hecha' requires the marker 'desk-deploy:verified' "
-                "in notes (current or appended)."
+                "Update a task's status. Required: task_id, status. Optional: notes (appended to existing)."
             ),
             inputSchema={
                 "type": "object",
@@ -206,7 +202,7 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
                 id, title, description, area, project_id, status, priority,
                 urgent, source, notes, created_at, updated_at,
                 assigned_to_yume, assigned_to_claude
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'mcp:niwa', ?, ?, ?, 0, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'mcp:tasks', ?, ?, ?, 0, 0)
             """,
             (task_id, title, description, area, project_id, status, priority, notes, now, now),
         )
@@ -228,16 +224,6 @@ def _task_update_status(args: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"task not found: {task_id}")
         current_notes = row["notes"] or ""
         merged_notes = (current_notes + ("\n" if current_notes and extra_notes else "") + extra_notes) or None
-
-        # proj-desk close gate
-        if row["project_id"] == "proj-desk" and new_status == "hecha":
-            check = (merged_notes or "")
-            if "desk-deploy:verified" not in check:
-                raise ValueError(
-                    "proj-desk tasks require the marker 'desk-deploy:verified' in notes "
-                    "before they can be set to 'hecha'"
-                )
-
         now = _now_iso()
         completed_at = now if new_status == "hecha" else row["completed_at"]
         c.execute(

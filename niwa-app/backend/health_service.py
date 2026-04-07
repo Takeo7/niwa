@@ -67,7 +67,7 @@ def _check_services(result, host):
     # Services are configured via ISU_HEALTH_SERVICES env var.
     # Format: JSON array of [name, url_template, container_name_or_null]
     # url_template may include {host} which is substituted with the host arg.
-    # Empty list = no external services to check (only Isu's own health endpoint).
+    # Empty list = no external services to check (only the Niwa app's own health endpoint).
     services = [
         (name, url.replace('{host}', host) if isinstance(url, str) else url, container)
         for name, url, container in _HEALTH_SERVICES
@@ -213,24 +213,19 @@ def _check_task_pipeline(result):
 
 
 def _check_git_repos(result, in_docker):
+    """Read project list from the projects table (column `directory`) and check git status."""
     result['git'] = []
-    if in_docker:
-        repos = [
-            ('Desk', '/app'),
-            ('BodaPlaza', '/instance/.openclaw/workspace/Workspace-Yume/proyectos/bodaplaza'),
-            ('Manduka', '/instance/projects/manduka'),
-            ('InvestmentDesk', '/instance/projects/investmentdesk'),
-            ('Pumicon', '/instance/projects/pumicon'),
-        ]
-    else:
-        _yume = os.environ.get('YUME_BASE', '/instance')
-        repos = [
-            ('Isu', _yume + '/.openclaw/workspace/Isu'),
-            ('BodaPlaza', _yume + '/.openclaw/workspace/Workspace-Yume/proyectos/bodaplaza'),
-            ('Manduka', _yume + '/projects/manduka'),
-            ('InvestmentDesk', _yume + '/projects/investmentdesk'),
-            ('Pumicon', _yume + '/projects/pumicon'),
-        ]
+    repos = []
+    try:
+        with _db_conn() as conn:
+            for row in conn.execute(
+                "SELECT name, directory FROM projects WHERE active = 1 AND directory IS NOT NULL AND directory != ''"
+            ):
+                repos.append((row['name'], row['directory']))
+    except Exception:
+        pass
+    if not repos:
+        return
     for rname, rpath in repos:
         entry = {'name': rname}
         if not os.path.isdir(rpath):

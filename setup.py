@@ -284,7 +284,7 @@ registry:
     description: "Read+write access to tasks/projects DB"
     title: "{tasks_name.capitalize()}"
     type: "server"
-    image: "{instance_name}-niwa-mcp:latest"
+    image: "{instance_name}-tasks-mcp:latest"
     tools:
       - name: "task_list"
       - name: "task_get"
@@ -294,7 +294,7 @@ registry:
       - name: "task_create"
       - name: "task_update_status"
     volumes:
-      - "{db_path}:/data/desk.sqlite3"
+      - "{db_path}:/data/niwa.sqlite3"
     metadata:
       category: "{instance_name}"
       tags: [{tasks_name}, tasks]
@@ -303,7 +303,7 @@ registry:
     description: "Personal notes (typed) and inbox"
     title: "{notes_name.capitalize()}"
     type: "server"
-    image: "{instance_name}-isu-mcp:latest"
+    image: "{instance_name}-notes-mcp:latest"
     tools:
       - name: "note_list"
       - name: "note_get"
@@ -328,7 +328,7 @@ registry:
       - name: "inbox_list"
       - name: "inbox_create"
     volumes:
-      - "{db_path}:/data/desk.sqlite3"
+      - "{db_path}:/data/niwa.sqlite3"
     metadata:
       category: "{instance_name}"
       tags: [{notes_name}, notes]
@@ -386,15 +386,15 @@ class WizardConfig:
         self.fs_memory: Path = Path()
         self.restart_whitelist: list[str] = []
         self.server_names: dict[str, str] = {
-            "tasks": "niwa",
-            "notes": "isu",
+            "tasks": "tasks",
+            "notes": "notes",
             "platform": "platform",
             "filesystem": "filesystem",
         }
         self.gateway_streaming_port: int = 18810
         self.gateway_sse_port: int = 18812
         self.caddy_port: int = 18811
-        self.isu_port: int = 8080
+        self.app_port: int = 8080
         self.tokens: dict[str, str] = {}
         self.username: str = "arturo"
         self.password: str = ""
@@ -459,10 +459,10 @@ def step_naming(cfg: WizardConfig) -> None:
 
     if prompt_bool("Customize MCP server names? (the names the LLM sees in tools/list)", default=False):
         cfg.server_names["tasks"] = prompt(
-            "Tasks server name", default="niwa", validator=valid_server_name
+            "Tasks server name", default="tasks", validator=valid_server_name
         )
         cfg.server_names["notes"] = prompt(
-            "Notes server name", default="isu", validator=valid_server_name
+            "Notes server name", default="notes", validator=valid_server_name
         )
         cfg.server_names["platform"] = prompt(
             "Platform server name", default="platform", validator=valid_server_name
@@ -474,7 +474,7 @@ def step_naming(cfg: WizardConfig) -> None:
 
 def step_database(cfg: WizardConfig) -> None:
     header("Step 2 — Database")
-    print("Niwa needs a SQLite database with the Isu schema (tasks, projects, notes, etc.).")
+    print("Niwa needs a SQLite database with the Niwa schema (tasks, projects, notes, etc.).")
     choice = prompt_choice(
         "Database source:",
         ["Create a fresh empty database (recommended for new installs)",
@@ -483,11 +483,11 @@ def step_database(cfg: WizardConfig) -> None:
     )
     if choice == 0:
         cfg.db_mode = "fresh"
-        cfg.db_path = cfg.niwa_home / "data" / "desk.sqlite3"
+        cfg.db_path = cfg.niwa_home / "data" / "niwa.sqlite3"
         info(f"Will create a fresh DB at {cfg.db_path}")
     else:
         cfg.db_mode = "existing"
-        existing = prompt("Path to existing desk.sqlite3", validator=valid_path)
+        existing = prompt("Path to existing niwa.sqlite3", validator=valid_path)
         cfg.db_path = Path(existing).expanduser().resolve()
         if not cfg.db_path.exists():
             err(f"File not found: {cfg.db_path}")
@@ -559,8 +559,8 @@ def step_tokens(cfg: WizardConfig) -> None:
 
 
 def step_credentials(cfg: WizardConfig) -> None:
-    header("Step 6 — Isu web login")
-    print("Set credentials for the Isu web UI (you'll log in with these in the browser).")
+    header("Step 6 — Niwa app login")
+    print("Set credentials for the Niwa app web UI (you'll log in with these in the browser).")
     cfg.username = prompt("Username", default="arturo")
     cfg.password = prompt("Password (visible — write it down or pick something temporary)")
 
@@ -572,7 +572,7 @@ def step_ports(cfg: WizardConfig) -> None:
         ("Gateway streaming HTTP", "gateway_streaming_port", 18810),
         ("Gateway SSE legacy", "gateway_sse_port", 18812),
         ("Caddy reverse proxy", "caddy_port", 18811),
-        ("Isu web UI", "isu_port", 8080),
+        ("Niwa app web UI", "app_port", 8080),
     ]
     for label, attr, default in defaults:
         in_use = not detect_port_free(default)
@@ -698,9 +698,9 @@ def step_summary(cfg: WizardConfig) -> bool:
           f"fs={cfg.server_names['filesystem']}")
     print(f"  Restart whitelist:  {', '.join(cfg.restart_whitelist) if cfg.restart_whitelist else '(empty — restarts disabled)'}")
     print(f"  Ports:              gateway={cfg.gateway_streaming_port}, "
-          f"sse={cfg.gateway_sse_port}, caddy={cfg.caddy_port}, isu={cfg.isu_port}")
+          f"sse={cfg.gateway_sse_port}, caddy={cfg.caddy_port}, app={cfg.app_port}")
     print(f"  Tokens:             auto-generated, stored in niwa.env (chmod 600)")
-    print(f"  Isu login:          {cfg.username}")
+    print(f"  App login:          {cfg.username}")
     print(f"  Mode:               {cfg.mode}")
     if cfg.mode == "remote":
         print(f"  Public domain:      {cfg.public_domain}")
@@ -739,7 +739,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_GATEWAY_STREAMING_PORT": str(cfg.gateway_streaming_port),
         "NIWA_GATEWAY_SSE_PORT": str(cfg.gateway_sse_port),
         "NIWA_CADDY_PORT": str(cfg.caddy_port),
-        "NIWA_ISU_PORT": str(cfg.isu_port),
+        "NIWA_APP_PORT": str(cfg.app_port),
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],
@@ -749,11 +749,11 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_LOCAL_TOKEN": cfg.tokens["NIWA_LOCAL_TOKEN"],
         "NIWA_REMOTE_TOKEN": cfg.tokens["NIWA_REMOTE_TOKEN"],
         "PLATFORM_RESTART_WHITELIST": ",".join(cfg.restart_whitelist),
-        "DESK_USERNAME": cfg.username,
-        "DESK_PASSWORD": cfg.password,
-        "DESK_SESSION_SECRET": generate_token(),
-        "DESK_PUBLIC_BASE_URL": f"http://localhost:{cfg.isu_port}",
-        "DESK_AUTH_REQUIRED": "1",
+        "NIWA_APP_USERNAME": cfg.username,
+        "NIWA_APP_PASSWORD": cfg.password,
+        "NIWA_APP_SESSION_SECRET": generate_token(),
+        "NIWA_APP_PUBLIC_BASE_URL": f"http://localhost:{cfg.app_port}",
+        "NIWA_APP_AUTH_REQUIRED": "1",
         "NIWA_REGISTERED_CLAUDE": "1" if cfg.register_claude else "0",
         "NIWA_REGISTERED_OPENCLAW": "1" if cfg.register_openclaw else "0",
     }
@@ -790,8 +790,8 @@ def execute_install(cfg: WizardConfig) -> None:
 
     # Bootstrap fresh DB if needed
     if cfg.db_mode == "fresh":
-        info("Bootstrapping fresh database with Isu schema...")
-        schema_sql = (REPO_ROOT / "isu-app" / "db" / "schema.sql").read_text()
+        info("Bootstrapping fresh database with Niwa schema...")
+        schema_sql = (REPO_ROOT / "niwa-app" / "db" / "schema.sql").read_text()
         import sqlite3
         with sqlite3.connect(str(cfg.db_path)) as conn:
             conn.executescript(schema_sql)
@@ -821,10 +821,10 @@ def execute_install(cfg: WizardConfig) -> None:
     # Build images
     header("Step 13 — Building Docker images")
     images = [
-        ("niwa-mcp", REPO_ROOT / "servers" / "niwa-mcp", f"{cfg.instance_name}-niwa-mcp:latest"),
-        ("isu-mcp", REPO_ROOT / "servers" / "isu-mcp", f"{cfg.instance_name}-isu-mcp:latest"),
+        ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"{cfg.instance_name}-tasks-mcp:latest"),
+        ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"{cfg.instance_name}-notes-mcp:latest"),
         ("platform-mcp", REPO_ROOT / "servers" / "platform-mcp", f"{cfg.instance_name}-platform-mcp:latest"),
-        ("isu-app", REPO_ROOT / "isu-app", f"{cfg.instance_name}-isu:latest"),
+        ("niwa-app", REPO_ROOT / "niwa-app", f"{cfg.instance_name}-app:latest"),
     ]
     for name, ctx, tag in images:
         info(f"Building {name} → {tag}")
@@ -911,7 +911,7 @@ def print_summary(cfg: WizardConfig) -> None:
     print(f"    Local (streaming HTTP):  http://localhost:{cfg.gateway_streaming_port}/mcp")
     print(f"    Local (SSE legacy):      http://localhost:{cfg.gateway_sse_port}/sse")
     print(f"    Caddy reverse proxy:     http://localhost:{cfg.caddy_port}/mcp (bearer auth)")
-    print(f"    Isu web UI:              http://localhost:{cfg.isu_port}")
+    print(f"    Niwa app web UI:         http://localhost:{cfg.app_port}")
     if cfg.mode == "remote" and cfg.public_domain:
         print(f"    Public (remote):         https://{cfg.public_domain}/mcp (bearer NIWA_REMOTE_TOKEN)")
     print()
@@ -922,7 +922,7 @@ def print_summary(cfg: WizardConfig) -> None:
     print(f"  {BOLD}MCP servers:{RESET} {', '.join(cfg.server_names.values())}")
     print()
     print(f"  {BOLD}Next steps:{RESET}")
-    print(f"    - Open the Isu UI:    open http://localhost:{cfg.isu_port}")
+    print(f"    - Open Niwa app:    open http://localhost:{cfg.app_port}")
     if cfg.register_claude:
         print(f"    - Test from Claude Code:  ask it to use the '{cfg.server_names['tasks']}' MCP")
     print(f"    - View logs:          docker logs {cfg.instance_name}-mcp-gateway")
@@ -1013,7 +1013,7 @@ def configure_cloudflared(cfg: WizardConfig) -> None:
 
 def cmd_install(args) -> None:
     print(f"{BOLD}🌿 Niwa installer{RESET}")
-    print(f"{DIM}Interactive setup for the Niwa MCP gateway + Isu lite web UI{RESET}\n")
+    print(f"{DIM}Interactive setup for the Niwa MCP gateway + web app{RESET}\n")
     cfg = WizardConfig()
     step_detection(cfg)
     step_naming(cfg)
@@ -1075,7 +1075,7 @@ def cmd_status(args) -> None:
     streaming_port = env.get("NIWA_GATEWAY_STREAMING_PORT", "?")
     sse_port = env.get("NIWA_GATEWAY_SSE_PORT", "?")
     caddy_port = env.get("NIWA_CADDY_PORT", "?")
-    isu_port = env.get("NIWA_ISU_PORT", "?")
+    app_port = env.get("NIWA_APP_PORT", "?")
 
     header(f"Niwa install: {instance}")
     print(f"  Location:  {install_dir}")
@@ -1083,7 +1083,7 @@ def cmd_status(args) -> None:
     print(f"    Gateway streaming HTTP:  http://localhost:{streaming_port}/mcp")
     print(f"    Gateway SSE legacy:      http://localhost:{sse_port}/sse")
     print(f"    Caddy reverse proxy:     http://localhost:{caddy_port}/mcp")
-    print(f"    Isu web UI:              http://localhost:{isu_port}")
+    print(f"    Niwa app web UI:         http://localhost:{app_port}")
     print()
     print(f"  {BOLD}Containers:{RESET}")
     try:
@@ -1114,12 +1114,12 @@ def cmd_status(args) -> None:
     except Exception as e:
         warn(f"Gateway not reachable: {e}")
 
-    # Isu healthcheck
+    # Niwa app healthcheck
     try:
-        with urllib.request.urlopen(f"http://localhost:{isu_port}/health", timeout=3) as r:
-            ok(f"Isu responding ({r.status})")
+        with urllib.request.urlopen(f"http://localhost:{app_port}/health", timeout=3) as r:
+            ok(f"Niwa app responding ({r.status})")
     except Exception as e:
-        warn(f"Isu not reachable: {e}")
+        warn(f"Niwa app not reachable: {e}")
 
 
 def cmd_uninstall(args) -> None:
@@ -1134,8 +1134,8 @@ def cmd_uninstall(args) -> None:
     header(f"Uninstall niwa: {instance}")
     print(f"  Location:        {install_dir}")
     print(f"  Will stop:       all {instance}-* containers")
-    print(f"  Will remove:     docker images for {instance}-niwa-mcp, {instance}-isu-mcp, "
-          f"{instance}-platform-mcp, {instance}-isu")
+    print(f"  Will remove:     docker images for {instance}-tasks-mcp, {instance}-notes-mcp, "
+          f"{instance}-platform-mcp, {instance}-app")
     print(f"  Will delete:     {install_dir} (including DB and logs)")
     print()
     if not args.yes:
@@ -1156,10 +1156,10 @@ def cmd_uninstall(args) -> None:
 
     # Remove images
     images = [
-        f"{instance}-niwa-mcp:latest",
-        f"{instance}-isu-mcp:latest",
+        f"{instance}-tasks-mcp:latest",
+        f"{instance}-notes-mcp:latest",
         f"{instance}-platform-mcp:latest",
-        f"{instance}-isu:latest",
+        f"{instance}-app:latest",
     ]
     for img in images:
         result = subprocess.run(["docker", "rmi", img], capture_output=True, text=True)
@@ -1168,7 +1168,7 @@ def cmd_uninstall(args) -> None:
 
     # Unregister from clients ONLY if this install registered them
     # (avoids wiping registrations belonging to a different install with the same server name).
-    tasks_name = env.get("NIWA_TASKS_SERVER_NAME", "niwa")
+    tasks_name = env.get("NIWA_TASKS_SERVER_NAME", "tasks")
     if env.get("NIWA_REGISTERED_CLAUDE") == "1" and which("claude"):
         result = subprocess.run(
             ["claude", "mcp", "remove", tasks_name],

@@ -6,8 +6,7 @@ from pathlib import Path
 
 from tasks_helpers import (
     load_delegations_index, enrich_tasks_with_agent_info,
-    record_task_event, is_desk_project_task, task_has_desk_deploy_closure,
-    DESK_DEPLOY_CLOSURE_MARKER,
+    record_task_event,
 )
 
 # Set by _make_deps() from app.py
@@ -98,8 +97,6 @@ def update_task(task_id, payload):
         raise ValueError('task_not_found')
     merged_task = dict(current_task)
     merged_task.update({k: payload.get(k) for k in allowed if k in payload})
-    if status_value == 'hecha' and is_desk_project_task(merged_task) and not task_has_desk_deploy_closure(merged_task):
-        raise ValueError('desk_deploy_closure_required')
     updated_at = _now_iso()
     sets.append('updated_at=?')
     params.append(updated_at)

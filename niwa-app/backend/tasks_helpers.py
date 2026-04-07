@@ -8,8 +8,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DESK_DEPLOY_CLOSURE_MARKER = 'desk-deploy:verified'
-
 # Set by _make_deps() from app.py
 _db_conn = None
 _now_iso = None
@@ -23,10 +21,10 @@ def _make_deps(db_conn, now_iso, workspace_delegations_path):
     _WORKSPACE_DELEGATIONS_PATH = workspace_delegations_path
 
 
-def _extract_desk_task_id(text: str) -> str | None:
+def _extract_task_id(text: str) -> str | None:
     if not text:
         return None
-    match = re.search(r'Desk task\s+([0-9a-fA-F-]{36})', text)
+    match = re.search(r'task\s+([0-9a-fA-F-]{36})', text, re.IGNORECASE)
     return match.group(1) if match else None
 
 
@@ -43,7 +41,7 @@ def load_delegations_index():
     for item in delegations:
         if not isinstance(item, dict):
             continue
-        task_ref = _extract_desk_task_id(item.get('task') or item.get('current_task') or item.get('description') or '')
+        task_ref = _extract_task_id(item.get('task') or item.get('current_task') or item.get('description') or '')
         if not task_ref:
             continue
         agent = item.get('assigned_to') or item.get('assignee') or item.get('agent') or ''
@@ -92,8 +90,6 @@ def enrich_tasks_with_agent_info(tasks):
         for task in tasks:
             task['active_agent'] = None
             task['completed_by_agent'] = None
-            if task.get('project_id') != 'proj-yume':
-                continue
             active = delegation_by_task.get(task.get('id'))
             if active and (active.get('agent_id') or active.get('agent_name')):
                 task['active_agent'] = active
@@ -110,12 +106,3 @@ def record_task_event(conn, task_id, event_type, payload):
     )
 
 
-def is_desk_project_task(task):
-    if not task:
-        return False
-    return task.get('project_id') == 'proj-desk'
-
-
-def task_has_desk_deploy_closure(task):
-    notes = (task or {}).get('notes') or ''
-    return DESK_DEPLOY_CLOSURE_MARKER in notes

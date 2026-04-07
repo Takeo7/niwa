@@ -28,7 +28,7 @@ from pathlib import Path
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = Path(os.environ.get('DESK_DB_PATH', str(BASE_DIR / 'data' / 'desk.sqlite3')))
+DB_PATH = Path(os.environ.get('NIWA_DB_PATH', str(BASE_DIR / 'data' / 'niwa.sqlite3')))
 
 ALLOWED_SORT = {'completed_at', 'created_at', 'title', 'duration_hours'}
 ALLOWED_ORDER = {'asc', 'desc'}

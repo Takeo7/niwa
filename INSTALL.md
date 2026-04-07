@@ -96,8 +96,8 @@ After confirmation:
 ```
 
 Plus 4 Docker images:
-- `<instance>-niwa-mcp:latest`
-- `<instance>-isu-mcp:latest`
+- `<instance>-tasks-mcp:latest`
+- `<instance>-notes-mcp:latest`
 - `<instance>-platform-mcp:latest`
 - `<instance>-isu:latest`
 

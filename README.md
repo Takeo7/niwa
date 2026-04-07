@@ -90,7 +90,7 @@ All commands accept `--dir <path>` to point at a non-default install location.
                                   ▼
                   ┌───────────┬───────────┬───────────┐
                   │           │           │           │
-              niwa-mcp     isu-mcp    platform-mcp  mcp/filesystem
+              tasks-mcp     notes-mcp    platform-mcp  mcp/filesystem
               (7 tools)    (22 tools)  (4 tools)    (11 tools)
                   │           │           │           │
                   ▼           ▼           ▼           ▼
@@ -100,7 +100,7 @@ All commands accept `--dir <path>` to point at a non-default install location.
 
             isu (web UI, port 8080)        caddy (reverse proxy, bearer auth)
             ────────────────────           ─────────────────────────────────
-            isu-app:latest                 caddy:2-alpine
+            niwa-app:latest                 caddy:2-alpine
             backend/app.py                 fronts mcp-gateway for public access
             frontend (vanilla JS SPA)      validates Authorization: Bearer
 ```
@@ -121,10 +121,10 @@ niwa/
 ├── niwa.env.example                # example env vars
 ├── caddy/Caddyfile                 # reverse proxy config
 ├── servers/
-│   ├── niwa-mcp/                   # tasks/projects MCP (Python + mcp SDK)
-│   ├── isu-mcp/                    # notes/inbox MCP
+│   ├── tasks-mcp/                   # tasks/projects MCP (Python + mcp SDK)
+│   ├── notes-mcp/                    # notes/inbox MCP
 │   └── platform-mcp/               # docker ops MCP
-├── isu-app/                        # Isu lite web UI (Python stdlib)
+├── niwa-app/                        # Isu lite web UI (Python stdlib)
 │   ├── backend/app.py              # ~1600 lines, 6 views
 │   ├── frontend/                   # vanilla JS SPA
 │   ├── db/schema.sql               # authoritative schema

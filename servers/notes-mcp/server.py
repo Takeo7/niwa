@@ -1,8 +1,8 @@
 """
-Isu MCP server — Phase 5 (typed notes)
+Notes MCP server — typed notes for Niwa
 
-Personal interface to Arturo's notes, typed notes (decision/idea/research/diary)
-and inbox. Backing store: /data/desk.sqlite3.
+Personal interface for notes, typed notes (decision/idea/research/diary)
+and inbox. Backing store: /data/niwa.sqlite3.
 
 Generic verbs:
   - note_list(type?, project_id?, tag?, status?, limit?)
@@ -49,7 +49,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-DB_PATH = os.environ.get("ISU_DB_PATH", "/data/desk.sqlite3")
+DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 
 VALID_INBOX_KINDS = ("task", "note", "email", "calendar", "file", "message")
 VALID_NOTE_TYPES = ("decision", "idea", "research", "diary", "note")
@@ -58,7 +58,7 @@ VALID_TASK_AREAS = ("personal", "empresa", "proyecto", "sistema")
 VALID_TASK_PRIORITIES = ("baja", "media", "alta", "critica", "low", "medium", "high", "critical")
 VALID_TASK_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "hecha", "archivada")
 
-server = Server("isu")
+server = Server("notes")
 
 
 def _ro_conn() -> sqlite3.Connection:
@@ -612,7 +612,7 @@ def _idea_promote_to_task(args: dict[str, Any]) -> dict[str, Any]:
         c.execute(
             "INSERT INTO tasks (id, title, description, area, project_id, status, priority, "
             "urgent, source, notes, created_at, updated_at, assigned_to_yume, assigned_to_claude) "
-            "VALUES (?, ?, ?, ?, ?, 'inbox', ?, 0, 'mcp:isu:promote', ?, ?, ?, 0, 0)",
+            "VALUES (?, ?, ?, ?, ?, 'inbox', ?, 0, 'mcp:notes:promote', ?, ?, ?, 0, 0)",
             (
                 task_id,
                 idea["title"],
@@ -829,7 +829,7 @@ def _inbox_create(args: dict[str, Any]) -> dict[str, Any]:
         c.execute(
             "INSERT INTO inbox_items (id, kind, title, body, source, triaged, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-            (item_id, kind, title, args.get("body"), args.get("source", "mcp:isu"), now, now),
+            (item_id, kind, title, args.get("body"), args.get("source", "mcp:notes"), now, now),
         )
         c.commit()
         return _row(c.execute("SELECT * FROM inbox_items WHERE id = ?", (item_id,)).fetchone())
