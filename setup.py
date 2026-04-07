@@ -404,6 +404,39 @@ class WizardConfig:
         self.public_domain: str = ""
         self.cloudflared_tunnel_id: str = ""
         self.cloudflared_config_path: Path = Path.home() / ".cloudflared" / "config.yml"
+        self.executor_enabled: bool = False
+        self.llm_provider: str = ""
+        self.llm_command: str = ""
+        self.projects: list[dict] = []  # [{name, slug, directory}, ...]
+
+
+# ────────────────────────── LLM provider catalog ──────────────────────────
+LLM_PROVIDERS = {
+    "claude": {
+        "label": "Claude (Anthropic claude CLI)",
+        "binary": "claude",
+        "command": "claude -p --max-turns 50 --output-format text --dangerously-skip-permissions",
+        "auth_hint": "Run 'claude' once to authenticate before installing Niwa",
+    },
+    "llm": {
+        "label": "llm CLI (Simon Willison) — supports OpenAI, Anthropic, Gemini via plugins",
+        "binary": "llm",
+        "command": "llm -m gpt-4 --no-stream",
+        "auth_hint": "Set OPENAI_API_KEY (or run 'llm keys set openai') before running tasks",
+    },
+    "gemini": {
+        "label": "Gemini CLI (Google)",
+        "binary": "gemini",
+        "command": "gemini chat --model gemini-1.5-pro",
+        "auth_hint": "Run 'gemini auth' to authenticate before installing Niwa",
+    },
+    "custom": {
+        "label": "Custom command (you provide)",
+        "binary": None,
+        "command": "",
+        "auth_hint": "You're on your own — make sure the command works in your shell",
+    },
+}
 
 
 def step_detection(cfg: WizardConfig) -> None:
@@ -592,8 +625,68 @@ def step_ports(cfg: WizardConfig) -> None:
             break
 
 
+def step_executor(cfg: WizardConfig) -> None:
+    header("Step 8 — Autonomous task execution (optional)")
+    print("Enable a background worker that polls Niwa for tasks marked 'pendiente'")
+    print("with assigned_to_yume=1 or assigned_to_claude=1, dispatches them to an")
+    print("LLM CLI, captures the output, and updates the task status.")
+    print()
+    if not prompt_bool("Enable autonomous task execution?", default=False):
+        cfg.executor_enabled = False
+        return
+    cfg.executor_enabled = True
+    options = list(LLM_PROVIDERS.keys())
+    labels = [LLM_PROVIDERS[k]["label"] for k in options]
+    choice = prompt_choice("LLM provider:", labels, default=0)
+    cfg.llm_provider = options[choice]
+    provider = LLM_PROVIDERS[cfg.llm_provider]
+    if cfg.llm_provider == "custom":
+        cfg.llm_command = prompt("Custom command (the prompt is appended as last arg)")
+    else:
+        binary = provider["binary"]
+        if binary and not which(binary):
+            warn(f"'{binary}' not found in PATH. {provider['auth_hint']}")
+            warn("The executor will fail until the binary is available.")
+            if not prompt_bool("Continue anyway?", default=False):
+                cfg.executor_enabled = False
+                return
+        cfg.llm_command = provider["command"]
+        info(f"LLM command: {cfg.llm_command}")
+        info(f"Auth hint:   {provider['auth_hint']}")
+
+
+def step_projects(cfg: WizardConfig) -> None:
+    header("Step 9 — Register projects (optional)")
+    print("Niwa tracks tasks per project. The executor uses each project's")
+    print("'directory' field to know where to run the LLM commands.")
+    print("You can register projects now or add them later via the Niwa app web UI.")
+    print()
+    if not prompt_bool("Register a project now?", default=cfg.executor_enabled):
+        return
+    while True:
+        name = prompt("Project name", default="my-project")
+        slug_default = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-") or "project"
+        slug = prompt(
+            "Project slug (lowercase, used in IDs)",
+            default=slug_default,
+            validator=lambda v: None if re.fullmatch(r"[a-z][a-z0-9-]{0,30}", v) else "lowercase letters, digits, hyphens; start with a letter",
+        )
+        directory = prompt(
+            "Project directory (absolute path, must exist)",
+            validator=lambda v: None if Path(v).expanduser().is_dir() else "directory not found",
+        )
+        cfg.projects.append({
+            "name": name,
+            "slug": slug,
+            "directory": str(Path(directory).expanduser().resolve()),
+        })
+        ok(f"Will register '{name}' at {cfg.projects[-1]['directory']}")
+        if not prompt_bool("Add another project?", default=False):
+            break
+
+
 def step_remote(cfg: WizardConfig) -> None:
-    header("Step 8 — Public exposure (optional)")
+    header("Step 10 — Public exposure (optional)")
     print("By default, Niwa is local-only (loopback). To access from outside (mobile,")
     print("ChatGPT, n8n in another machine), you can opt in to remote exposure via")
     print("Cloudflare Tunnel + Caddy bearer auth.")
@@ -663,7 +756,7 @@ def _check_cloudflared_authenticated() -> Optional[str]:
 
 
 def step_clients(cfg: WizardConfig) -> None:
-    header("Step 9 — Auto-register MCP clients")
+    header("Step 11 — Auto-register MCP clients")
     if cfg.detected["claude"]:
         # Verify claude is configured
         claude_problem = _check_claude_authenticated()
@@ -687,7 +780,7 @@ def step_clients(cfg: WizardConfig) -> None:
 
 
 def step_summary(cfg: WizardConfig) -> bool:
-    header("Step 10 — Summary")
+    header("Step 12 — Summary")
     print(f"  Instance name:      {cfg.instance_name}")
     print(f"  Install location:   {cfg.niwa_home}")
     print(f"  Database:           {cfg.db_mode} at {cfg.db_path}")
@@ -705,6 +798,14 @@ def step_summary(cfg: WizardConfig) -> bool:
     if cfg.mode == "remote":
         print(f"  Public domain:      {cfg.public_domain}")
         print(f"  Tunnel ID:          {cfg.cloudflared_tunnel_id or '(skip — manual config)'}")
+    print(f"  Executor:           {'enabled' if cfg.executor_enabled else 'disabled'}")
+    if cfg.executor_enabled:
+        print(f"    Provider:         {cfg.llm_provider}")
+        print(f"    Command:          {cfg.llm_command}")
+    if cfg.projects:
+        print(f"  Projects to register:")
+        for p in cfg.projects:
+            print(f"    - {p['name']} ({p['slug']}) → {p['directory']}")
     print(f"  Register Claude:    {cfg.register_claude}")
     print(f"  Register OpenClaw:  {cfg.register_openclaw}")
     print()
@@ -713,7 +814,7 @@ def step_summary(cfg: WizardConfig) -> bool:
 
 # ────────────────────────── execution ──────────────────────────
 def execute_install(cfg: WizardConfig) -> None:
-    header("Step 10 — Building install")
+    header("Step 13 — Building install")
     cfg.niwa_home.mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "config").mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "data").mkdir(parents=True, exist_ok=True)
@@ -756,6 +857,9 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_APP_AUTH_REQUIRED": "1",
         "NIWA_REGISTERED_CLAUDE": "1" if cfg.register_claude else "0",
         "NIWA_REGISTERED_OPENCLAW": "1" if cfg.register_openclaw else "0",
+        "NIWA_EXECUTOR_ENABLED": "1" if cfg.executor_enabled else "0",
+        "NIWA_LLM_PROVIDER": cfg.llm_provider,
+        "NIWA_LLM_COMMAND": cfg.llm_command,
     }
 
     # Write secrets file
@@ -871,6 +975,23 @@ def execute_install(cfg: WizardConfig) -> None:
         warn(f"Gateway health check failed: {e}")
         warn(f"  Run: docker logs {cfg.instance_name}-mcp-gateway")
 
+    # Bootstrap projects table with the user's chosen projects
+    if cfg.projects:
+        info("Registering projects...")
+        with sqlite3.connect(str(cfg.db_path)) as conn:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            for p in cfg.projects:
+                conn.execute(
+                    "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory) VALUES (?, ?, ?, 'proyecto', ?, 1, ?, ?, ?)",
+                    (f"proj-{p['slug']}", p["slug"], p["name"], f"Project {p['name']}", ts, ts, p["directory"]),
+                )
+            conn.commit()
+        ok(f"Registered {len(cfg.projects)} project(s)")
+
+    # Install task executor (host-side launchd/systemd) if enabled
+    if cfg.executor_enabled:
+        install_task_executor(cfg)
+
     # Configure cloudflared if remote mode
     if cfg.mode == "remote" and cfg.cloudflared_tunnel_id:
         configure_cloudflared(cfg)
@@ -932,6 +1053,132 @@ def print_summary(cfg: WizardConfig) -> None:
 
 
 # ────────────────────────── subcommands ──────────────────────────
+def install_task_executor(cfg: WizardConfig) -> None:
+    """Copy task-executor.py to the install dir and register it as a launchd
+    agent (macOS) or user systemd unit (Linux)."""
+    info("Installing task executor...")
+    bin_dir = cfg.niwa_home / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    src = REPO_ROOT / "bin" / "task-executor.py"
+    dest = bin_dir / "task-executor.py"
+    shutil.copy(src, dest)
+    dest.chmod(0o755)
+    ok(f"Copied executor to {dest}")
+    if sys.platform == "darwin":
+        _install_launchd_agent(cfg, dest)
+    elif sys.platform.startswith("linux"):
+        _install_systemd_unit(cfg, dest)
+    else:
+        warn(f"Unknown platform {sys.platform} — executor copied but not registered as a service.")
+        warn(f"Run it manually with: NIWA_HOME={cfg.niwa_home} python3 {dest}")
+
+
+def _install_launchd_agent(cfg: WizardConfig, executor_path: Path) -> None:
+    label = f"com.niwa.{cfg.instance_name}.executor"
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = cfg.niwa_home / "logs" / "executor.log"
+    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>{executor_path}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NIWA_HOME</key>
+        <string>{cfg.niwa_home}</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+</dict>
+</plist>
+"""
+    plist_path.write_text(plist)
+    ok(f"Wrote launchd plist: {plist_path}")
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        ok(f"Loaded launchd agent {label}")
+    else:
+        warn(f"launchctl bootstrap failed: {result.stderr.strip()[:300]}")
+        warn(f"Load manually: launchctl bootstrap gui/{uid} {plist_path}")
+
+
+def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
+    """User-level systemd unit (no sudo needed)."""
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_name = f"niwa-{cfg.instance_name}-executor.service"
+    unit_path = unit_dir / unit_name
+    log_path = cfg.niwa_home / "logs" / "executor.log"
+    unit = f"""[Unit]
+Description=Niwa task executor ({cfg.instance_name})
+After=network.target
+
+[Service]
+Type=simple
+Environment="NIWA_HOME={cfg.niwa_home}"
+ExecStart=/usr/bin/env python3 {executor_path}
+StandardOutput=append:{log_path}
+StandardError=append:{log_path}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"""
+    unit_path.write_text(unit)
+    ok(f"Wrote systemd unit: {unit_path}")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    result = subprocess.run(
+        ["systemctl", "--user", "enable", "--now", unit_name],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        ok(f"Enabled and started {unit_name}")
+    else:
+        warn(f"systemctl enable failed: {result.stderr.strip()[:300]}")
+        warn(f"Enable manually: systemctl --user enable --now {unit_name}")
+
+
+def _uninstall_task_executor(install_dir: Path, instance: str) -> None:
+    """Stop and remove the launchd agent / systemd unit."""
+    if sys.platform == "darwin":
+        label = f"com.niwa.{instance}.executor"
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        if plist_path.exists():
+            uid = os.getuid()
+            subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
+            plist_path.unlink()
+            ok(f"Removed launchd agent {label}")
+    elif sys.platform.startswith("linux"):
+        unit_name = f"niwa-{instance}-executor.service"
+        unit_path = Path.home() / ".config" / "systemd" / "user" / unit_name
+        if unit_path.exists():
+            subprocess.run(["systemctl", "--user", "disable", "--now", unit_name], capture_output=True)
+            unit_path.unlink()
+            ok(f"Removed systemd unit {unit_name}")
+
+
 def configure_cloudflared(cfg: WizardConfig) -> None:
     """Add Niwa hostname to cloudflared config and create the DNS route."""
     info("Configuring cloudflared tunnel...")
@@ -1023,6 +1270,8 @@ def cmd_install(args) -> None:
     step_tokens(cfg)
     step_credentials(cfg)
     step_ports(cfg)
+    step_executor(cfg)
+    step_projects(cfg)
     step_remote(cfg)
     step_clients(cfg)
     if not step_summary(cfg):
@@ -1187,6 +1436,10 @@ def cmd_uninstall(args) -> None:
             ok(f"Unregistered '{tasks_name}' from OpenClaw")
         else:
             warn(f"Could not unregister from OpenClaw: {result.stderr.strip()}")
+
+    # Stop task executor (launchd / systemd)
+    if env.get("NIWA_EXECUTOR_ENABLED") == "1":
+        _uninstall_task_executor(install_dir, instance)
 
     # Delete install dir
     if args.keep_data:
