@@ -10,7 +10,9 @@
 #   NIWA_GATEWAY_STREAMING_PORT      e.g. 18810 — host port for streamable HTTP gateway
 #   NIWA_GATEWAY_SSE_PORT            e.g. 18812 — host port for SSE gateway
 #   NIWA_CADDY_PORT                  e.g. 18811 — host port for Caddy reverse proxy
-#   NIWA_RESTART_WHITELIST           e.g. "isu,my-app,arturo-cron" — comma-separated
+#   PLATFORM_RESTART_WHITELIST       e.g. "isu,my-app,arturo-cron" — comma-separated
+#                                    (read by platform-mcp at spawn time, not by compose)
+#   NIWA_ENABLED_SERVERS             e.g. "niwa,isu,platform,filesystem" — passed via --servers
 
 services:
   socket-proxy:
