@@ -1,0 +1,59 @@
+{
+  "_comment": "Centralized sandbox configuration for task-worker. Single source of truth for all protection layers.",
+
+  "protected_files": [
+    "backend/app.py",
+    "infra/docker-compose.yml",
+    "infra/Dockerfile",
+    ".env",
+    "db/schema.sql",
+    "../../config/openclaw.json",
+    "../../config/auth-profiles.json",
+    "../../scripts/send_audio_raw.sh",
+    "../../scripts/send_audio.sh",
+    "../../security/security-audit.py",
+    "../../security/prompt_injection_scan.py",
+    "../../scripts/task-worker.sh",
+    "../../scripts/task-executor.sh"
+  ],
+
+  "protected_files_repo_paths": [
+    "Isu/backend/app.py",
+    "Isu/infra/docker-compose.yml",
+    "Isu/infra/Dockerfile",
+    "Isu/.env",
+    "Isu/db/schema.sql",
+    "config/openclaw.json",
+    "config/auth-profiles.json",
+    "scripts/send_audio_raw.sh",
+    "scripts/send_audio.sh",
+    "security/security-audit.py",
+    "security/prompt_injection_scan.py",
+    "scripts/task-worker.sh",
+    "scripts/task-executor.sh"
+  ],
+
+  "protected_directories": [
+    "../../.ssh",
+    "../../.gnupg",
+    "../../security"
+  ],
+
+  "allowed_workspace": "/opt/yume/instances/arturo/.openclaw/workspace",
+
+  "critical_env_vars": [
+    "DESK_PASSWORD",
+    "DESK_SESSION_SECRET",
+    "CLAUDE_BRIDGE_TOKEN"
+  ],
+
+  "dangerous_commands_blocklist": [
+    "curl ", "wget ", "nc ", "netcat ",
+    "rm -rf /", "rm -rf ~", "rm -rf /home",
+    "> /dev/sda", "mkfs.", "dd if=",
+    "chmod 777 /", "chown root"
+  ],
+
+  "enforce_readonly": true,
+  "readonly_bypass_env": "ALLOW_PROTECTED_WRITE"
+}

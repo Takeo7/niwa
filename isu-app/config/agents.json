@@ -1,0 +1,28 @@
+{
+  "main": {
+    "name": "Yume",
+    "role": "Asistente principal",
+    "description": "Coordinación general, ejecución operativa y mission control.",
+    "aliases": [],
+    "routing_groups": []
+  },
+  "claude_code": {
+    "name": "Claude Code",
+    "role": "Agente de desarrollo",
+    "description": "Ejecución de tareas de código delegadas. Modelo Claude Opus 4.6.",
+    "aliases": ["claude", "claude-code"],
+    "routing_groups": ["coding", "dev"]
+  },
+  "iris": {
+    "name": "Iris",
+    "role": "Asistente de UI/UX",
+    "description": "Diseño de interfaces, flujos y propuestas visuales. Modelo GPT-5.4.",
+    "aliases": [
+      "irish",
+      "irys"
+    ],
+    "routing_groups": [
+      "ui"
+    ]
+  }
+}

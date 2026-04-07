@@ -1,0 +1,268 @@
+"""Health and monitoring functions extracted from app.py."""
+import logging
+import os
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Set by _make_deps() from app.py
+_db_conn = None
+
+
+def _make_deps(db_conn):
+    global _db_conn
+    _db_conn = db_conn
+
+
+def fetch_health():
+    result = {
+        'services': [], 'workers': [], 'tunnel': [],
+        'system': {}, 'tasks': {}, 'last_healthcheck': None,
+    }
+
+    _host = 'host.docker.internal' if os.path.exists('/.dockerenv') else 'localhost'
+    _in_docker = os.path.exists('/.dockerenv')
+
+    _check_services(result, _host)
+    _check_tunnels(result)
+    _check_workers(result, _host, _in_docker)
+    _check_system(result)
+    _check_task_pipeline(result)
+    _check_git_repos(result, _in_docker)
+    _check_backups(result, _in_docker)
+    _check_last_healthcheck(result)
+
+    result['checked_at'] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
+def _check_services(result, host):
+    services = [
+        ('Isu', f'http://{host}:8080/health', 'isu'),
+        ('InvestmentDesk', f'http://{host}:8090', 'arturo-investmentdesk'),
+        ('Pumicon', f'http://{host}:3000', 'arturo-pumicon'),
+        ('BodaPlaza', f'http://{host}:3051', 'arturo-bodaplaza'),
+        ('Manduka', f'http://{host}:3091', 'arturo-manduka'),
+        ('n8n', f'http://{host}:5678', 'arturo-n8n'),
+        ('Gateway', f'http://{host}:18700/health', None),
+        ('Bridge', f'http://{host}:18800', None),
+    ]
+    for svc_name, svc_url, container_name in services:
+        entry = {'name': svc_name, 'url': svc_url, 'container': container_name}
+        t0 = time.time()
+        try:
+            resp = urllib.request.urlopen(svc_url, timeout=5)
+            entry['http_status'] = resp.status
+            entry['latency_ms'] = round((time.time() - t0) * 1000)
+            entry['ok'] = True
+        except urllib.error.HTTPError as he:
+            entry['http_status'] = he.code
+            entry['latency_ms'] = round((time.time() - t0) * 1000)
+            entry['ok'] = he.code < 500
+        except Exception:
+            entry['http_status'] = 0
+            entry['latency_ms'] = -1
+            entry['ok'] = False
+        if container_name:
+            try:
+                out = subprocess.run(
+                    ['docker', 'inspect', '--format',
+                     '{{.State.Status}}|{{.State.StartedAt}}', container_name],
+                    capture_output=True, text=True, timeout=5)
+                if out.returncode == 0:
+                    parts = out.stdout.strip().split('|')
+                    entry['container_status'] = parts[0]
+                    entry['started_at'] = parts[1] if len(parts) > 1 else ''
+                else:
+                    entry['container_status'] = 'not_found'
+            except Exception:
+                entry['container_status'] = 'unknown'
+        result['services'].append(entry)
+
+
+def _check_tunnels(result):
+    tunnels = [
+        ('isu.yumewagener.com', 'https://isu.yumewagener.com/health'),
+        ('pumicon.yumewagener.com', 'https://pumicon.yumewagener.com'),
+        ('bodaplaza.yumewagener.com', 'https://bodaplaza.yumewagener.com'),
+        ('invest.yumewagener.com', 'https://invest.yumewagener.com'),
+        ('mandukaeat.yumewagener.com', 'https://mandukaeat.yumewagener.com'),
+        ('n8n.yumewagener.com', 'https://n8n.yumewagener.com'),
+    ]
+    for hostname, url in tunnels:
+        t0 = time.time()
+        try:
+            resp = urllib.request.urlopen(url, timeout=8)
+            result['tunnel'].append({
+                'hostname': hostname, 'ok': True,
+                'http_status': resp.status,
+                'latency_ms': round((time.time() - t0) * 1000),
+            })
+        except urllib.error.HTTPError as he:
+            result['tunnel'].append({
+                'hostname': hostname, 'ok': he.code < 500,
+                'http_status': he.code,
+                'latency_ms': round((time.time() - t0) * 1000),
+            })
+        except Exception:
+            result['tunnel'].append({
+                'hostname': hostname, 'ok': False,
+                'http_status': 0, 'latency_ms': -1,
+            })
+
+
+def _check_workers(result, host, in_docker):
+    workers = [
+        ('Gateway', 'openclaw gateway'),
+        ('Bridge', 'claude-bridge'),
+        ('Task Executor', 'task-executor'),
+        ('Task Watchdog', 'task-watchdog'),
+        ('Desk Auto-Deploy', 'desk-auto-deploy'),
+        ('Cloudflare Tunnel', 'cloudflared'),
+    ]
+    for wname, pattern in workers:
+        try:
+            if in_docker:
+                if pattern == 'openclaw gateway':
+                    try:
+                        urllib.request.urlopen(f'http://{host}:18700/health', timeout=3)
+                        running, pid = True, ''
+                    except Exception:
+                        running, pid = False, None
+                elif pattern == 'claude-bridge':
+                    try:
+                        urllib.request.urlopen(f'http://{host}:18800', timeout=3)
+                        running, pid = True, ''
+                    except urllib.error.HTTPError:
+                        running, pid = True, ''
+                    except Exception:
+                        running, pid = False, None
+                elif pattern == 'cloudflared':
+                    running = any(t.get('ok') for t in result['tunnel'])
+                    pid = '' if running else None
+                else:
+                    running, pid = True, ''
+            else:
+                out = subprocess.run(
+                    ['pgrep', '-f', pattern],
+                    capture_output=True, text=True, timeout=5)
+                running = out.returncode == 0 and bool(out.stdout.strip())
+                pid = out.stdout.strip().split('\n')[0] if running else None
+        except Exception:
+            running = False
+            pid = None
+        result['workers'].append({'name': wname, 'running': running, 'pid': pid})
+
+
+def _check_system(result):
+    try:
+        st = os.statvfs('/')
+        total_gb = (st.f_frsize * st.f_blocks) / (1024 ** 3)
+        avail_gb = (st.f_frsize * st.f_bavail) / (1024 ** 3)
+        result['system']['disk_total_gb'] = round(total_gb, 1)
+        result['system']['disk_avail_gb'] = round(avail_gb, 1)
+        result['system']['disk_pct'] = round((1 - avail_gb / total_gb) * 100, 1) if total_gb else 0
+    except Exception:
+        logger.warning("dashboard: failed to read disk stats", exc_info=True)
+    try:
+        out = subprocess.run(['uptime'], capture_output=True, text=True, timeout=5)
+        result['system']['uptime'] = out.stdout.strip() if out.returncode == 0 else ''
+    except Exception:
+        logger.warning("dashboard: failed to run uptime", exc_info=True)
+
+
+def _check_task_pipeline(result):
+    try:
+        with _db_conn() as conn:
+            result['tasks']['pending'] = conn.execute(
+                "SELECT count(*) FROM tasks WHERE status='pendiente'").fetchone()[0]
+            result['tasks']['in_progress'] = conn.execute(
+                "SELECT count(*) FROM tasks WHERE status='en_progreso'").fetchone()[0]
+            result['tasks']['blocked'] = conn.execute(
+                "SELECT count(*) FROM tasks WHERE status='bloqueada'").fetchone()[0]
+            result['tasks']['done_today'] = conn.execute(
+                "SELECT count(*) FROM tasks WHERE status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
+            result['tasks']['total_done'] = conn.execute(
+                "SELECT count(*) FROM tasks WHERE status='hecha'").fetchone()[0]
+    except Exception:
+        pass
+
+
+def _check_git_repos(result, in_docker):
+    result['git'] = []
+    if in_docker:
+        repos = [
+            ('Desk', '/app'),
+            ('BodaPlaza', '/instance/.openclaw/workspace/Workspace-Yume/proyectos/bodaplaza'),
+            ('Manduka', '/instance/projects/manduka'),
+            ('InvestmentDesk', '/instance/projects/investmentdesk'),
+            ('Pumicon', '/instance/projects/pumicon'),
+        ]
+    else:
+        _yume = os.environ.get('YUME_BASE', '/opt/yume/instances/arturo')
+        repos = [
+            ('Isu', _yume + '/.openclaw/workspace/Isu'),
+            ('BodaPlaza', _yume + '/.openclaw/workspace/Workspace-Yume/proyectos/bodaplaza'),
+            ('Manduka', _yume + '/projects/manduka'),
+            ('InvestmentDesk', _yume + '/projects/investmentdesk'),
+            ('Pumicon', _yume + '/projects/pumicon'),
+        ]
+    for rname, rpath in repos:
+        entry = {'name': rname}
+        if not os.path.isdir(rpath):
+            entry['dirty_files'] = -1
+            entry['has_remote'] = False
+            entry['last_commit'] = 'dir not accessible'
+            result['git'].append(entry)
+            continue
+        try:
+            dirty = subprocess.run(
+                ['git', 'status', '--porcelain'], cwd=rpath,
+                capture_output=True, text=True, timeout=5)
+            entry['dirty_files'] = (
+                len([l for l in dirty.stdout.strip().split('\n') if l.strip()])
+                if dirty.returncode == 0 and dirty.stdout.strip() else 0
+            )
+            remote = subprocess.run(
+                ['git', 'remote', 'get-url', 'origin'], cwd=rpath,
+                capture_output=True, text=True, timeout=5)
+            entry['has_remote'] = remote.returncode == 0
+            head = subprocess.run(
+                ['git', 'log', '--oneline', '-1'], cwd=rpath,
+                capture_output=True, text=True, timeout=5)
+            entry['last_commit'] = head.stdout.strip()[:60] if head.returncode == 0 else ''
+        except Exception:
+            entry['dirty_files'] = -1
+            entry['has_remote'] = False
+            entry['last_commit'] = ''
+        result['git'].append(entry)
+
+
+def _check_backups(result, in_docker):
+    try:
+        backup_dir = Path(
+            '/instance/backups' if in_docker
+            else os.environ.get('BACKUP_DIR', '/Users/yume/backups')
+        )
+        backups = sorted(backup_dir.glob('backup-*.tar.gz'), reverse=True)
+        result['system']['last_backup'] = backups[0].name if backups else 'none'
+        result['system']['last_backup_size'] = backups[0].stat().st_size if backups else 0
+    except Exception:
+        pass
+
+
+def _check_last_healthcheck(result):
+    try:
+        with _db_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM healthchecks ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                result['last_healthcheck'] = dict(row)
+    except Exception:
+        pass
