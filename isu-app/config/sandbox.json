@@ -39,7 +39,7 @@
     "../../security"
   ],
 
-  "allowed_workspace": "/opt/yume/instances/arturo/.openclaw/workspace",
+  "allowed_workspace": "/instance/.openclaw/workspace",
 
   "critical_env_vars": [
     "DESK_PASSWORD",
