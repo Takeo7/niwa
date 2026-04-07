@@ -1,4 +1,5 @@
 """Health and monitoring functions extracted from app.py."""
+import json as _json
 import logging
 import os
 import subprocess
@@ -12,6 +13,27 @@ logger = logging.getLogger(__name__)
 
 # Set by _make_deps() from app.py
 _db_conn = None
+
+
+def _load_health_list(env_var: str) -> list:
+    """Parse a JSON env var into a list. Returns [] if unset/invalid."""
+    raw = os.environ.get(env_var, '').strip()
+    if not raw:
+        return []
+    try:
+        parsed = _json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except _json.JSONDecodeError:
+        return []
+
+
+# ISU_HEALTH_SERVICES env var: JSON array of [name, url, container_name_or_null]
+# e.g. '[["Pumicon","http://host:3000","pumicon"],["n8n","http://host:5678","n8n"]]'
+_HEALTH_SERVICES = _load_health_list('ISU_HEALTH_SERVICES')
+
+# ISU_HEALTH_TUNNELS env var: JSON array of [hostname, url]
+# e.g. '[["app.example.com","https://app.example.com/health"]]'
+_HEALTH_TUNNELS = _load_health_list('ISU_HEALTH_TUNNELS')
 
 
 def _make_deps(db_conn):
@@ -42,15 +64,14 @@ def fetch_health():
 
 
 def _check_services(result, host):
+    # Services are configured via ISU_HEALTH_SERVICES env var.
+    # Format: JSON array of [name, url_template, container_name_or_null]
+    # url_template may include {host} which is substituted with the host arg.
+    # Empty list = no external services to check (only Isu's own health endpoint).
     services = [
-        ('Isu', f'http://{host}:8080/health', 'isu'),
-        ('InvestmentDesk', f'http://{host}:8090', 'arturo-investmentdesk'),
-        ('Pumicon', f'http://{host}:3000', 'arturo-pumicon'),
-        ('BodaPlaza', f'http://{host}:3051', 'arturo-bodaplaza'),
-        ('Manduka', f'http://{host}:3091', 'arturo-manduka'),
-        ('n8n', f'http://{host}:5678', 'arturo-n8n'),
-        ('Gateway', f'http://{host}:18700/health', None),
-        ('Bridge', f'http://{host}:18800', None),
+        (name, url.replace('{host}', host) if isinstance(url, str) else url, container)
+        for name, url, container in _HEALTH_SERVICES
+        if isinstance(name, str) and isinstance(url, str)
     ]
     for svc_name, svc_url, container_name in services:
         entry = {'name': svc_name, 'url': svc_url, 'container': container_name}
@@ -86,13 +107,11 @@ def _check_services(result, host):
 
 
 def _check_tunnels(result):
+    # Tunnels are configured via ISU_HEALTH_TUNNELS env var (JSON array of [hostname, url]).
+    # Empty list = no external tunnels to check.
     tunnels = [
-        ('isu.yumewagener.com', 'https://isu.yumewagener.com/health'),
-        ('pumicon.yumewagener.com', 'https://pumicon.yumewagener.com'),
-        ('bodaplaza.yumewagener.com', 'https://bodaplaza.yumewagener.com'),
-        ('invest.yumewagener.com', 'https://invest.yumewagener.com'),
-        ('mandukaeat.yumewagener.com', 'https://mandukaeat.yumewagener.com'),
-        ('n8n.yumewagener.com', 'https://n8n.yumewagener.com'),
+        (host, url) for host, url in _HEALTH_TUNNELS
+        if isinstance(host, str) and isinstance(url, str)
     ]
     for hostname, url in tunnels:
         t0 = time.time()
@@ -204,7 +223,7 @@ def _check_git_repos(result, in_docker):
             ('Pumicon', '/instance/projects/pumicon'),
         ]
     else:
-        _yume = os.environ.get('YUME_BASE', '/opt/yume/instances/arturo')
+        _yume = os.environ.get('YUME_BASE', '/instance')
         repos = [
             ('Isu', _yume + '/.openclaw/workspace/Isu'),
             ('BodaPlaza', _yume + '/.openclaw/workspace/Workspace-Yume/proyectos/bodaplaza'),
@@ -246,8 +265,8 @@ def _check_git_repos(result, in_docker):
 def _check_backups(result, in_docker):
     try:
         backup_dir = Path(
-            '/instance/backups' if in_docker
-            else os.environ.get('BACKUP_DIR', '/Users/yume/backups')
+            os.environ.get('BACKUP_DIR') or
+            ('/instance/backups' if in_docker else str(Path.home() / 'backups'))
         )
         backups = sorted(backup_dir.glob('backup-*.tar.gz'), reverse=True)
         result['system']['last_backup'] = backups[0].name if backups else 'none'

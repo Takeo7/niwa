@@ -35,7 +35,11 @@ class TriggerHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f'[trigger] {fmt % args}\n')
 
     def _cors_headers(self):
-        self.send_header('Access-Control-Allow-Origin', 'https://desk.yumewagener.com')
+        # CORS origin is configured via DESK_PUBLIC_BASE_URL (the public URL of Isu).
+        # Defaults to '*' if not set — safe enough for a private install behind auth.
+        import os as _os
+        cors_origin = _os.environ.get('DESK_PUBLIC_BASE_URL', '*').rstrip('/')
+        self.send_header('Access-Control-Allow-Origin', cors_origin)
         self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Access-Control-Allow-Credentials', 'true')

@@ -33,8 +33,12 @@ DESK_USERNAME = os.environ.get('DESK_USERNAME', 'arturo')
 DESK_PASSWORD = os.environ.get('DESK_PASSWORD', 'yume1234')
 DESK_AUTH_REQUIRED = os.environ.get('DESK_AUTH_REQUIRED', '1') != '0'
 DESK_SESSION_SECRET = os.environ.get('DESK_SESSION_SECRET', 'desk-dev-secret-change-me')
-DESK_SESSION_COOKIE = 'desk_session'
+DESK_SESSION_COOKIE = os.environ.get('DESK_SESSION_COOKIE', 'desk_session')
 DESK_SESSION_TTL_HOURS = int(os.environ.get('DESK_SESSION_TTL_HOURS', '168'))
+# Cookie Domain attribute. Empty (default) = host-only cookie, works on any domain.
+# Set to e.g. ".example.com" only for multi-subdomain SSO across the same parent.
+DESK_COOKIE_DOMAIN = os.environ.get('DESK_COOKIE_DOMAIN', '').strip()
+_COOKIE_DOMAIN_ATTR = f'Domain={DESK_COOKIE_DOMAIN}; ' if DESK_COOKIE_DOMAIN else ''
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('DESK_LOGIN_ATTEMPTS', '5'))
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('DESK_LOGIN_WINDOW_SECONDS', '900'))
 DESK_PUBLIC_BASE_URL = os.environ.get('DESK_PUBLIC_BASE_URL', f'http://127.0.0.1:{PORT}')
@@ -681,7 +685,7 @@ CRON_JOBS_PATH = _OPENCLAW_HOME / 'cron' / 'jobs.json'
 GATEWAY_LOG_PATH = _OPENCLAW_HOME / 'workspace' / 'Desk' / 'data' / 'gateway.log'
 SANDBOX_CRON_LOG_PATH = _OPENCLAW_HOME / 'workspace' / 'Desk' / 'data' / 'sandbox-cron.log'
 SETTINGS_JSON_PATH = BASE_DIR / 'data' / 'settings.json'
-_INSTANCE_HOME = Path(os.environ.get('YUME_BASE', '/opt/yume/instances/arturo'))
+_INSTANCE_HOME = Path(os.environ.get('YUME_BASE', '/instance'))
 BRIDGE_LOG_PATH = _INSTANCE_HOME / 'logs' / 'bridge.log'
 EXECUTOR_LOG_PATH = _INSTANCE_HOME / 'logs' / 'task-executor.log'
 WATCHDOG_LOG_PATH = _INSTANCE_HOME / 'logs' / 'task-watchdog.log'
@@ -1273,7 +1277,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._redirect('/')
             return self._html(render_login_page())
         if path == '/logout':
-            return self._redirect('/login', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}=; Path=/; Domain=.yumewagener.com; HttpOnly; SameSite=Lax; Max-Age=0'})
+            return self._redirect('/login', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age=0'})
         if path.startswith('/static/'):
             rel = path[len('/static/'):]
             return self._serve_static(rel)
@@ -1288,7 +1292,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(401)
             self.send_header('Content-Type', 'text/html')
             self.end_headers()
-            self.wfile.write(b'<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=https://desk.yumewagener.com/login"></head><body>Redirecting to login...</body></html>')
+            _login_url = f'{DESK_PUBLIC_BASE_URL.rstrip("/")}/login'
+            _redirect_html = f'<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={_login_url}"></head><body>Redirecting to login...</body></html>'
+            self.wfile.write(_redirect_html.encode('utf-8'))
             return
         if path.startswith('/api/') and self._require_auth():
             return
@@ -1453,7 +1459,7 @@ class Handler(BaseHTTPRequestHandler):
             if hmac.compare_digest(username, DESK_USERNAME) and hmac.compare_digest(password, DESK_PASSWORD):
                 register_login_attempt(key, True)
                 token = build_session_token(username)
-                return self._redirect('/', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}={token}; Path=/; Domain=.yumewagener.com; HttpOnly; SameSite=Lax; Max-Age={DESK_SESSION_TTL_HOURS * 3600}'})
+                return self._redirect('/', headers={'Set-Cookie': f'{DESK_SESSION_COOKIE}={token}; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age={DESK_SESSION_TTL_HOURS * 3600}'})
             register_login_attempt(key, False)
             return self._html(render_login_page('Usuario o contraseña incorrectos.'), 401)
         if path.startswith('/api/') and self._require_auth():
