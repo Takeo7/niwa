@@ -665,6 +665,8 @@ def execute_install(cfg: WizardConfig) -> None:
         "DESK_SESSION_SECRET": generate_token(),
         "DESK_PUBLIC_BASE_URL": f"http://localhost:{cfg.isu_port}",
         "DESK_AUTH_REQUIRED": "1",
+        "NIWA_REGISTERED_CLAUDE": "1" if cfg.register_claude else "0",
+        "NIWA_REGISTERED_OPENCLAW": "1" if cfg.register_openclaw else "0",
     }
 
     # Write secrets file
@@ -854,22 +856,231 @@ def cmd_install(args) -> None:
     execute_install(cfg)
 
 
+def _find_install_dir(provided: Optional[str] = None) -> Optional[Path]:
+    """Locate an existing niwa install. Tries common locations."""
+    if provided:
+        p = Path(provided).expanduser()
+        if (p / "docker-compose.yml").exists():
+            return p
+        return None
+    candidates = [Path.home() / ".niwa"]
+    # Look for any ~/.* dir that has a niwa-style install
+    for p in Path.home().glob(".*"):
+        if p.is_dir() and (p / "docker-compose.yml").exists() and (p / "secrets" / "mcp.env").exists():
+            candidates.append(p)
+    for c in candidates:
+        if (c / "docker-compose.yml").exists():
+            return c
+    return None
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        # Strip quotes
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1].replace('\\"', '"')
+        out[key.strip()] = value
+    return out
+
+
 def cmd_status(args) -> None:
-    info("Status command not yet implemented")
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found. Use --dir to specify the location, or run 'niwa install'.")
+        sys.exit(1)
+    env = _read_env_file(install_dir / "secrets" / "mcp.env")
+    instance = env.get("INSTANCE_NAME", "?")
+    streaming_port = env.get("NIWA_GATEWAY_STREAMING_PORT", "?")
+    sse_port = env.get("NIWA_GATEWAY_SSE_PORT", "?")
+    caddy_port = env.get("NIWA_CADDY_PORT", "?")
+    isu_port = env.get("NIWA_ISU_PORT", "?")
+
+    header(f"Niwa install: {instance}")
+    print(f"  Location:  {install_dir}")
+    print(f"  Endpoints:")
+    print(f"    Gateway streaming HTTP:  http://localhost:{streaming_port}/mcp")
+    print(f"    Gateway SSE legacy:      http://localhost:{sse_port}/sse")
+    print(f"    Caddy reverse proxy:     http://localhost:{caddy_port}/mcp")
+    print(f"    Isu web UI:              http://localhost:{isu_port}")
+    print()
+    print(f"  {BOLD}Containers:{RESET}")
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={instance}-",
+             "--format", "  {{.Names}}\\t{{.Status}}"],
+            capture_output=True, text=True, timeout=8,
+        )
+        if out.stdout.strip():
+            for line in out.stdout.strip().split("\n"):
+                print("  " + line.replace("\\t", "  "))
+        else:
+            print(f"  {DIM}(no containers found — install may be torn down){RESET}")
+    except Exception as e:
+        warn(f"Could not list containers: {e}")
+    print()
+
+    # Gateway healthcheck
+    info("Gateway healthcheck...")
+    try:
+        with urllib.request.urlopen(f"http://localhost:{streaming_port}/mcp", timeout=3) as r:
+            ok(f"Gateway responding ({r.status})")
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 405, 406):
+            ok(f"Gateway responding (HTTP {e.code} expected for GET /mcp)")
+        else:
+            warn(f"Gateway HTTP {e.code}")
+    except Exception as e:
+        warn(f"Gateway not reachable: {e}")
+
+    # Isu healthcheck
+    try:
+        with urllib.request.urlopen(f"http://localhost:{isu_port}/health", timeout=3) as r:
+            ok(f"Isu responding ({r.status})")
+    except Exception as e:
+        warn(f"Isu not reachable: {e}")
 
 
 def cmd_uninstall(args) -> None:
-    info("Uninstall command not yet implemented (P9)")
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found. Use --dir to specify the location.")
+        sys.exit(1)
+
+    env = _read_env_file(install_dir / "secrets" / "mcp.env")
+    instance = env.get("INSTANCE_NAME", "niwa")
+
+    header(f"Uninstall niwa: {instance}")
+    print(f"  Location:        {install_dir}")
+    print(f"  Will stop:       all {instance}-* containers")
+    print(f"  Will remove:     docker images for {instance}-niwa-mcp, {instance}-isu-mcp, "
+          f"{instance}-platform-mcp, {instance}-isu")
+    print(f"  Will delete:     {install_dir} (including DB and logs)")
+    print()
+    if not args.yes:
+        if not prompt_bool("Proceed with uninstall? (this is irreversible)", default=False):
+            info("Aborted")
+            return
+
+    # docker compose down
+    info("Stopping containers...")
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(install_dir / "docker-compose.yml"), "down"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        ok("Containers stopped and removed")
+    else:
+        warn(f"docker compose down had issues: {result.stderr[:300]}")
+
+    # Remove images
+    images = [
+        f"{instance}-niwa-mcp:latest",
+        f"{instance}-isu-mcp:latest",
+        f"{instance}-platform-mcp:latest",
+        f"{instance}-isu:latest",
+    ]
+    for img in images:
+        result = subprocess.run(["docker", "rmi", img], capture_output=True, text=True)
+        if result.returncode == 0:
+            ok(f"Removed image {img}")
+
+    # Unregister from clients ONLY if this install registered them
+    # (avoids wiping registrations belonging to a different install with the same server name).
+    tasks_name = env.get("NIWA_TASKS_SERVER_NAME", "niwa")
+    if env.get("NIWA_REGISTERED_CLAUDE") == "1" and which("claude"):
+        result = subprocess.run(
+            ["claude", "mcp", "remove", tasks_name],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok(f"Unregistered '{tasks_name}' from Claude Code")
+        else:
+            warn(f"Could not unregister from Claude Code: {result.stderr.strip()}")
+    if env.get("NIWA_REGISTERED_OPENCLAW") == "1" and which("openclaw"):
+        result = subprocess.run(
+            ["openclaw", "mcp", "unset", tasks_name],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok(f"Unregistered '{tasks_name}' from OpenClaw")
+        else:
+            warn(f"Could not unregister from OpenClaw: {result.stderr.strip()}")
+
+    # Delete install dir
+    if args.keep_data:
+        info(f"Keeping data dir at {install_dir} (--keep-data flag)")
+    else:
+        shutil.rmtree(install_dir)
+        ok(f"Removed {install_dir}")
+
+    print()
+    ok("Niwa uninstalled")
+
+
+def cmd_restart(args) -> None:
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found.")
+        sys.exit(1)
+    info("Restarting all containers...")
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(install_dir / "docker-compose.yml"), "restart"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        ok("Restarted")
+    else:
+        err(f"Restart failed: {result.stderr}")
+        sys.exit(1)
+
+
+def cmd_logs(args) -> None:
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found.")
+        sys.exit(1)
+    env = _read_env_file(install_dir / "secrets" / "mcp.env")
+    instance = env.get("INSTANCE_NAME", "niwa")
+    role = args.service or "mcp-gateway"
+    container = f"{instance}-{role}"
+    info(f"Showing last {args.tail} lines of {container} (Ctrl+C to exit)...")
+    try:
+        subprocess.run(["docker", "logs", "--tail", str(args.tail), "-f", container])
+    except KeyboardInterrupt:
+        pass
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Niwa installer")
+    parser = argparse.ArgumentParser(description="Niwa installer and CLI")
     sub = parser.add_subparsers(dest="cmd")
-    sub.add_parser("install", help="Interactive install (default)")
-    sub.add_parser("status", help="Show status of an existing install")
-    sub.add_parser("uninstall", help="Tear down an existing install")
-    args = parser.parse_args()
 
+    sub.add_parser("install", help="Interactive install (default)")
+
+    p_status = sub.add_parser("status", help="Show status of an existing install")
+    p_status.add_argument("--dir", help="Install location (auto-detect by default)")
+
+    p_uninstall = sub.add_parser("uninstall", help="Tear down an existing install")
+    p_uninstall.add_argument("--dir", help="Install location (auto-detect by default)")
+    p_uninstall.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
+    p_uninstall.add_argument("--keep-data", action="store_true",
+                             help="Keep the install dir (DB, logs, configs) — only stop containers")
+
+    p_restart = sub.add_parser("restart", help="Restart all containers")
+    p_restart.add_argument("--dir", help="Install location (auto-detect by default)")
+
+    p_logs = sub.add_parser("logs", help="Tail logs from a container")
+    p_logs.add_argument("service", nargs="?", help="Service name (default: mcp-gateway)")
+    p_logs.add_argument("--dir", help="Install location (auto-detect by default)")
+    p_logs.add_argument("--tail", type=int, default=50, help="Lines to tail (default 50)")
+
+    args = parser.parse_args()
     cmd = args.cmd or "install"
     if cmd == "install":
         cmd_install(args)
@@ -877,6 +1088,10 @@ def main():
         cmd_status(args)
     elif cmd == "uninstall":
         cmd_uninstall(args)
+    elif cmd == "restart":
+        cmd_restart(args)
+    elif cmd == "logs":
+        cmd_logs(args)
 
 
 if __name__ == "__main__":
