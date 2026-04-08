@@ -1,3 +1,3 @@
 # Frontend
 
-Interfaz web de Desk.
+Niwa app — web frontend.

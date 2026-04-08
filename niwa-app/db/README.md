@@ -1,3 +1,3 @@
 # DB
 
-Aquí irá el esquema y las migraciones de la base de datos local de Desk.
+Niwa schema definition (`schema.sql`) and the `niwa.sqlite3` database file (gitignored).

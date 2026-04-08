@@ -3,7 +3,7 @@
 Provides fetch_task_history(params, db_conn_fn) for retrieving historical task data
 with optional filters, sorting, and aggregate statistics.
 
-NOTE: To wire this into the Desk server, add a route in app.py
+NOTE: To wire this into the Niwa app server, add a route in app.py
 (protected file — requires manual intervention):
 
     if path == '/api/tasks/history':
@@ -91,7 +91,7 @@ def fetch_task_history(params, db_conn_fn=None):
             "total_completed": 42,
             "first_time_success_rate": 0.76,
             "avg_pipeline_hours": 12.5,
-            "most_active_project": "Desk"
+            "most_active_project": "my-project"
           }
         }
     """

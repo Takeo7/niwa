@@ -1,14 +1,14 @@
 // ======================== STATE ========================
 const AGENT_THEME = {
-  colors: { yume: 'primary', claude_code: 'agent-claude', iris: 'secondary' },
-  icons:  { yume: 'psychology', claude_code: 'code', iris: 'neurology' },
+  colors: { auto: 'primary', claude_code: 'agent-claude' },
+  icons:  { auto: 'play_arrow', claude_code: 'code' },
   fallbackColor(name) {
-    if (name?.toLowerCase() === 'yume') return 'primary';
+    if (name?.toLowerCase() === 'auto') return 'primary';
     if (name?.toLowerCase().includes('claude')) return 'agent-claude';
     return 'secondary';
   },
   fallbackIcon(name) {
-    if (name?.toLowerCase() === 'yume') return 'psychology';
+    if (name?.toLowerCase() === 'auto') return 'play_arrow';
     if (name?.toLowerCase().includes('claude')) return 'code';
     return 'neurology';
   },
@@ -167,7 +167,7 @@ function renderTimelineBar(taskId, currentStatus) {
 // ======================== THEME ========================
 function toggleTheme() {
   const isDark = document.documentElement.classList.toggle('dark');
-  localStorage.setItem('desk_theme', isDark ? 'dark' : 'light');
+  localStorage.setItem('niwa_theme', isDark ? 'dark' : 'light');
   const icon = document.getElementById('theme-toggle-icon');
   if (icon) icon.textContent = isDark ? 'light_mode' : 'dark_mode';
 }
@@ -175,7 +175,7 @@ function toggleTheme() {
 // Set initial icon
 window.addEventListener('DOMContentLoaded', () => {
   const icon = document.getElementById('theme-toggle-icon');
-  if (icon) icon.textContent = localStorage.getItem('desk_theme') === 'dark' ? 'light_mode' : 'dark_mode';
+  if (icon) icon.textContent = localStorage.getItem('niwa_theme') === 'dark' ? 'light_mode' : 'dark_mode';
 });
 
 // ======================== I18N ========================
@@ -622,7 +622,7 @@ async function loadKanban() {
 function renderAssigneeBadges(t) {
   var badge = '';
   if (t.assigned_to_yume) {
-    badge = '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-tighter"><span class="material-symbols-outlined" style="font-size:11px">smart_toy</span>Yume</span>';
+    badge = '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/15 text-primary text-[10px] font-bold uppercase tracking-tighter"><span class="material-symbols-outlined" style="font-size:11px">play_arrow</span>Auto</span>';
   }
   if (t.assigned_to_claude) {
     badge += '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-agent-claude/15 text-agent-claude text-[10px] font-bold uppercase tracking-tighter"><span class="material-symbols-outlined" style="font-size:11px">code</span>Claude</span>';
@@ -660,7 +660,7 @@ function renderKanbanCard(t, isDone) {
 
   var assigneeBadge = renderAssigneeBadges(t);
 
-  // Agent border: orange for Claude, blue for Yume
+  // Agent border: orange for Claude, blue for auto-execute
   var agentBorder = t.assigned_to_claude ? 'border-l-4 border-agent-claude' : t.assigned_to_yume ? 'border-l-4 border-primary' : '';
   var statusBorder = agentBorder || (t.status === 'bloqueada' ? 'border-l-4 border-red-500' : '');
 

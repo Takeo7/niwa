@@ -29,7 +29,7 @@ DB_PATH = Path(os.environ.get('NIWA_DB_PATH', str(BASE_DIR / 'data' / 'niwa.sqli
 SCHEMA_PATH = BASE_DIR / 'db' / 'schema.sql'
 HOST = os.environ.get('NIWA_APP_HOST', '0.0.0.0')
 PORT = int(os.environ.get('NIWA_APP_PORT', '8080'))
-NIWA_APP_USERNAME = os.environ.get('NIWA_APP_USERNAME', 'arturo')
+NIWA_APP_USERNAME = os.environ.get('NIWA_APP_USERNAME', 'admin')
 NIWA_APP_PASSWORD = os.environ.get('NIWA_APP_PASSWORD', 'change-me')
 NIWA_APP_AUTH_REQUIRED = os.environ.get('NIWA_APP_AUTH_REQUIRED', '1') != '0'
 NIWA_APP_SESSION_SECRET = os.environ.get('NIWA_APP_SESSION_SECRET', 'niwa-dev-secret-change-me')
@@ -62,7 +62,7 @@ LOGIN_PAGE_HTML = r'''<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Login · Desk</title>
+  <title>Login · Niwa</title>
   <style>
     :root{--bg:#0f172a;--card:#111827;--line:#243041;--text:#e5e7eb;--soft:#94a3b8;--accent:#2563eb;--accent2:#1d4ed8;--danger:#dc2626}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Inter,system-ui,sans-serif;background:radial-gradient(circle at top,#1e293b 0%,#0f172a 55%,#020617 100%);color:var(--text)}
@@ -78,8 +78,8 @@ LOGIN_PAGE_HTML = r'''<!doctype html>
 </head>
 <body>
   <div class="card">
-    <div class="brand">Desk <span>· Yume</span></div>
-    <div class="sub">Acceso protegido para Arturo. Inicia sesión para abrir el panel.</div>
+    <div class="brand">Niwa</div>
+    <div class="sub">Acceso protegido. Inicia sesión para abrir Niwa.</div>
     {error_html}
     <form method="post" action="/login">
       <div class="field">
@@ -575,8 +575,8 @@ def fetch_agents_status():
 
 
 CRON_JOBS_PATH = _OPENCLAW_HOME / 'cron' / 'jobs.json'
-GATEWAY_LOG_PATH = _OPENCLAW_HOME / 'workspace' / 'Desk' / 'data' / 'gateway.log'
-SANDBOX_CRON_LOG_PATH = _OPENCLAW_HOME / 'workspace' / 'Desk' / 'data' / 'sandbox-cron.log'
+GATEWAY_LOG_PATH = BASE_DIR / 'data' / 'gateway.log'
+SANDBOX_CRON_LOG_PATH = BASE_DIR / 'data' / 'sandbox-cron.log'
 SETTINGS_JSON_PATH = BASE_DIR / 'data' / 'settings.json'
 _INSTANCE_HOME = Path(os.environ.get('YUME_BASE', '/instance'))
 BRIDGE_LOG_PATH = _INSTANCE_HOME / 'logs' / 'bridge.log'
@@ -1228,13 +1228,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/metrics':
             import time as _mtime
             _metrics = {}
-            for _sname, _surl in [('desk','http://localhost:8080/health'),('investmentdesk','http://localhost:8090'),('pumicon','http://localhost:3000'),('n8n','http://localhost:5678')]:
-                _t0 = _mtime.time()
-                try:
-                    urllib.request.urlopen(_surl, timeout=5)
-                    _metrics[_sname] = {'status':'up','latency_ms':round((_mtime.time()-_t0)*1000)}
-                except:
-                    _metrics[_sname] = {'status':'down','latency_ms':-1}
+            # Self-check only — the portable Niwa app doesn't know about other services.
+            # If you want to monitor other endpoints, set ISU_HEALTH_SERVICES env var
+            # (parsed by health_service.py).
+            _t0 = _mtime.time()
+            try:
+                urllib.request.urlopen('http://localhost:8080/health', timeout=5)
+                _metrics['niwa-app'] = {'status':'up','latency_ms':round((_mtime.time()-_t0)*1000)}
+            except Exception:
+                _metrics['niwa-app'] = {'status':'down','latency_ms':-1}
             with db_conn() as _mc:
                 _metrics['tasks_today'] = _mc.execute("SELECT count(*) FROM tasks WHERE status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
                 _metrics['tasks_pending'] = _mc.execute("SELECT count(*) FROM tasks WHERE status='pendiente'").fetchone()[0]
@@ -1421,8 +1423,6 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 if str(exc) == 'task_not_found':
                     return self._json({'error': 'task_not_found'}, 404)
-                if str(exc) == 'desk_deploy_closure_required':
-                    return self._json({'error': 'desk_deploy_closure_required', 'message': 'Las tareas del proyecto Desk solo pueden marcarse como hechas después del cierre de deploy verificado.'}, 409)
                 raise
             return self._json({'ok': True})
         if path.startswith('/api/notes/') and path.count('/') == 3:
@@ -1472,5 +1472,5 @@ if __name__ == '__main__':
     init_db()
     seed_if_empty()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    logger.info(f'Desk listening on {HOST}:{PORT}')
+    logger.info(f'Niwa app listening on {HOST}:{PORT}')
     server.serve_forever()

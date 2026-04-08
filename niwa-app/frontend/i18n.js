@@ -1,18 +1,18 @@
 /**
- * i18n.js — Lightweight internationalization for Desk
+ * i18n.js — Lightweight internationalization for Niwa
  * Usage: t('key') returns the translated string for the current locale.
  * Supports interpolation: t('greeting', {name: 'Arturo'}) → "Hola, Arturo"
  */
 
 const I18N = {
-  _locale: localStorage.getItem('desk_locale') || 'es',
+  _locale: localStorage.getItem('niwa_locale') || 'es',
   _strings: {},
 
   get locale() { return this._locale; },
 
   setLocale(lang) {
     this._locale = lang;
-    localStorage.setItem('desk_locale', lang);
+    localStorage.setItem('niwa_locale', lang);
   },
 
   register(lang, strings) {
@@ -110,7 +110,7 @@ I18N.register('es', {
   'task.add_files': 'Añadir archivos...',
   'task.notes': 'Notas',
   'task.urgent': 'Urgente',
-  'task.assign_yume': 'Asignar a Yume',
+  'task.auto_execute': 'Auto-ejecutar',
   'task.save': 'Guardar tarea',
   'task.delete': 'Eliminar',
   'task.none': '— Ninguno —',
@@ -156,7 +156,7 @@ I18N.register('es', {
   'sys.notify_muted': 'Notificaciones silenciadas',
   'sys.notify_active': 'Notificaciones activadas',
   'sys.run_audit': 'Ejecutar auditoría',
-  'sys.auto_mode': 'Modo auto: tareas se asignan a Yume',
+  'sys.auto_mode': 'Modo auto: tareas pasan al executor',
   'sys.manual_mode': 'Modo manual: tú decides qué ejecutar',
 
   // Connections
@@ -188,10 +188,10 @@ I18N.register('es', {
   'settings.notify_completed_desc': 'Telegram al completar una tarea',
   'settings.notify_errors': 'Avisos: errores y bloqueos',
   'settings.notify_errors_desc': 'Telegram si una tarea falla o un servicio cae',
-  'settings.notify_warnings': 'Avisos: warnings de Yume',
+  'settings.notify_warnings': 'Avisos: warnings del executor',
   'settings.notify_warnings_desc': 'Telegram en errores transitorios y reintentos',
   'settings.notification_format': 'Formato de notificaciones',
-  'settings.notification_format_desc': 'Elige cómo recibir las notificaciones de Yume',
+  'settings.notification_format_desc': 'Elige cómo recibir las notificaciones del executor',
   'settings.notification_format_text': 'Solo texto',
   'settings.notification_format_audio': 'Solo audio (TTS)',
   'settings.notification_format_both': 'Texto y audio',
@@ -411,7 +411,7 @@ I18N.register('en', {
   'task.add_files': 'Add files...',
   'task.notes': 'Notes',
   'task.urgent': 'Urgent',
-  'task.assign_yume': 'Assign to Yume',
+  'task.auto_execute': 'Auto-execute',
   'task.save': 'Save Task',
   'task.delete': 'Delete',
   'task.none': '— None —',
@@ -457,7 +457,7 @@ I18N.register('en', {
   'sys.notify_muted': 'Notifications muted',
   'sys.notify_active': 'Notifications enabled',
   'sys.run_audit': 'Run Audit',
-  'sys.auto_mode': 'Auto mode: tasks assigned to Yume',
+  'sys.auto_mode': 'Auto mode: tasks go to the executor',
   'sys.manual_mode': 'Manual mode: you decide what to execute',
 
   // Connections
@@ -489,10 +489,10 @@ I18N.register('en', {
   'settings.notify_completed_desc': 'Telegram when a task is completed',
   'settings.notify_errors': 'Notifications: errors and blocks',
   'settings.notify_errors_desc': 'Telegram if a task fails or a service goes down',
-  'settings.notify_warnings': 'Notifications: Yume warnings',
+  'settings.notify_warnings': 'Notifications: executor warnings',
   'settings.notify_warnings_desc': 'Telegram on transient errors and retries',
   'settings.notification_format': 'Notification format',
-  'settings.notification_format_desc': 'Choose how to receive Yume notifications',
+  'settings.notification_format_desc': 'Choose how to receive executor notifications',
   'settings.notification_format_text': 'Text only',
   'settings.notification_format_audio': 'Audio only (TTS)',
   'settings.notification_format_both': 'Text and audio',

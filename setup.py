@@ -184,6 +184,108 @@ def valid_port(p: str) -> Optional[str]:
     return None
 
 
+# ────────────────────────── install hints ──────────────────────────
+# When a dependency is missing we don't auto-install it (sudo, multi-distro,
+# version pinning are all hard). We do print the exact command to install it
+# on the user's platform so they can copy-paste.
+
+def _platform_key() -> str:
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return "other"
+
+
+INSTALL_HINTS: dict[str, dict[str, list[str]]] = {
+    "docker": {
+        "macos": [
+            "brew install orbstack            # recommended for macOS",
+            "# or: brew install --cask docker (Docker Desktop)",
+            "# or: brew install colima docker-cli",
+        ],
+        "linux": [
+            "curl -fsSL https://get.docker.com | sh    # universal",
+            "# or (Debian/Ubuntu): sudo apt install docker.io",
+            "# or (Fedora):        sudo dnf install docker-ce",
+            "# or (Arch):          sudo pacman -S docker",
+            "# Then: sudo systemctl enable --now docker && sudo usermod -aG docker $USER",
+        ],
+        "other": ["See https://docs.docker.com/engine/install/"],
+    },
+    "python3": {
+        "macos": ["brew install python@3.12"],
+        "linux": [
+            "sudo apt install python3.12       # Debian/Ubuntu",
+            "# or: sudo dnf install python3.12  # Fedora",
+            "# or: sudo pacman -S python        # Arch",
+        ],
+        "other": ["See https://www.python.org/downloads/"],
+    },
+    "claude": {
+        "macos": [
+            "npm install -g @anthropic-ai/claude-code   # requires Node 18+",
+            "# Then: claude   (interactive auth on first run)",
+        ],
+        "linux": [
+            "npm install -g @anthropic-ai/claude-code",
+            "# Then: claude   (interactive auth on first run)",
+        ],
+        "other": ["See https://docs.claude.com/en/docs/claude-code"],
+    },
+    "llm": {
+        "macos": [
+            "brew install llm                  # Simon Willison's CLI",
+            "# Then: llm keys set openai      (or other provider)",
+        ],
+        "linux": [
+            "pipx install llm",
+            "# or: pip install --user llm",
+            "# Then: llm keys set openai",
+        ],
+        "other": ["See https://llm.datasette.io/en/stable/setup.html"],
+    },
+    "gemini": {
+        "macos": ["See https://ai.google.dev/gemini-api/docs/quickstart for the Gemini CLI"],
+        "linux": ["See https://ai.google.dev/gemini-api/docs/quickstart for the Gemini CLI"],
+        "other": ["See https://ai.google.dev/gemini-api/docs/quickstart"],
+    },
+    "openclaw": {
+        "macos": ["See https://docs.openclaw.ai/install (optional)"],
+        "linux": ["See https://docs.openclaw.ai/install (optional)"],
+        "other": ["See https://docs.openclaw.ai/install (optional)"],
+    },
+    "cloudflared": {
+        "macos": [
+            "brew install cloudflared",
+            "cloudflared login",
+            "cloudflared tunnel create niwa",
+        ],
+        "linux": [
+            "# Debian/Ubuntu:",
+            "wget -qO- https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg",
+            "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main' | sudo tee /etc/apt/sources.list.d/cloudflared.list",
+            "sudo apt update && sudo apt install cloudflared",
+            "cloudflared login",
+            "cloudflared tunnel create niwa",
+        ],
+        "other": ["See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"],
+    },
+}
+
+
+def print_install_hint(tool: str) -> None:
+    """Print install instructions for the user's platform."""
+    plat = _platform_key()
+    hint = INSTALL_HINTS.get(tool, {}).get(plat) or INSTALL_HINTS.get(tool, {}).get("other")
+    if not hint:
+        warn(f"  No install hint registered for '{tool}'. Search docs.")
+        return
+    print(f"  {DIM}Install hint:{RESET}")
+    for line in hint:
+        print(f"    {line}")
+
+
 # ────────────────────────── detection ──────────────────────────
 def which(name: str) -> Optional[str]:
     return shutil.which(name)
@@ -446,19 +548,24 @@ def step_detection(cfg: WizardConfig) -> None:
     header("Step 0 — Pre-flight detection")
     docker = detect_docker()
     if not docker.get("available"):
-        err("Docker is not installed or not in PATH. Install OrbStack/Docker Desktop/Colima first.")
+        err("Docker is not installed or not in PATH.")
+        print_install_hint("docker")
+        print()
+        print("  After installing, re-run ./niwa install")
         sys.exit(1)
     ok(f"Docker: {docker['version']} ({docker.get('runtime', 'unknown')})")
 
     sock = detect_socket_path()
     if not sock:
-        err("Could not find a Docker socket. Looked at ~/.orbstack, /var/run, ~/.colima.")
+        err("Could not find a Docker socket. Looked at ~/.orbstack, /var/run, ~/.colima, ~/.docker, /run/user/<uid>.")
+        print("  If your Docker is rootless, make sure the daemon is running and DOCKER_HOST is set.")
         sys.exit(1)
     ok(f"Docker socket: {sock}")
     cfg.detected["docker_socket"] = sock
 
     if sys.version_info < (3, 9):
         err(f"Python 3.9+ required, you have {sys.version_info.major}.{sys.version_info.minor}")
+        print_install_hint("python3")
         sys.exit(1)
     ok(f"Python: {sys.version_info.major}.{sys.version_info.minor}")
 
@@ -476,7 +583,9 @@ def step_detection(cfg: WizardConfig) -> None:
     if integrations:
         ok("Optional integrations detected: " + ", ".join(integrations))
     else:
-        info("No optional integrations detected (OpenClaw, Claude Code, cloudflared) — that's fine")
+        info("No optional integrations detected (OpenClaw, Claude Code, cloudflared)")
+        info("That's fine — Niwa works without them. Later wizard steps will print")
+        info("install instructions if you want to enable any of them.")
 
 
 def step_naming(cfg: WizardConfig) -> None:
@@ -597,7 +706,7 @@ def step_tokens(cfg: WizardConfig) -> None:
 def step_credentials(cfg: WizardConfig) -> None:
     header("Step 6 — Niwa app login")
     print("Set credentials for the Niwa app web UI (you'll log in with these in the browser).")
-    cfg.username = prompt("Username", default="arturo")
+    cfg.username = prompt("Username", default="admin")
     cfg.password = prompt("Password (visible — write it down or pick something temporary)")
 
 
@@ -648,9 +757,11 @@ def step_executor(cfg: WizardConfig) -> None:
     else:
         binary = provider["binary"]
         if binary and not which(binary):
-            warn(f"'{binary}' not found in PATH. {provider['auth_hint']}")
-            warn("The executor will fail until the binary is available.")
-            if not prompt_bool("Continue anyway?", default=False):
+            warn(f"'{binary}' not found in PATH.")
+            print_install_hint(binary)
+            warn(f"Auth hint after install: {provider['auth_hint']}")
+            warn("The executor will fail until the binary is available + authenticated.")
+            if not prompt_bool("Continue anyway? (you can install it before the executor first runs)", default=False):
                 cfg.executor_enabled = False
                 return
         cfg.llm_command = provider["command"]
@@ -699,9 +810,10 @@ def step_remote(cfg: WizardConfig) -> None:
         return
 
     if not cfg.detected.get("cloudflared"):
-        warn("cloudflared is NOT installed. You can:")
-        print("  - Install it (brew install cloudflared / apt install cloudflared)")
-        print("  - Or skip remote for now and run './niwa install' again later")
+        warn("cloudflared is NOT installed.")
+        print_install_hint("cloudflared")
+        print()
+        print("  Or skip remote for now and run './niwa install' again later")
         if not prompt_bool("Continue with remote setup anyway?", default=False):
             cfg.mode = "local-only"
             return

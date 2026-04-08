@@ -137,11 +137,7 @@ def _check_tunnels(result):
 
 def _check_workers(result, host, in_docker):
     workers = [
-        ('Gateway', 'openclaw gateway'),
-        ('Bridge', 'claude-bridge'),
-        ('Task Executor', 'task-executor'),
-        ('Task Watchdog', 'task-watchdog'),
-        ('Desk Auto-Deploy', 'desk-auto-deploy'),
+        ('Niwa Task Executor', 'task-executor'),
         ('Cloudflare Tunnel', 'cloudflared'),
     ]
     for wname, pattern in workers:

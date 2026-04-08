@@ -65,7 +65,7 @@ def create_task(payload):
                 1 if payload.get('urgent') else 0,
                 payload.get('scheduled_for') or None,
                 payload.get('due_at') or None,
-                'desk-ui',
+                'niwa-app',
                 payload.get('notes', ''),
                 1 if payload.get('assigned_to_yume') else 0,
                 1 if payload.get('assigned_to_claude') else 0,

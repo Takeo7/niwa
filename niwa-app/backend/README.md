@@ -1,3 +1,3 @@
 # Backend
 
-API y lógica de servidor de Desk.
+Niwa app — server-side API and HTTP handler.
