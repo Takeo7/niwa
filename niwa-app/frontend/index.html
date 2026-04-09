@@ -560,6 +560,7 @@ tailwind.config = {
     <button data-systab="stats" onclick="switchSystemTab('stats')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Stats</button>
     <button data-systab="kpis" onclick="switchSystemTab('kpis')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">KPIs</button>
     <button data-systab="docs" onclick="switchSystemTab('docs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Docs</button>
+    <button data-systab="styles" onclick="switchSystemTab('styles')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Styles</button>
   </div>
 
   <!-- Overview Tab -->
@@ -697,6 +698,77 @@ tailwind.config = {
   <!-- Docs Tab -->
   <div id="sys-docs" class="sys-panel hidden">
     <div id="docs-content"></div>
+  </div>
+
+  <!-- Styles Tab -->
+  <div id="sys-styles" class="sys-panel hidden">
+    <div class="grid grid-cols-12 gap-6">
+      <div class="col-span-12 lg:col-span-8">
+        <div class="bg-surface-container-high rounded-lg p-6 mb-6">
+          <div class="flex items-center gap-3 mb-6">
+            <span class="material-symbols-outlined text-secondary">palette</span>
+            <h3 class="text-sm font-semibold uppercase tracking-wider">Colores</h3>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" id="style-colors"></div>
+        </div>
+        <div class="bg-surface-container-high rounded-lg p-6 mb-6">
+          <div class="flex items-center gap-3 mb-6">
+            <span class="material-symbols-outlined text-primary">text_fields</span>
+            <h3 class="text-sm font-semibold uppercase tracking-wider">Tipografía</h3>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Fuente principal</label>
+              <select id="style-font-body" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="Inter">Inter (default)</option>
+                <option value="system-ui">System UI</option>
+                <option value="Manrope">Manrope</option>
+                <option value="JetBrains Mono">JetBrains Mono</option>
+                <option value="Fira Code">Fira Code</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Fuente títulos</label>
+              <select id="style-font-headline" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="DM Serif Display">DM Serif Display (default)</option>
+                <option value="Manrope">Manrope</option>
+                <option value="Inter">Inter</option>
+                <option value="system-ui">System UI</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Tamaño base</label>
+              <select id="style-font-size" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="12px">Compacto (12px)</option>
+                <option value="13px" selected>Normal (13px)</option>
+                <option value="14px">Grande (14px)</option>
+                <option value="15px">Extra grande (15px)</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Border radius</label>
+              <select id="style-radius" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="0">Sin bordes redondeados</option>
+                <option value="0.25rem">Sutil</option>
+                <option value="0.5rem" selected>Normal</option>
+                <option value="0.75rem">Redondeado</option>
+                <option value="1.25rem">Muy redondeado</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="flex gap-3">
+          <button onclick="saveStyles()" class="px-4 py-2 bg-primary text-on-primary text-sm font-bold rounded-lg hover:opacity-90">Guardar estilos</button>
+          <button onclick="resetStyles()" class="px-4 py-2 bg-surface-bright text-on-surface-variant text-sm font-medium rounded-lg hover:bg-surface-container-high">Restaurar defaults</button>
+        </div>
+      </div>
+      <div class="col-span-12 lg:col-span-4">
+        <div class="bg-surface-container-high rounded-lg p-6">
+          <h4 class="text-sm font-semibold mb-4">Presets</h4>
+          <div id="style-presets" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
 </section>

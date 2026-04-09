@@ -234,7 +234,7 @@ function handleHashRoute() {
   const view = validViews.includes(parts[0]) ? parts[0] : 'dashboard';
   // Restore system sub-tab from hash (e.g. #/system/logs)
   if (view === 'system' && parts[1]) {
-    const validTabs = ['overview','routines','logs','config','stats','kpis','docs'];
+    const validTabs = ['overview','routines','logs','config','stats','kpis','docs','styles'];
     if (validTabs.includes(parts[1])) S.systemTab = parts[1];
   }
   switchView(view, false);
@@ -1455,6 +1455,7 @@ function loadSystemTabData(tab) {
     case 'stats': loadStats(); break;
     case 'kpis': loadKpis(); break;
     case 'docs': loadDocs(); break;
+    case 'styles': loadStyles(); break;
   }
 }
 
@@ -2437,7 +2438,7 @@ document.addEventListener('keydown', e => {
 let _pollInProgress = false;
 function _shouldSkipPoll() {
   // Don't reload while user is editing forms — it wipes input values
-  if (S.view === 'system' && S.systemTab === 'config') return true;
+  if (S.view === 'system' && (S.systemTab === 'config' || S.systemTab === 'styles')) return true;
   // Don't poll while any modal is open
   const modals = ['task-modal', 'note-editor-modal', 'routine-editor-modal', 'search-overlay'];
   for (const id of modals) {
@@ -2506,6 +2507,175 @@ async function restartNiwa() {
     if (banner) banner.innerHTML = '<span class="text-error">Error al reiniciar</span>';
   }
 }
+
+// ======================== STYLES ========================
+const STYLE_COLORS = [
+  { key: 'primary', label: 'Primary', lightDefault: '#3b6eb5', darkDefault: '#85adff' },
+  { key: 'secondary', label: 'Secondary', lightDefault: '#7c5cc7', darkDefault: '#ac8aff' },
+  { key: 'tertiary', label: 'Tertiary (success)', lightDefault: '#1a9a5c', darkDefault: '#9bffce' },
+  { key: 'error', label: 'Error', lightDefault: '#d94444', darkDefault: '#ff716c' },
+  { key: 'warning', label: 'Warning', lightDefault: '#f59e0b', darkDefault: '#fbbf24' },
+  { key: 'bg', label: 'Background', lightDefault: '#e8edf5', darkDefault: '#060e20' },
+  { key: 'surface', label: 'Surface', lightDefault: '#eef1f6', darkDefault: '#0a1122' },
+  { key: 'on-surface', label: 'Text', lightDefault: '#1a2234', darkDefault: '#dee5ff' },
+];
+
+const STYLE_PRESETS = [
+  { name: 'Default', colors: {} },
+  { name: 'Ocean', colors: { primary: '#0077b6', secondary: '#00b4d8', tertiary: '#06d6a0', bg: '#edf6f9', 'bg-dark': '#001219', 'surface-dark': '#001824' } },
+  { name: 'Forest', colors: { primary: '#2d6a4f', secondary: '#74c69d', tertiary: '#40916c', bg: '#f0f7f4', 'bg-dark': '#0a1f14', 'surface-dark': '#0d2818' } },
+  { name: 'Sunset', colors: { primary: '#e76f51', secondary: '#f4a261', tertiary: '#2a9d8f', bg: '#fdf5ef', 'bg-dark': '#1a0f09', 'surface-dark': '#231510' } },
+  { name: 'Monochrome', colors: { primary: '#6b7280', secondary: '#9ca3af', tertiary: '#4b5563', bg: '#f3f4f6', 'bg-dark': '#0a0a0a', 'surface-dark': '#111111' } },
+  { name: 'Lavender', colors: { primary: '#7c3aed', secondary: '#a78bfa', tertiary: '#06b6d4', bg: '#f5f3ff', 'bg-dark': '#0f0720', 'surface-dark': '#150a2e' } },
+];
+
+function loadStyles() {
+  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  const isDark = document.documentElement.classList.contains('dark');
+
+  // Render color pickers
+  const colorsEl = document.getElementById('style-colors');
+  if (colorsEl) {
+    colorsEl.innerHTML = STYLE_COLORS.map(c => {
+      const currentVal = saved[`${c.key}${isDark ? '-dark' : ''}`] || (isDark ? c.darkDefault : c.lightDefault);
+      return `<div>
+        <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">${c.label}</label>
+        <div class="flex items-center gap-2">
+          <input type="color" id="style-c-${c.key}" value="${currentVal}" onchange="applyStyleChange()" class="w-8 h-8 rounded-lg border border-outline-variant/30 cursor-pointer" style="padding:0">
+          <input type="text" value="${currentVal}" oninput="document.getElementById('style-c-${c.key}').value=this.value;applyStyleChange()" class="flex-1 bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-1 px-2 text-xs text-on-surface font-mono">
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Restore font/size/radius selects
+  const fontBody = document.getElementById('style-font-body');
+  const fontHead = document.getElementById('style-font-headline');
+  const fontSize = document.getElementById('style-font-size');
+  const radius = document.getElementById('style-radius');
+  if (fontBody && saved.fontBody) fontBody.value = saved.fontBody;
+  if (fontHead && saved.fontHeadline) fontHead.value = saved.fontHeadline;
+  if (fontSize && saved.fontSize) fontSize.value = saved.fontSize;
+  if (radius && saved.radius) radius.value = saved.radius;
+
+  // Render presets
+  const presetsEl = document.getElementById('style-presets');
+  if (presetsEl) {
+    presetsEl.innerHTML = STYLE_PRESETS.map(p => {
+      const colors = Object.values(p.colors).slice(0, 4);
+      const preview = colors.length ? colors.map(c => `<span class="w-4 h-4 rounded-full" style="background:${c}"></span>`).join('') : '<span class="text-[10px] text-on-surface-variant">tema por defecto</span>';
+      return `<button onclick="applyPreset('${escJsAttr(p.name)}')" class="w-full flex items-center justify-between p-3 rounded-lg bg-surface-dim/50 hover:bg-surface-bright transition-all text-left">
+        <span class="text-sm font-medium">${escHtml(p.name)}</span>
+        <div class="flex gap-1">${preview}</div>
+      </button>`;
+    }).join('');
+  }
+}
+
+function applyStyleChange() {
+  const isDark = document.documentElement.classList.contains('dark');
+  const suffix = isDark ? '-dark' : '';
+  const root = document.documentElement.style;
+
+  STYLE_COLORS.forEach(c => {
+    const input = document.getElementById('style-c-' + c.key);
+    if (!input) return;
+    const val = input.value;
+    if (c.key === 'bg') root.setProperty('--c-bg', val);
+    else if (c.key === 'surface') root.setProperty('--c-surface', val);
+    else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
+    else root.setProperty('--c-' + c.key, val);
+  });
+
+  const fontBody = document.getElementById('style-font-body');
+  const fontHead = document.getElementById('style-font-headline');
+  const fontSize = document.getElementById('style-font-size');
+  const radius = document.getElementById('style-radius');
+  if (fontBody) root.setProperty('--font-body', fontBody.value);
+  if (fontHead) root.setProperty('--font-headline', fontHead.value);
+  if (fontSize) document.body.style.fontSize = fontSize.value;
+  if (radius) root.setProperty('--radius', radius.value);
+
+  // Update body font
+  if (fontBody) document.body.style.fontFamily = fontBody.value + ', system-ui, sans-serif';
+}
+
+function saveStyles() {
+  const isDark = document.documentElement.classList.contains('dark');
+  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+
+  STYLE_COLORS.forEach(c => {
+    const input = document.getElementById('style-c-' + c.key);
+    if (input) saved[c.key + (isDark ? '-dark' : '')] = input.value;
+  });
+
+  const fontBody = document.getElementById('style-font-body');
+  const fontHead = document.getElementById('style-font-headline');
+  const fontSize = document.getElementById('style-font-size');
+  const radius = document.getElementById('style-radius');
+  if (fontBody) saved.fontBody = fontBody.value;
+  if (fontHead) saved.fontHeadline = fontHead.value;
+  if (fontSize) saved.fontSize = fontSize.value;
+  if (radius) saved.radius = radius.value;
+
+  localStorage.setItem('niwa_styles', JSON.stringify(saved));
+  toast('Estilos guardados', 'success');
+}
+
+function resetStyles() {
+  localStorage.removeItem('niwa_styles');
+  document.documentElement.style.cssText = '';
+  document.body.style.fontSize = '';
+  document.body.style.fontFamily = '';
+  toast('Estilos restaurados a defaults', 'success');
+  loadStyles();
+}
+
+function applyPreset(name) {
+  const preset = STYLE_PRESETS.find(p => p.name === name);
+  if (!preset) return;
+  const isDark = document.documentElement.classList.contains('dark');
+
+  // Reset first
+  document.documentElement.style.cssText = '';
+
+  // Apply preset colors
+  STYLE_COLORS.forEach(c => {
+    const input = document.getElementById('style-c-' + c.key);
+    if (!input) return;
+    const darkKey = c.key + '-dark';
+    const val = isDark ? (preset.colors[darkKey] || c.darkDefault) : (preset.colors[c.key] || c.lightDefault);
+    input.value = val;
+    // Also update the text input next to it
+    const textInput = input.parentElement.querySelector('input[type="text"]');
+    if (textInput) textInput.value = val;
+  });
+
+  applyStyleChange();
+  toast('Preset: ' + name, 'info');
+}
+
+// Apply saved styles on page load
+function _applySavedStyles() {
+  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  if (!Object.keys(saved).length) return;
+  const isDark = document.documentElement.classList.contains('dark');
+  const root = document.documentElement.style;
+
+  STYLE_COLORS.forEach(c => {
+    const val = saved[c.key + (isDark ? '-dark' : '')];
+    if (!val) return;
+    if (c.key === 'bg') root.setProperty('--c-bg', val);
+    else if (c.key === 'surface') root.setProperty('--c-surface', val);
+    else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
+    else root.setProperty('--c-' + c.key, val);
+  });
+
+  if (saved.fontBody) { root.setProperty('--font-body', saved.fontBody); document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif'; }
+  if (saved.fontSize) document.body.style.fontSize = saved.fontSize;
+  if (saved.radius) root.setProperty('--radius', saved.radius);
+}
+_applySavedStyles();
 
 // ======================== NOTES ========================
 let _notesCache = [];
