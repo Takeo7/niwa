@@ -524,7 +524,7 @@ LLM_PROVIDERS = {
     "claude": {
         "label": "Claude (Anthropic claude CLI)",
         "binary": "claude",
-        "command": "claude -p --max-turns 50 --output-format text --dangerously-skip-permissions",
+        "command": "claude -p --max-turns 50 --output-format text",
         "auth_hint": "Run 'claude' once to authenticate before installing Niwa",
     },
     "llm": {

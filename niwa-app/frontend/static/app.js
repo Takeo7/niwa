@@ -1642,7 +1642,7 @@ async function loadConfig() {
               </div>
               <div>
                 <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-                <input id="int-llm-command-token" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text --dangerously-skip-permissions" value="${escHtml(ig.llm_command || '')}">
+                <input id="int-llm-command-token" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text" value="${escHtml(ig.llm_command || '')}">
               </div>
             </div>
             <button onclick="applySetupToken()" class="mt-2 px-3 py-1.5 bg-secondary text-on-secondary text-xs font-bold rounded-lg hover:opacity-90">Aplicar token</button>
@@ -1651,7 +1651,7 @@ async function loadConfig() {
           <div id="llm-auth-oauth" class="hidden">
             <div class="mb-2">
               <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-              <input id="int-llm-command-oauth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text --dangerously-skip-permissions" value="${escHtml(ig.llm_command || '')}">
+              <input id="int-llm-command-oauth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text" value="${escHtml(ig.llm_command || '')}">
             </div>
           </div>
         </div>
@@ -1839,7 +1839,7 @@ function updateLlmHelp() {
   helpEl.innerHTML = methodGuides[provider] || methodGuides[''] || '<p>Selecciona provider y método de auth.</p>';
 
   // Update command placeholder
-  const defaults = { claude: 'claude -p --max-turns 50 --output-format text --dangerously-skip-permissions', llm: 'llm -m gpt-4 --no-stream', gemini: 'gemini chat --model gemini-1.5-pro', custom: '' };
+  const defaults = { claude: 'claude -p --max-turns 50 --output-format text', llm: 'llm -m gpt-4 --no-stream', gemini: 'gemini chat --model gemini-1.5-pro', custom: '' };
   const cmdInputs = document.querySelectorAll('#int-llm-command, #int-llm-command-token, #int-llm-command-oauth');
   cmdInputs.forEach(el => { if (provider && defaults[provider] && !el.value) el.placeholder = defaults[provider]; });
 }

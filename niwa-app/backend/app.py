@@ -581,7 +581,7 @@ def fetch_agents_status():
 CRON_JOBS_PATH = _OPENCLAW_HOME / 'cron' / 'jobs.json'
 GATEWAY_LOG_PATH = BASE_DIR / 'data' / 'gateway.log'
 SANDBOX_CRON_LOG_PATH = BASE_DIR / 'data' / 'sandbox-cron.log'
-SETTINGS_JSON_PATH = BASE_DIR / 'data' / 'settings.json'
+SETTINGS_JSON_PATH = DB_PATH.parent / 'settings.json'
 _INSTANCE_HOME = Path(os.environ.get('YUME_BASE', '/instance'))
 BRIDGE_LOG_PATH = _INSTANCE_HOME / 'logs' / 'bridge.log'
 EXECUTOR_LOG_PATH = _INSTANCE_HOME / 'logs' / 'task-executor.log'
