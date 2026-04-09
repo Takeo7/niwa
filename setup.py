@@ -1667,11 +1667,12 @@ _CONFIG_KEYS = {
     "webhook_url": "NIWA_WEBHOOK_URL",
     "llm_provider": "NIWA_LLM_PROVIDER",
     "llm_command": "NIWA_LLM_COMMAND",
+    "llm_api_key": "NIWA_LLM_API_KEY",
     "executor_enabled": "NIWA_EXECUTOR_ENABLED",
     "executor_poll_seconds": "NIWA_EXECUTOR_POLL_SECONDS",
     "executor_timeout_seconds": "NIWA_EXECUTOR_TIMEOUT_SECONDS",
 }
-_SENSITIVE_CONFIG = {"telegram_bot_token"}
+_SENSITIVE_CONFIG = {"telegram_bot_token", "llm_api_key"}
 
 
 def cmd_config(args) -> None:

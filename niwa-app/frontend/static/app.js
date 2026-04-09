@@ -1597,7 +1597,7 @@ async function loadConfig() {
           <span class="text-sm font-medium">LLM Provider</span>
           <span class="text-[10px] text-on-surface-variant">(ejecuta tareas automáticamente)</span>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Provider</label>
             <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
@@ -1607,6 +1607,10 @@ async function loadConfig() {
               <option value="gemini" ${ig.llm_provider==='gemini'?'selected':''}>Gemini (Google)</option>
               <option value="custom" ${ig.llm_provider==='custom'?'selected':''}>Custom</option>
             </select>
+          </div>
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">API Key</label>
+            <input id="int-llm-apikey" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.llm_api_key_set ? ig.llm_api_key : 'sk-ant-...'}" value="">
           </div>
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
@@ -1715,6 +1719,8 @@ async function saveIntegration(group) {
   } else if (group === 'llm') {
     payload.llm_provider = document.getElementById('int-llm-provider').value;
     payload.llm_command = document.getElementById('int-llm-command').value.trim();
+    const apiKey = document.getElementById('int-llm-apikey').value.trim();
+    if (apiKey) payload.llm_api_key = apiKey;
   } else if (group === 'executor') {
     payload.executor_enabled = document.getElementById('int-executor-enabled').value;
     payload.executor_poll_seconds = document.getElementById('int-executor-poll').value;
@@ -1723,17 +1729,16 @@ async function saveIntegration(group) {
   if (!Object.keys(payload).length) { toast('Nada que guardar'); return; }
   const res = await api('settings/integrations', { method: 'POST', body: JSON.stringify(payload) });
   if (res && res.ok) {
-    toast('Configuración guardada');
-    loadConfig();
+    toast('Configuración guardada', 'success');
+    // Don't reload the form — user may want to continue editing or click Test
   } else {
-    toast('Error al guardar');
+    toast('Error al guardar', 'error');
   }
 }
 
 async function testTelegram() {
   const resultEl = document.getElementById('telegram-test-result');
-  if (resultEl) { resultEl.classList.remove('hidden'); resultEl.innerHTML = '<span class="text-on-surface-variant">Guardando y enviando test...</span>'; }
-  await saveIntegration('telegram');
+  if (resultEl) { resultEl.classList.remove('hidden'); resultEl.innerHTML = '<span class="text-on-surface-variant">Enviando test...</span>'; }
   const res = await api('settings/integrations/test-telegram', { method: 'POST', body: '{}' });
   if (res && res.ok) {
     toast('Mensaje de test enviado');
@@ -1752,10 +1757,10 @@ function updateLlmHelp() {
   if (!helpEl) return;
   const guides = {
     '': '<p>Selecciona un provider para ver las instrucciones de setup.</p><p>El LLM se usa para ejecutar tareas automáticamente (task executor).</p>',
-    'claude': '<p><b>1. Instalar:</b> <code>npm install -g @anthropic-ai/claude-code</code></p><p><b>2. Autenticar:</b> ejecutar <code>claude</code> en el terminal del servidor (interactivo, una sola vez)</p><p><b>3. Comando:</b> <code>claude -p --max-turns 50 --output-format text --dangerously-skip-permissions</code></p><p class="text-on-surface-variant mt-1">Requiere Node.js 18+ en el host. La autenticación se guarda en ~/.claude.json</p>',
-    'llm': '<p><b>1. Instalar:</b> <code>pip install llm</code></p><p><b>2. Configurar API key:</b> <code>llm keys set openai</code> (o instalar plugin para Anthropic/Gemini)</p><p><b>3. Comando:</b> <code>llm -m gpt-4 --no-stream</code></p><p class="text-on-surface-variant mt-1">Soporta múltiples backends vía plugins. Ver <code>llm plugins</code></p>',
-    'gemini': '<p><b>1. Instalar:</b> <code>pip install google-generativeai</code> + CLI</p><p><b>2. Autenticar:</b> <code>gemini auth</code></p><p><b>3. Comando:</b> <code>gemini chat --model gemini-1.5-pro</code></p>',
-    'custom': '<p>Escribe cualquier comando que acepte el prompt como último argumento.</p><p>Ejemplo: <code>python3 /path/to/my-agent.py</code></p><p>El executor ejecuta: <code>[tu comando] [prompt de la tarea]</code></p>',
+    'claude': '<p><b>1. API Key:</b> pega tu <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">Anthropic API key</a> en el campo de arriba</p><p><b>2. Instalar CLI:</b> <code>npm install -g @anthropic-ai/claude-code</code> (requiere Node.js 18+)</p><p><b>3. Comando:</b> se auto-rellena abajo, o personalízalo</p><p class="text-on-surface-variant mt-1">La API key se pasa automáticamente al executor como ANTHROPIC_API_KEY</p>',
+    'llm': '<p><b>1. API Key:</b> pega tu <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">OpenAI API key</a> (u otra) en el campo de arriba</p><p><b>2. Instalar:</b> <code>pip install llm</code></p><p><b>3. Comando:</b> se auto-rellena abajo</p><p class="text-on-surface-variant mt-1">La API key se pasa como OPENAI_API_KEY. Para otros backends, instala plugins (<code>llm install llm-claude-3</code>)</p>',
+    'gemini': '<p><b>1. API Key:</b> pega tu <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">Google API key</a> en el campo de arriba</p><p><b>2. Instalar:</b> <code>pip install google-generativeai</code></p><p><b>3. Comando:</b> se auto-rellena abajo</p><p class="text-on-surface-variant mt-1">La API key se pasa como GOOGLE_API_KEY</p>',
+    'custom': '<p>Escribe cualquier comando que acepte el prompt como último argumento.</p><p>Ejemplo: <code>python3 /path/to/my-agent.py</code></p><p>Si tu comando necesita API key, pégala arriba — se inyecta como ANTHROPIC/OPENAI/GOOGLE_API_KEY</p>',
   };
   const defaults = { claude: 'claude -p --max-turns 50 --output-format text --dangerously-skip-permissions', llm: 'llm -m gpt-4 --no-stream', gemini: 'gemini chat --model gemini-1.5-pro', custom: '' };
   helpEl.innerHTML = guides[provider] || guides[''];

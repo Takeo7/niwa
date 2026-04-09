@@ -70,6 +70,7 @@ INSTALL_DIR = _resolve_install_dir()
 ENV = _read_env_file(INSTALL_DIR / "secrets" / "mcp.env")
 DB_PATH = ENV.get("NIWA_DB_PATH") or str(INSTALL_DIR / "data" / "niwa.sqlite3")
 LLM_COMMAND = ENV.get("NIWA_LLM_COMMAND", "").strip()
+LLM_API_KEY = ENV.get("NIWA_LLM_API_KEY", "").strip()
 POLL_SECONDS = int(ENV.get("NIWA_EXECUTOR_POLL_SECONDS", "30"))
 TIMEOUT_SECONDS = int(ENV.get("NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
 MAX_OUTPUT_CHARS = int(ENV.get("NIWA_EXECUTOR_MAX_OUTPUT", "10000"))
@@ -254,9 +255,15 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
         return False, "NIWA_LLM_COMMAND is not configured"
     cmd = shlex.split(LLM_COMMAND) + [prompt]
     log.info("→ exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
+    # Build env with API key injected for all common providers
+    run_env = os.environ.copy()
+    if LLM_API_KEY:
+        run_env["ANTHROPIC_API_KEY"] = LLM_API_KEY
+        run_env["OPENAI_API_KEY"] = LLM_API_KEY
+        run_env["GOOGLE_API_KEY"] = LLM_API_KEY
     try:
         proc = subprocess.Popen(
-            cmd, cwd=str(cwd),
+            cmd, cwd=str(cwd), env=run_env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         _active_proc = proc
