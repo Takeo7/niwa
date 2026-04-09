@@ -823,6 +823,7 @@ _INTEGRATION_KEYS = {
     'llm_provider': 'NIWA_LLM_PROVIDER',
     'llm_command': 'NIWA_LLM_COMMAND',
     'llm_api_key': 'NIWA_LLM_API_KEY',
+    'llm_auth_method': 'NIWA_LLM_AUTH_METHOD',
     'executor_enabled': 'NIWA_EXECUTOR_ENABLED',
     'executor_poll_seconds': 'NIWA_EXECUTOR_POLL_SECONDS',
     'executor_timeout_seconds': 'NIWA_EXECUTOR_TIMEOUT_SECONDS',
@@ -900,6 +901,69 @@ def test_telegram():
         return {'ok': False, 'error': f'Telegram API error {e.code}: {body}' if body else f'HTTP {e.code}'}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
+
+def apply_setup_token(token: str) -> dict:
+    """Run 'claude setup-token <token>' to authenticate Claude Code non-interactively."""
+    import subprocess as _sp
+    if not token or not token.strip():
+        return {'ok': False, 'error': 'Token is empty'}
+    # Check if claude CLI is installed
+    claude_path = _sp.run(['which', 'claude'], capture_output=True, text=True).stdout.strip()
+    if not claude_path:
+        return {'ok': False, 'error': 'Claude CLI not installed. Install: npm install -g @anthropic-ai/claude-code'}
+    try:
+        result = _sp.run(
+            ['claude', 'setup-token', token.strip()],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return {'ok': True, 'message': 'Setup token applied — Claude is authenticated'}
+        return {'ok': False, 'error': result.stderr.strip() or result.stdout.strip() or f'Exit code {result.returncode}'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+def check_llm_status() -> dict:
+    """Check if the configured LLM CLI is installed and authenticated."""
+    import subprocess as _sp
+    settings = fetch_settings()
+    provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
+    auth_method = settings.get('int.llm_auth_method') or os.environ.get('NIWA_LLM_AUTH_METHOD', 'api_key')
+    api_key = settings.get('int.llm_api_key') or os.environ.get('NIWA_LLM_API_KEY', '')
+    command = settings.get('int.llm_command') or os.environ.get('NIWA_LLM_COMMAND', '')
+
+    result = {'provider': provider, 'auth_method': auth_method, 'command': command,
+              'api_key_set': bool(api_key), 'cli_installed': False, 'authenticated': False}
+
+    if not provider:
+        result['status'] = 'not_configured'
+        return result
+
+    # Check CLI installed
+    binary = {'claude': 'claude', 'llm': 'llm', 'gemini': 'gemini'}.get(provider, command.split()[0] if command else '')
+    if binary:
+        which = _sp.run(['which', binary], capture_output=True, text=True).stdout.strip()
+        result['cli_installed'] = bool(which)
+        result['cli_path'] = which
+
+    # Check auth
+    if auth_method == 'api_key' and api_key:
+        result['authenticated'] = True
+        result['status'] = 'ready' if result['cli_installed'] else 'cli_missing'
+    elif auth_method == 'setup_token':
+        # Claude with setup token — check if ~/.claude.json exists
+        claude_config = Path.home() / '.claude.json'
+        result['authenticated'] = claude_config.exists()
+        result['status'] = 'ready' if (result['cli_installed'] and result['authenticated']) else 'needs_auth'
+    elif auth_method == 'oauth':
+        claude_config = Path.home() / '.claude.json'
+        result['authenticated'] = claude_config.exists()
+        result['status'] = 'ready' if (result['cli_installed'] and result['authenticated']) else 'needs_oauth'
+    else:
+        result['status'] = 'unknown'
+
+    return result
 
 
 def search_tasks(q, limit=30):
@@ -1364,6 +1428,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(fetch_settings())
         if path == '/api/settings/integrations':
             return self._json(fetch_integrations())
+        if path == '/api/settings/llm-status':
+            return self._json(check_llm_status())
         if path == '/api/tasks/history':
             from history import fetch_task_history
             params = {
@@ -1486,6 +1552,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/settings/integrations':
             saved = save_integrations(payload)
             return self._json({'ok': True, 'saved': list(saved.keys())})
+        if path == '/api/settings/llm/setup-token':
+            token = payload.get('token', '')
+            return self._json(apply_setup_token(token))
         if path == '/api/settings/integrations/test-telegram':
             return self._json(test_telegram())
         if path == '/api/security/scan':

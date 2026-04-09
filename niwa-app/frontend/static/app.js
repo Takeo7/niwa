@@ -1597,7 +1597,7 @@ async function loadConfig() {
           <span class="text-sm font-medium">LLM Provider</span>
           <span class="text-[10px] text-on-surface-variant">(ejecuta tareas automáticamente)</span>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Provider</label>
             <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
@@ -1609,16 +1609,52 @@ async function loadConfig() {
             </select>
           </div>
           <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">API Key</label>
-            <input id="int-llm-apikey" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.llm_api_key_set ? ig.llm_api_key : 'sk-ant-...'}" value="">
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Autenticación</label>
+            <select id="int-llm-auth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
+              <option value="api_key" ${(ig.llm_auth_method||'api_key')==='api_key'?'selected':''}>API Key</option>
+              <option value="setup_token" ${ig.llm_auth_method==='setup_token'?'selected':''}>Setup Token (Claude Max/Team)</option>
+              <option value="oauth" ${ig.llm_auth_method==='oauth'?'selected':''}>OAuth (ya autenticado en terminal)</option>
+            </select>
           </div>
-          <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-            <input id="int-llm-command" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --output-format text" value="${escHtml(ig.llm_command || '')}">
+        </div>
+        <div id="llm-auth-fields" class="mb-3">
+          <div id="llm-auth-apikey" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">API Key</label>
+              <input id="int-llm-apikey" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.llm_api_key_set ? ig.llm_api_key : 'sk-ant-...'}" value="">
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
+              <input id="int-llm-command" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --output-format text" value="${escHtml(ig.llm_command || '')}">
+            </div>
+          </div>
+          <div id="llm-auth-token" class="hidden">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Setup Token</label>
+                <input id="int-llm-setup-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="Pega el token de claude.ai/settings">
+              </div>
+              <div>
+                <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
+                <input id="int-llm-command-token" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text --dangerously-skip-permissions" value="${escHtml(ig.llm_command || '')}">
+              </div>
+            </div>
+            <button onclick="applySetupToken()" class="mt-2 px-3 py-1.5 bg-secondary text-on-secondary text-xs font-bold rounded-lg hover:opacity-90">Aplicar token</button>
+            <span id="setup-token-result" class="ml-2 text-xs"></span>
+          </div>
+          <div id="llm-auth-oauth" class="hidden">
+            <div class="mb-2">
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
+              <input id="int-llm-command-oauth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text --dangerously-skip-permissions" value="${escHtml(ig.llm_command || '')}">
+            </div>
           </div>
         </div>
         <div id="llm-setup-help" class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"></div>
-        <button onclick="saveIntegration('llm')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+        <div id="llm-status" class="mb-3 text-xs"></div>
+        <div class="flex gap-2">
+          <button onclick="saveIntegration('llm')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+          <button onclick="checkLlmStatus()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Verificar</button>
+        </div>
       </div>
 
       <!-- Executor -->
@@ -1718,9 +1754,17 @@ async function saveIntegration(group) {
     payload.webhook_url = document.getElementById('int-webhook-url').value.trim();
   } else if (group === 'llm') {
     payload.llm_provider = document.getElementById('int-llm-provider').value;
-    payload.llm_command = document.getElementById('int-llm-command').value.trim();
-    const apiKey = document.getElementById('int-llm-apikey').value.trim();
-    if (apiKey) payload.llm_api_key = apiKey;
+    const authMethod = document.getElementById('int-llm-auth').value;
+    payload.llm_auth_method = authMethod;
+    // Read command from whichever panel is visible
+    const cmdEl = authMethod === 'setup_token' ? document.getElementById('int-llm-command-token') :
+                  authMethod === 'oauth' ? document.getElementById('int-llm-command-oauth') :
+                  document.getElementById('int-llm-command');
+    payload.llm_command = (cmdEl ? cmdEl.value.trim() : '');
+    if (authMethod === 'api_key') {
+      const apiKey = document.getElementById('int-llm-apikey').value.trim();
+      if (apiKey) payload.llm_api_key = apiKey;
+    }
   } else if (group === 'executor') {
     payload.executor_enabled = document.getElementById('int-executor-enabled').value;
     payload.executor_poll_seconds = document.getElementById('int-executor-poll').value;
@@ -1752,19 +1796,76 @@ async function testTelegram() {
 
 function updateLlmHelp() {
   const provider = document.getElementById('int-llm-provider').value;
-  const cmdInput = document.getElementById('int-llm-command');
+  const authMethod = document.getElementById('int-llm-auth').value;
   const helpEl = document.getElementById('llm-setup-help');
+
+  // Show/hide auth fields based on method
+  document.getElementById('llm-auth-apikey').classList.toggle('hidden', authMethod !== 'api_key');
+  document.getElementById('llm-auth-token').classList.toggle('hidden', authMethod !== 'setup_token');
+  document.getElementById('llm-auth-oauth').classList.toggle('hidden', authMethod !== 'oauth');
+
   if (!helpEl) return;
+
   const guides = {
-    '': '<p>Selecciona un provider para ver las instrucciones de setup.</p><p>El LLM se usa para ejecutar tareas automáticamente (task executor).</p>',
-    'claude': '<p><b>1. API Key:</b> pega tu <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">Anthropic API key</a> en el campo de arriba</p><p><b>2. Instalar CLI:</b> <code>npm install -g @anthropic-ai/claude-code</code> (requiere Node.js 18+)</p><p><b>3. Comando:</b> se auto-rellena abajo, o personalízalo</p><p class="text-on-surface-variant mt-1">La API key se pasa automáticamente al executor como ANTHROPIC_API_KEY</p>',
-    'llm': '<p><b>1. API Key:</b> pega tu <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">OpenAI API key</a> (u otra) en el campo de arriba</p><p><b>2. Instalar:</b> <code>pip install llm</code></p><p><b>3. Comando:</b> se auto-rellena abajo</p><p class="text-on-surface-variant mt-1">La API key se pasa como OPENAI_API_KEY. Para otros backends, instala plugins (<code>llm install llm-claude-3</code>)</p>',
-    'gemini': '<p><b>1. API Key:</b> pega tu <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">Google API key</a> en el campo de arriba</p><p><b>2. Instalar:</b> <code>pip install google-generativeai</code></p><p><b>3. Comando:</b> se auto-rellena abajo</p><p class="text-on-surface-variant mt-1">La API key se pasa como GOOGLE_API_KEY</p>',
-    'custom': '<p>Escribe cualquier comando que acepte el prompt como último argumento.</p><p>Ejemplo: <code>python3 /path/to/my-agent.py</code></p><p>Si tu comando necesita API key, pégala arriba — se inyecta como ANTHROPIC/OPENAI/GOOGLE_API_KEY</p>',
+    'api_key': {
+      '': '<p>Selecciona un provider para ver las instrucciones.</p>',
+      'claude': '<p><b>1.</b> Pega tu <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">Anthropic API key</a></p><p><b>2.</b> Instala el CLI en el servidor: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">La API key se inyecta automáticamente como ANTHROPIC_API_KEY</p>',
+      'llm': '<p><b>1.</b> Pega tu <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">OpenAI API key</a></p><p><b>2.</b> Instala: <code>pip install llm</code></p><p class="mt-1">Se inyecta como OPENAI_API_KEY</p>',
+      'gemini': '<p><b>1.</b> Pega tu <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">Google API key</a></p><p><b>2.</b> Instala: <code>pip install google-generativeai</code></p>',
+      'custom': '<p>Pega tu API key y escribe el comando. La key se inyecta como env var.</p>',
+    },
+    'setup_token': {
+      '': '<p>El setup token es para Claude Max, Team o Enterprise.</p>',
+      'claude': '<p><b>1.</b> Ve a <a href="https://claude.ai/settings" target="_blank" class="text-primary underline">claude.ai/settings</a> → "Claude Code" → Copiar token</p><p><b>2.</b> Pégalo arriba y pulsa "Aplicar token"</p><p><b>3.</b> Instala el CLI: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">El token autentica Claude Code sin necesidad de API key ni navegador.</p>',
+    },
+    'oauth': {
+      '': '<p>OAuth requiere ejecutar <code>claude</code> una vez en el terminal del servidor.</p>',
+      'claude': '<p><b>1.</b> Instala el CLI: <code>npm install -g @anthropic-ai/claude-code</code></p><p><b>2.</b> Ejecuta <code>claude</code> en el terminal — se abre un enlace de auth</p><p><b>3.</b> Una vez autenticado, la sesión se guarda en <code>~/.claude.json</code></p><p class="mt-1">Después ya funciona sin intervención. Usa "Verificar" para comprobar.</p>',
+    },
   };
+
+  const methodGuides = guides[authMethod] || guides['api_key'];
+  helpEl.innerHTML = methodGuides[provider] || methodGuides[''] || '<p>Selecciona provider y método de auth.</p>';
+
+  // Update command placeholder
   const defaults = { claude: 'claude -p --max-turns 50 --output-format text --dangerously-skip-permissions', llm: 'llm -m gpt-4 --no-stream', gemini: 'gemini chat --model gemini-1.5-pro', custom: '' };
-  helpEl.innerHTML = guides[provider] || guides[''];
-  if (provider && defaults[provider] && !cmdInput.value) cmdInput.placeholder = defaults[provider];
+  const cmdInputs = document.querySelectorAll('#int-llm-command, #int-llm-command-token, #int-llm-command-oauth');
+  cmdInputs.forEach(el => { if (provider && defaults[provider] && !el.value) el.placeholder = defaults[provider]; });
+}
+
+async function applySetupToken() {
+  const token = document.getElementById('int-llm-setup-token').value.trim();
+  const resultEl = document.getElementById('setup-token-result');
+  if (!token) { if (resultEl) resultEl.innerHTML = '<span class="text-error">Token vacío</span>'; return; }
+  if (resultEl) resultEl.innerHTML = '<span class="text-on-surface-variant">Aplicando...</span>';
+  const res = await api('settings/llm/setup-token', { method: 'POST', body: JSON.stringify({ token }) });
+  if (res && res.ok) {
+    if (resultEl) resultEl.innerHTML = '<span class="text-tertiary">' + escHtml(res.message || 'OK') + '</span>';
+    toast('Token aplicado', 'success');
+  } else {
+    const err = (res && res.error) || 'Error';
+    if (resultEl) resultEl.innerHTML = '<span class="text-error">' + escHtml(err) + '</span>';
+    toast(err, 'error');
+  }
+}
+
+async function checkLlmStatus() {
+  const el = document.getElementById('llm-status');
+  if (el) el.innerHTML = '<span class="text-on-surface-variant">Verificando...</span>';
+  const res = await api('settings/llm-status');
+  if (!res || !el) return;
+  const icons = { ready: '✓', cli_missing: '⚠', needs_auth: '⚠', needs_oauth: '⚠', not_configured: '—' };
+  const colors = { ready: 'text-tertiary', cli_missing: 'text-warning', needs_auth: 'text-warning', needs_oauth: 'text-warning', not_configured: 'text-on-surface-variant' };
+  const msgs = {
+    ready: 'Listo — CLI instalado y autenticado',
+    cli_missing: 'CLI no instalado en el servidor' + (res.provider === 'claude' ? ' (npm install -g @anthropic-ai/claude-code)' : ''),
+    needs_auth: 'CLI instalado pero no autenticado — aplica un setup token',
+    needs_oauth: 'CLI instalado pero no autenticado — ejecuta claude en el terminal',
+    not_configured: 'No configurado',
+  };
+  const s = res.status || 'not_configured';
+  el.innerHTML = '<span class="' + (colors[s]||'') + '">' + (icons[s]||'') + ' ' + escHtml(msgs[s] || s) + '</span>' +
+    (res.cli_path ? '<span class="text-[10px] text-on-surface-variant ml-2">(' + escHtml(res.cli_path) + ')</span>' : '');
 }
 
 async function toggleSetting(key) {
