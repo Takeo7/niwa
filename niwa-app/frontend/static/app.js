@@ -2640,18 +2640,33 @@ function loadStyles() {
 // Keys that use rgb triplet format (r,g,b) instead of hex
 const _RGB_KEYS = { card: '--c-card', sidebar: '--c-sidebar' };
 
+// All style overrides go through a single <style> element for maximum specificity
+let _styleOverrideState = {};
+
 function _applyColor(key, val) {
-  const root = document.documentElement.style;
-  if (key in _RGB_KEYS) {
-    const rgb = _hexToRgb(val);
-    root.setProperty(_RGB_KEYS[key], rgb);
-    if (key === 'sidebar') root.setProperty('--c-topbar', rgb);
-  } else if (key === 'bg') { root.setProperty('--c-bg', val);
-  } else if (key === 'surface') { root.setProperty('--c-surface', val);
-  } else if (key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val);
-  } else if (key === 'btn-primary') { root.setProperty('--c-primary', val); root.setProperty('--c-tint', val);
-  } else if (key === 'btn-text') { root.setProperty('--c-on-primary', val);
-  } else { root.setProperty('--c-' + key, val); }
+  _styleOverrideState[key] = val;
+  _flushStyleOverrides();
+}
+
+function _flushStyleOverrides() {
+  let sheet = document.getElementById('niwa-style-override');
+  if (!sheet) { sheet = document.createElement('style'); sheet.id = 'niwa-style-override'; document.head.appendChild(sheet); }
+
+  const s = _styleOverrideState;
+  let vars = '';
+  for (const [key, val] of Object.entries(s)) {
+    if (key in _RGB_KEYS) {
+      const rgb = _hexToRgb(val);
+      vars += _RGB_KEYS[key] + ':' + rgb + '!important;';
+      if (key === 'sidebar') vars += '--c-topbar:' + rgb + '!important;';
+    } else if (key === 'bg') { vars += '--c-bg:' + val + '!important;';
+    } else if (key === 'surface') { vars += '--c-surface:' + val + '!important;';
+    } else if (key === 'on-surface') { vars += '--c-on-surface:' + val + '!important;--c-on-bg:' + val + '!important;';
+    } else if (key === 'btn-primary') { vars += '--c-primary:' + val + '!important;--c-tint:' + val + '!important;';
+    } else if (key === 'btn-text') { vars += '--c-on-primary:' + val + '!important;';
+    } else { vars += '--c-' + key + ':' + val + '!important;'; }
+  }
+  sheet.textContent = vars ? 'html,html.dark{' + vars + '}' : '';
 }
 
 function onStyleColorChange(input) {
@@ -2667,9 +2682,33 @@ function applyStyleChange() {
   const fontHead = document.getElementById('style-font-headline');
   const fontSize = document.getElementById('style-font-size');
   const radius = document.getElementById('style-radius');
-  if (fontBody) document.body.style.fontFamily = fontBody.value + ', system-ui, sans-serif';
-  if (fontHead) document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = fontHead.value + ', system-ui, serif');
-  if (fontSize) document.body.style.fontSize = fontSize.value;
+
+  let sheet = document.getElementById('niwa-typo-override');
+  if (!sheet) { sheet = document.createElement('style'); sheet.id = 'niwa-typo-override'; document.head.appendChild(sheet); }
+
+  let css = '';
+  if (fontBody && fontBody.value !== 'Inter') {
+    css += `body,.font-body{font-family:${fontBody.value},system-ui,sans-serif!important}`;
+  }
+  if (fontHead && fontHead.value !== 'DM Serif Display') {
+    css += `.font-headline{font-family:${fontHead.value},system-ui,serif!important}`;
+  }
+  if (fontSize && fontSize.value !== '13px') {
+    css += `body{font-size:${fontSize.value}!important}`;
+    // Scale all relative text sizes
+    const scale = parseFloat(fontSize.value) / 13;
+    css += `.text-xs{font-size:${(12*scale).toFixed(1)}px!important}`;
+    css += `.text-sm{font-size:${(14*scale).toFixed(1)}px!important}`;
+    css += `.text-base{font-size:${(16*scale).toFixed(1)}px!important}`;
+    css += `.text-lg{font-size:${(18*scale).toFixed(1)}px!important}`;
+    css += `.text-xl{font-size:${(20*scale).toFixed(1)}px!important}`;
+    css += `.text-2xl{font-size:${(24*scale).toFixed(1)}px!important}`;
+    css += `.text-\\[10px\\]{font-size:${(10*scale).toFixed(1)}px!important}`;
+    css += `.text-\\[11px\\]{font-size:${(11*scale).toFixed(1)}px!important}`;
+    css += `.text-\\[13px\\]{font-size:${(13*scale).toFixed(1)}px!important}`;
+  }
+  sheet.textContent = css;
+
   if (radius) _applyRadius(radius.value);
 }
 
@@ -2790,29 +2829,32 @@ function _applySavedStyles() {
   const mode = isDark ? 'dark' : 'light';
   const root = document.documentElement.style;
 
-  // Clear previous custom props first (so defaults from CSS take over for unset ones)
-  STYLE_COLORS.forEach(c => {
-    if (c.key === 'btn-primary') { root.removeProperty('--c-primary'); root.removeProperty('--c-tint'); }
-    else if (c.key === 'btn-text') { root.removeProperty('--c-on-primary'); }
-    else if (c.key in _RGB_KEYS) { root.removeProperty(_RGB_KEYS[c.key]); }
-    else root.removeProperty('--c-' + c.key);
-    if (c.key === 'on-surface') root.removeProperty('--c-on-bg');
-    if (c.key === 'sidebar') root.removeProperty('--c-topbar');
-  });
-  root.removeProperty('--c-bg');
-
-  // Apply saved colors for current mode
+  // Reset all color overrides and rebuild from saved
+  _styleOverrideState = {};
   STYLE_COLORS.forEach(c => {
     const val = saved[mode + '.' + c.key];
-    if (!val) return;
-    _applyColor(c.key, val);
+    if (val) _styleOverrideState[c.key] = val;
   });
+  _flushStyleOverrides();
 
-  if (saved.fontBody) document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif';
-  if (saved.fontHeadline) {
-    document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = saved.fontHeadline + ', system-ui, serif');
+  // Apply fonts/radius via style sheet (works even before DOM selects exist)
+  let typoCss = '';
+  if (saved.fontBody && saved.fontBody !== 'Inter') typoCss += `body,.font-body{font-family:${saved.fontBody},system-ui,sans-serif!important}`;
+  if (saved.fontHeadline && saved.fontHeadline !== 'DM Serif Display') typoCss += `.font-headline{font-family:${saved.fontHeadline},system-ui,serif!important}`;
+  if (saved.fontSize && saved.fontSize !== '13px') {
+    const scale = parseFloat(saved.fontSize) / 13;
+    typoCss += `body{font-size:${saved.fontSize}!important}`;
+    typoCss += `.text-xs{font-size:${(12*scale).toFixed(1)}px!important}`;
+    typoCss += `.text-sm{font-size:${(14*scale).toFixed(1)}px!important}`;
+    typoCss += `.text-\\[10px\\]{font-size:${(10*scale).toFixed(1)}px!important}`;
+    typoCss += `.text-\\[11px\\]{font-size:${(11*scale).toFixed(1)}px!important}`;
+    typoCss += `.text-\\[13px\\]{font-size:${(13*scale).toFixed(1)}px!important}`;
   }
-  if (saved.fontSize) document.body.style.fontSize = saved.fontSize;
+  if (typoCss) {
+    let sheet = document.getElementById('niwa-typo-override');
+    if (!sheet) { sheet = document.createElement('style'); sheet.id = 'niwa-typo-override'; document.head.appendChild(sheet); }
+    sheet.textContent = typoCss;
+  }
   if (saved.radius) _applyRadius(saved.radius);
 }
 // Defer to after DOM is ready
