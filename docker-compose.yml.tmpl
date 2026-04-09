@@ -160,20 +160,19 @@ services:
 
   terminal:
     # Web terminal — provides a real host shell via the browser.
-    # Uses nsenter to break into the host PID namespace from the container.
+    # Uses chroot /host to access the host filesystem from inside the container.
     # Protected with the same Niwa username/password (basic auth).
     image: tsl0922/ttyd:latest
     container_name: ${INSTANCE_NAME}-terminal
     restart: unless-stopped
     command: >-
-      ttyd -p 7681
+      ttyd -W -p 7681
       -c ${NIWA_APP_USERNAME}:${NIWA_APP_PASSWORD}
-      -t fontSize=14 -t theme={"background":"#0a1122","foreground":"#dee5ff"}
-      nsenter --target 1 --mount --uts --ipc --net --pid -- bash -l
+      chroot /host bash -l
     pid: host
     privileged: true
     volumes:
-      - /:/host:ro
+      - /:/host
     ports:
       - "127.0.0.1:${NIWA_TERMINAL_PORT}:7681"
     mem_limit: 128m
