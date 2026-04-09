@@ -1703,10 +1703,8 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
 async function saveIntegration(group) {
   const payload = {};
   if (group === 'telegram') {
-    const token = document.getElementById('int-telegram-token').value.trim();
-    const chatId = document.getElementById('int-telegram-chatid').value.trim();
-    if (token) payload.telegram_bot_token = token;
-    if (chatId) payload.telegram_chat_id = chatId;
+    payload.telegram_bot_token = document.getElementById('int-telegram-token').value.trim();
+    payload.telegram_chat_id = document.getElementById('int-telegram-chatid').value.trim();
   } else if (group === 'webhook') {
     payload.webhook_url = document.getElementById('int-webhook-url').value.trim();
   } else if (group === 'llm') {
@@ -1728,6 +1726,8 @@ async function saveIntegration(group) {
 }
 
 async function testTelegram() {
+  // Save first so the test uses the latest form values
+  await saveIntegration('telegram');
   const res = await api('settings/integrations/test-telegram', { method: 'POST', body: '{}' });
   if (res && res.ok) toast('Mensaje de test enviado');
   else toast(res && res.error ? res.error : 'Error al enviar test');

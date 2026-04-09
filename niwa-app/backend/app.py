@@ -847,11 +847,19 @@ def fetch_integrations():
 def save_integrations(payload):
     """Save integration settings to the settings store."""
     saved = {}
+    _NUMERIC = {'executor_poll_seconds': (5, 3600), 'executor_timeout_seconds': (60, 7200)}
     for key in _INTEGRATION_KEYS:
-        if key in payload:
-            val = str(payload[key]).strip()
-            save_setting(f'int.{key}', val)
-            saved[key] = val
+        if key not in payload:
+            continue
+        val = str(payload[key]).strip()
+        if key in _NUMERIC:
+            try:
+                lo, hi = _NUMERIC[key]
+                val = str(max(lo, min(hi, int(val))))
+            except (ValueError, TypeError):
+                continue
+        save_setting(f'int.{key}', val)
+        saved[key] = val
     # Update notifier module's live values so changes take effect immediately
     try:
         if 'telegram_bot_token' in saved:
