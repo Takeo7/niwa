@@ -1543,13 +1543,19 @@ async function loadConfig() {
   const notifFormat = (S.settings && S.settings.notification_format) || 'text';
   const currentLang = I18N.locale;
   const ig = integrations || {};
+  if (ig.terminal_port) S._terminalPort = ig.terminal_port;
 
   // Integrations panel
   let integrationsHtml = `
     <div class="bg-surface-container-high rounded-lg p-6 mb-4">
-      <div class="flex items-center gap-3 mb-6">
-        <span class="material-symbols-outlined text-secondary">integration_instructions</span>
-        <h3 class="text-sm font-semibold uppercase tracking-wider">Integraciones</h3>
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-secondary">integration_instructions</span>
+          <h3 class="text-sm font-semibold uppercase tracking-wider">Integraciones</h3>
+        </div>
+        <button onclick="openTerminal()" class="flex items-center gap-2 px-3 py-1.5 bg-surface-bright hover:bg-surface-container-high text-on-surface-variant text-xs font-medium rounded-lg transition-all" title="Abrir terminal del servidor">
+          <span class="material-symbols-outlined text-sm">terminal</span> Terminal
+        </button>
       </div>
 
       <!-- Telegram -->
@@ -1814,7 +1820,7 @@ function updateLlmHelp() {
   const guides = {
     'api_key': {
       '': '<p>Selecciona un provider para ver las instrucciones.</p>',
-      'claude': '<p><b>1.</b> Ve a <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">console.anthropic.com/settings/keys</a> y crea una API key</p><p><b>2.</b> Pégala en el campo "API Key" de arriba</p><p><b>3.</b> Instala el CLI en el servidor: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">Funciona con todos los planes. La key se inyecta como ANTHROPIC_API_KEY. No necesitas navegador ni terminal extra.</p>',
+      'claude': '<p><b>1.</b> Ve a <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">console.anthropic.com/settings/keys</a> y crea una API key</p><p><b>2.</b> Pégala en el campo "API Key" de arriba</p><p><b>3.</b> Instala el CLI en el servidor (abre el <a href="#" onclick="openTerminal();return false" class="text-primary underline">Terminal</a>): <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">Funciona con todos los planes. La key se inyecta como ANTHROPIC_API_KEY.</p>',
       'llm': '<p><b>1.</b> Ve a <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">platform.openai.com/api-keys</a> y crea una key</p><p><b>2.</b> Pégala arriba</p><p><b>3.</b> Instala en el servidor: <code>pip install llm</code></p><p class="mt-1">Se inyecta como OPENAI_API_KEY. Para Anthropic/Gemini vía llm, instala plugins.</p>',
       'gemini': '<p><b>1.</b> Ve a <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">aistudio.google.com/apikey</a></p><p><b>2.</b> Pégala arriba</p><p><b>3.</b> Instala: <code>pip install google-generativeai</code></p>',
       'custom': '<p>Pega tu API key y escribe el comando. La key se inyecta como env var al subprocess.</p>',
@@ -1852,6 +1858,13 @@ async function applySetupToken() {
     if (resultEl) resultEl.innerHTML = '<span class="text-error">' + escHtml(err) + '</span>';
     toast(err, 'error');
   }
+}
+
+function openTerminal() {
+  // Open the web terminal (ttyd) in a new tab, same host different port
+  const port = S._terminalPort || '7681';
+  const url = window.location.protocol + '//' + window.location.hostname + ':' + port;
+  window.open(url, '_blank');
 }
 
 async function checkLlmStatus() {

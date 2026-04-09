@@ -500,6 +500,7 @@ class WizardConfig:
         self.gateway_sse_port: int = 18812
         self.caddy_port: int = 18811
         self.app_port: int = 8080
+        self.terminal_port: int = 7681
         self.tokens: dict[str, str] = {}
         self.username: str = "arturo"
         self.password: str = ""
@@ -721,6 +722,7 @@ def step_ports(cfg: WizardConfig) -> None:
         ("Gateway SSE legacy", "gateway_sse_port", 18812),
         ("Caddy reverse proxy", "caddy_port", 18811),
         ("Niwa app web UI", "app_port", 8080),
+        ("Web terminal", "terminal_port", 7681),
     ]
     for label, attr, default in defaults:
         in_use = not detect_port_free(default)
@@ -981,6 +983,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_GATEWAY_SSE_PORT": str(cfg.gateway_sse_port),
         "NIWA_CADDY_PORT": str(cfg.caddy_port),
         "NIWA_APP_PORT": str(cfg.app_port),
+        "NIWA_TERMINAL_PORT": str(cfg.terminal_port),
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],

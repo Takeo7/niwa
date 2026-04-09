@@ -843,6 +843,8 @@ def fetch_integrations():
             result[f'{key}_set'] = True
         else:
             result[key] = val
+    # Terminal port for the web shell button
+    result['terminal_port'] = os.environ.get('NIWA_TERMINAL_PORT', '7681')
     return result
 
 
