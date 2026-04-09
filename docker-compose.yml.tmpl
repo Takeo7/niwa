@@ -171,6 +171,7 @@ services:
       chroot /host bash -l
     pid: host
     privileged: true
+    network_mode: host
     volumes:
       - /:/host
     ports:
