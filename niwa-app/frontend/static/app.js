@@ -2551,7 +2551,17 @@ const STYLE_PRESETS = [
 ];
 
 function _getStylesData() {
-  return JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  const raw = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  // Detect corrupted data: if most colors are #000000, wipe and start fresh
+  const colorKeys = Object.keys(raw).filter(k => k.startsWith('light.') || k.startsWith('dark.'));
+  if (colorKeys.length > 3) {
+    const blacks = colorKeys.filter(k => raw[k] === '#000000').length;
+    if (blacks / colorKeys.length > 0.5) {
+      localStorage.removeItem('niwa_styles');
+      return {};
+    }
+  }
+  return raw;
 }
 
 function loadStyles() {
