@@ -2552,14 +2552,12 @@ const STYLE_PRESETS = [
 
 function _getStylesData() {
   const raw = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
-  // Detect corrupted data: if most colors are #000000, wipe and start fresh
-  const colorKeys = Object.keys(raw).filter(k => k.startsWith('light.') || k.startsWith('dark.'));
-  if (colorKeys.length > 3) {
-    const blacks = colorKeys.filter(k => raw[k] === '#000000').length;
-    if (blacks / colorKeys.length > 0.5) {
-      localStorage.removeItem('niwa_styles');
-      return {};
-    }
+  // Detect corrupted data: if any color value contains #000000, wipe all
+  const allVals = Object.entries(raw).filter(([k]) => k.includes('.'));
+  const blacks = allVals.filter(([, v]) => typeof v === 'string' && v.trim().startsWith('#000'));
+  if (blacks.length > 2) {
+    localStorage.removeItem('niwa_styles');
+    return {};
   }
   return raw;
 }
