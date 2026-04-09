@@ -12,6 +12,7 @@
 #   NIWA_GATEWAY_SSE_PORT            e.g. 18812 — host port for SSE gateway
 #   NIWA_CADDY_PORT                  e.g. 18811 — host port for Caddy reverse proxy
 #   NIWA_APP_PORT                    e.g. 8080  — host port for the Niwa web app
+#   NIWA_DATA_DIR                    e.g. $NIWA_HOME/data — shared between app container + host executor
 #   DOCKER_SOCKET_PATH               e.g. /var/run/docker.sock — detected by wizard
 #   PLATFORM_RESTART_WHITELIST       e.g. "my-app,arturo-cron" — comma-separated
 #                                    (read by platform-mcp at spawn time, not by compose)
@@ -125,7 +126,7 @@ services:
       NIWA_APP_HOST: 0.0.0.0
       NIWA_APP_PORT: "8080"
     volumes:
-      - ${NIWA_DB_PATH}:/data/niwa.sqlite3
+      - ${NIWA_DATA_DIR}:/data
     ports:
       - "127.0.0.1:${NIWA_APP_PORT}:8080"
     networks:

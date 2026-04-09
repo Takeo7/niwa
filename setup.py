@@ -977,6 +977,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_LOGS_DIR": str(cfg.niwa_home / "logs"),
         "NIWA_SECRETS_DIR": str(cfg.niwa_home / "secrets"),
         "NIWA_DB_PATH": str(cfg.db_path),
+        "NIWA_DATA_DIR": str(cfg.db_path.parent),
         "NIWA_FILESYSTEM_WORKSPACE": str(cfg.fs_workspace),
         "NIWA_FILESYSTEM_MEMORY": str(cfg.fs_memory),
         "NIWA_GATEWAY_STREAMING_PORT": str(cfg.gateway_streaming_port),
