@@ -2520,29 +2520,40 @@ const STYLE_COLORS = [
   { key: 'warning', label: 'Warning', light: '#f59e0b', dark: '#fbbf24' },
   { key: 'bg', label: 'Fondo', light: '#e8edf5', dark: '#060e20' },
   { key: 'surface', label: 'Surface', light: '#eef1f6', dark: '#0a1122' },
+  { key: 'card', label: 'Tarjetas', light: '#ffffff', dark: '#0f1930' },
+  { key: 'sidebar', label: 'Sidebar', light: '#ffffff', dark: '#091328' },
   { key: 'on-surface', label: 'Texto', light: '#1a2234', dark: '#dee5ff' },
 ];
+
+function _hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return r+','+g+','+b;
+}
+function _rgbToHex(rgb) {
+  const [r,g,b] = rgb.split(',').map(Number);
+  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+}
 
 const STYLE_PRESETS = [
   { name: 'Default', light: {}, dark: {} },
   { name: 'Ocean',
-    light: { primary:'#0077b6', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#edf6f9', surface:'#e0f2f7' },
-    dark:  { primary:'#48cae4', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#001219', surface:'#001824', 'on-surface':'#caf0f8' } },
+    light: { primary:'#0077b6', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#edf6f9', surface:'#e0f2f7', card:'#ffffff', sidebar:'#f0f9fc' },
+    dark:  { primary:'#48cae4', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#001219', surface:'#001824', card:'#002233', sidebar:'#001a2c', 'on-surface':'#caf0f8' } },
   { name: 'Forest',
-    light: { primary:'#2d6a4f', secondary:'#74c69d', tertiary:'#40916c', bg:'#f0f7f4', surface:'#e8f5ee' },
-    dark:  { primary:'#74c69d', secondary:'#95d5b2', tertiary:'#52b788', bg:'#0a1f14', surface:'#0d2818', 'on-surface':'#d8f3dc' } },
+    light: { primary:'#2d6a4f', secondary:'#74c69d', tertiary:'#40916c', bg:'#f0f7f4', surface:'#e8f5ee', card:'#ffffff', sidebar:'#eef7f2' },
+    dark:  { primary:'#74c69d', secondary:'#95d5b2', tertiary:'#52b788', bg:'#0a1f14', surface:'#0d2818', card:'#112e1e', sidebar:'#0a2416', 'on-surface':'#d8f3dc' } },
   { name: 'Sunset',
-    light: { primary:'#e76f51', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#fdf5ef', surface:'#fceee4' },
-    dark:  { primary:'#f4845f', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#1a0f09', surface:'#231510', 'on-surface':'#fde8d8' } },
+    light: { primary:'#e76f51', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#fdf5ef', surface:'#fceee4', card:'#ffffff', sidebar:'#fdf5ef' },
+    dark:  { primary:'#f4845f', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#1a0f09', surface:'#231510', card:'#2e1a12', sidebar:'#211008', 'on-surface':'#fde8d8' } },
   { name: 'Monochrome',
-    light: { primary:'#374151', secondary:'#6b7280', tertiary:'#4b5563', bg:'#f3f4f6', surface:'#e5e7eb' },
-    dark:  { primary:'#9ca3af', secondary:'#d1d5db', tertiary:'#6b7280', bg:'#0a0a0a', surface:'#141414', 'on-surface':'#e5e7eb' } },
+    light: { primary:'#374151', secondary:'#6b7280', tertiary:'#4b5563', bg:'#f3f4f6', surface:'#e5e7eb', card:'#ffffff', sidebar:'#f9fafb' },
+    dark:  { primary:'#9ca3af', secondary:'#d1d5db', tertiary:'#6b7280', bg:'#0a0a0a', surface:'#141414', card:'#1e1e1e', sidebar:'#111111', 'on-surface':'#e5e7eb' } },
   { name: 'Lavender',
-    light: { primary:'#7c3aed', secondary:'#a78bfa', tertiary:'#06b6d4', bg:'#f5f3ff', surface:'#ede9fe' },
-    dark:  { primary:'#a78bfa', secondary:'#c4b5fd', tertiary:'#22d3ee', bg:'#0f0720', surface:'#150a2e', 'on-surface':'#e0d6ff' } },
+    light: { primary:'#7c3aed', secondary:'#a78bfa', tertiary:'#06b6d4', bg:'#f5f3ff', surface:'#ede9fe', card:'#ffffff', sidebar:'#f5f3ff' },
+    dark:  { primary:'#a78bfa', secondary:'#c4b5fd', tertiary:'#22d3ee', bg:'#0f0720', surface:'#150a2e', card:'#1e0f3d', sidebar:'#120828', 'on-surface':'#e0d6ff' } },
   { name: 'Rose',
-    light: { primary:'#e11d48', secondary:'#f472b6', tertiary:'#10b981', bg:'#fff1f2', surface:'#ffe4e6' },
-    dark:  { primary:'#fb7185', secondary:'#f9a8d4', tertiary:'#34d399', bg:'#1a0a10', surface:'#2a0f18', 'on-surface':'#ffe4e6' } },
+    light: { primary:'#e11d48', secondary:'#f472b6', tertiary:'#10b981', bg:'#fff1f2', surface:'#ffe4e6', card:'#ffffff', sidebar:'#fff5f6' },
+    dark:  { primary:'#fb7185', secondary:'#f9a8d4', tertiary:'#34d399', bg:'#1a0a10', surface:'#2a0f18', card:'#351420', sidebar:'#220a12', 'on-surface':'#ffe4e6' } },
 ];
 
 function _getStylesData() {
@@ -2606,6 +2617,9 @@ function loadStyles() {
   }
 }
 
+// Keys that use rgb triplet format (r,g,b) instead of hex
+const _RGB_KEYS = { card: '--c-card', sidebar: '--c-sidebar' };
+
 function onStyleColorChange(input) {
   const key = input.dataset.styleKey;
   const val = input.value;
@@ -2613,10 +2627,18 @@ function onStyleColorChange(input) {
   if (textInput && textInput !== input) textInput.value = val;
   // Apply live
   const root = document.documentElement.style;
-  if (key === 'bg') root.setProperty('--c-bg', val);
-  else if (key === 'surface') root.setProperty('--c-surface', val);
-  else if (key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
-  else root.setProperty('--c-' + key, val);
+  if (key in _RGB_KEYS) {
+    root.setProperty(_RGB_KEYS[key], _hexToRgb(val));
+  } else if (key === 'bg') {
+    root.setProperty('--c-bg', val);
+  } else if (key === 'surface') {
+    root.setProperty('--c-surface', val);
+  } else if (key === 'on-surface') {
+    root.setProperty('--c-on-surface', val);
+    root.setProperty('--c-on-bg', val);
+  } else {
+    root.setProperty('--c-' + key, val);
+  }
 }
 
 function applyStyleChange() {
@@ -2625,8 +2647,19 @@ function applyStyleChange() {
   const fontSize = document.getElementById('style-font-size');
   const radius = document.getElementById('style-radius');
   if (fontBody) document.body.style.fontFamily = fontBody.value + ', system-ui, sans-serif';
+  if (fontHead) {
+    // Apply headline font to all .font-headline elements
+    document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = fontHead.value + ', system-ui, serif');
+  }
   if (fontSize) document.body.style.fontSize = fontSize.value;
-  if (radius) document.documentElement.style.setProperty('--radius', radius.value);
+  if (radius) {
+    const r = radius.value;
+    // Apply to cards, inputs, buttons
+    document.documentElement.style.setProperty('--radius', r);
+    document.querySelectorAll('.rounded-2xl').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
+    document.querySelectorAll('.rounded-xl').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
+    document.querySelectorAll('.rounded-lg').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
+  }
 }
 
 function saveStyles() {
@@ -2692,7 +2725,8 @@ function _applySavedStyles() {
 
   // Clear previous custom props first (so defaults from CSS take over for unset ones)
   STYLE_COLORS.forEach(c => {
-    root.removeProperty('--c-' + c.key);
+    if (c.key in _RGB_KEYS) root.removeProperty(_RGB_KEYS[c.key]);
+    else root.removeProperty('--c-' + c.key);
     if (c.key === 'on-surface') root.removeProperty('--c-on-bg');
   });
   root.removeProperty('--c-bg');
@@ -2701,17 +2735,26 @@ function _applySavedStyles() {
   STYLE_COLORS.forEach(c => {
     const val = saved[mode + '.' + c.key];
     if (!val) return;
-    if (c.key === 'bg') root.setProperty('--c-bg', val);
+    if (c.key in _RGB_KEYS) root.setProperty(_RGB_KEYS[c.key], _hexToRgb(val));
+    else if (c.key === 'bg') root.setProperty('--c-bg', val);
     else if (c.key === 'surface') root.setProperty('--c-surface', val);
     else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
     else root.setProperty('--c-' + c.key, val);
   });
 
   if (saved.fontBody) document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif';
+  if (saved.fontHeadline) {
+    document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = saved.fontHeadline + ', system-ui, serif');
+  }
   if (saved.fontSize) document.body.style.fontSize = saved.fontSize;
   if (saved.radius) root.setProperty('--radius', saved.radius);
 }
-_applySavedStyles();
+// Defer to after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _applySavedStyles);
+} else {
+  _applySavedStyles();
+}
 
 // ======================== NOTES ========================
 let _notesCache = [];
