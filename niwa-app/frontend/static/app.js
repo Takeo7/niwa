@@ -537,7 +537,7 @@ function initKanbanDrag() {
       onEnd: async function(evt) {
         const taskId = evt.item.dataset.taskId;
         const targetCol = evt.to.dataset.col;
-        const statusMap = { todo: 'pendiente', doing: 'en_progreso', blocked: 'bloqueada', done: 'hecha' };
+        const statusMap = { todo: 'pendiente', doing: 'en_progreso', review: 'revision', blocked: 'bloqueada', done: 'hecha' };
         const newStatus = statusMap[targetCol] || 'pendiente';
         try {
           const res = await api('tasks/' + taskId, { method: 'PATCH', body: JSON.stringify({ status: newStatus }) });
@@ -657,13 +657,6 @@ function renderKanbanCard(t, isDone) {
   r += renderCardFooter(t, prio);
   r += '</div>';
   return r;
-}
-
-async function inlineAddTask(title, status) {
-  if (!title.trim()) return;
-  await api('tasks', { method: 'POST', body: JSON.stringify({ title: title.trim(), status }) });
-  toast(_t('task.created'));
-  loadKanban();
 }
 
 function toggleKanbanCol(colKey) {
@@ -2178,18 +2171,6 @@ async function removeTaskAttachment(filename) {
   renderTaskAttachments();
 }
 
-// ======================== QUICK TASK ========================
-async function quickAddTask() {
-  const input = document.getElementById('quick-task-input');
-  const title = input.value.trim();
-  if (!title) return;
-  const res = await api('tasks', { method: 'POST', body: JSON.stringify({ title, status: 'pendiente' }) });
-  if (!res || res.error) { toast(_t('task.create_failed') || 'Error al crear tarea', 'error'); return; }
-  input.value = '';
-  toast(_t('task.created'));
-  loadViewData(S.view);
-}
-
 // ======================== SEARCH ========================
 function openSearchOverlay() {
   document.getElementById('search-overlay').classList.remove('hidden');
@@ -2391,10 +2372,10 @@ function renderNotesList(notes) {
     var preview = (n.content || '').substring(0, 150).replace(/</g, '&lt;');
     if ((n.content || '').length > 150) preview += '…';
     var updated = n.updated_at ? new Date(n.updated_at).toLocaleDateString() : '';
-    var r = '<div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + n.id + '\')">';
+    var r = '<div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + escJsAttr(n.id) + '\')">';
     r += '<div class="flex justify-between items-start mb-2">';
     r += '<h4 class="font-bold text-sm text-on-surface truncate flex-1">' + escHtml(n.title || 'Sin título') + '</h4>';
-    r += '<button onclick="event.stopPropagation();deleteNoteConfirm(\'' + n.id + '\')" class="opacity-0 group-hover:opacity-100 p-1 hover:bg-error-container rounded-lg transition-all" title="Eliminar">';
+    r += '<button onclick="event.stopPropagation();deleteNoteConfirm(\'' + escJsAttr(n.id) + '\')" class="opacity-0 group-hover:opacity-100 p-1 hover:bg-error-container rounded-lg transition-all" title="Eliminar">';
     r += '<span class="material-symbols-outlined text-error text-sm">delete</span></button></div>';
     if (n.project_name) {
       r += '<div class="flex items-center gap-1 mb-2"><span class="material-symbols-outlined text-primary text-xs">folder</span>';
@@ -2648,7 +2629,7 @@ async function loadMyDay() {
   }
   if (emptyEl) emptyEl.classList.add('hidden');
   if (tasksEl) tasksEl.innerHTML = data.tasks.map(t => `
-    <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-bright/50 cursor-pointer" onclick="openTaskById('${t.id}')">
+    <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-bright/50 cursor-pointer" onclick="openTaskById('${escJsAttr(t.id)}')">
       <span class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-${t.status === 'hecha' ? 'tertiary' : t.status === 'en_progreso' ? 'primary' : 'outline'})"></span>
       <span class="text-xs text-on-surface truncate flex-1">${escHtml(t.title)}</span>
       <span class="text-[10px] text-on-surface-variant shrink-0">${t.priority}</span>

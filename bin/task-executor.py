@@ -249,24 +249,27 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
 def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     """Run the configured LLM command with the prompt as the LAST argument.
     Returns (success, combined_output)."""
+    global _active_proc
     if not LLM_COMMAND:
         return False, "NIWA_LLM_COMMAND is not configured"
     cmd = shlex.split(LLM_COMMAND) + [prompt]
     log.info("→ exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_SECONDS,
+        proc = subprocess.Popen(
+            cmd, cwd=str(cwd),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
-        if result.returncode == 0:
+        _active_proc = proc
+        try:
+            stdout, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return False, f"[timeout after {TIMEOUT_SECONDS}s]"
+        output = (stdout or "") + ("\n" + stderr if stderr else "")
+        if proc.returncode == 0:
             return True, output
-        return False, f"[exit {result.returncode}]\n{output}"
-    except subprocess.TimeoutExpired:
-        return False, f"[timeout after {TIMEOUT_SECONDS}s]"
+        return False, f"[exit {proc.returncode}]\n{output}"
     except FileNotFoundError as e:
         return False, f"[command not found: {e}]"
     except Exception as e:

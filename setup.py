@@ -891,7 +891,7 @@ def _check_cloudflared_authenticated() -> Optional[str]:
 
 
 def step_clients(cfg: WizardConfig) -> None:
-    header("Step 11 — Auto-register MCP clients")
+    header("Step 12 — Auto-register MCP clients")
     if cfg.detected["claude"]:
         # Verify claude is configured
         claude_problem = _check_claude_authenticated()
@@ -915,7 +915,7 @@ def step_clients(cfg: WizardConfig) -> None:
 
 
 def step_summary(cfg: WizardConfig) -> bool:
-    header("Step 12 — Summary")
+    header("Step 13 — Summary")
     print(f"  Instance name:      {cfg.instance_name}")
     print(f"  Install location:   {cfg.niwa_home}")
     print(f"  Database:           {cfg.db_mode} at {cfg.db_path}")
@@ -954,7 +954,7 @@ def step_summary(cfg: WizardConfig) -> bool:
 # ────────────────────────── execution ──────────────────────────
 def execute_install(cfg: WizardConfig) -> None:
     import sqlite3
-    header("Step 13 — Building install")
+    header("Step 14 — Building install")
     cfg.niwa_home.mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "config").mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "data").mkdir(parents=True, exist_ok=True)
@@ -1040,7 +1040,6 @@ def execute_install(cfg: WizardConfig) -> None:
     if cfg.db_mode == "fresh":
         info("Bootstrapping fresh database with Niwa schema...")
         schema_sql = (REPO_ROOT / "niwa-app" / "db" / "schema.sql").read_text()
-        import sqlite3
         with sqlite3.connect(str(cfg.db_path)) as conn:
             conn.executescript(schema_sql)
             # Seed default kanban columns and a default project
@@ -1067,7 +1066,7 @@ def execute_install(cfg: WizardConfig) -> None:
         ok(f"Fresh DB created at {cfg.db_path}")
 
     # Build images
-    header("Step 13 — Building Docker images")
+    header("Step 14b — Building Docker images")
     images = [
         ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"{cfg.instance_name}-tasks-mcp:latest"),
         ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"{cfg.instance_name}-notes-mcp:latest"),
@@ -1092,7 +1091,7 @@ def execute_install(cfg: WizardConfig) -> None:
     ok("Pulled mcp/filesystem")
 
     # docker compose up
-    header("Step 14 — Starting the stack")
+    header("Step 14c — Starting the stack")
     result = subprocess.run(
         ["docker", "compose", "-f", str(cfg.niwa_home / "docker-compose.yml"), "up", "-d"],
         capture_output=True, text=True,

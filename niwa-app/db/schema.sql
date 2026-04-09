@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS task_metrics (
     duration_seconds REAL,
     error_message TEXT,
     hit_limit INTEGER NOT NULL DEFAULT 0,
+    turns_used INTEGER,
+    max_turns INTEGER,
     timestamp TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_metrics_task_id ON task_metrics(task_id);
