@@ -173,6 +173,7 @@ def db_conn():
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute("PRAGMA foreign_keys=ON")
     except sqlite3.OperationalError:
         pass
     return conn
@@ -918,44 +919,42 @@ def apply_setup_token(token: str) -> dict:
 
 
 def check_llm_status() -> dict:
-    """Check if the configured LLM CLI is installed and authenticated."""
-    import subprocess as _sp
+    """Check configured LLM status based on settings (not container CLI checks).
+
+    The executor runs on the HOST, not in the app container. Checking `which claude`
+    from inside Docker always returns false. Instead, we infer readiness from config:
+    - provider + command configured → CLI assumed installed on host
+    - api_key or setup_token set → authenticated
+    """
     settings = fetch_settings()
     provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
     auth_method = settings.get('int.llm_auth_method') or os.environ.get('NIWA_LLM_AUTH_METHOD', 'api_key')
     api_key = settings.get('int.llm_api_key') or os.environ.get('NIWA_LLM_API_KEY', '')
+    setup_token = settings.get('int.llm_setup_token') or ''
     command = settings.get('int.llm_command') or os.environ.get('NIWA_LLM_COMMAND', '')
 
     result = {'provider': provider, 'auth_method': auth_method, 'command': command,
-              'api_key_set': bool(api_key), 'cli_installed': False, 'authenticated': False}
+              'api_key_set': bool(api_key), 'setup_token_set': bool(setup_token),
+              'cli_installed': bool(command), 'authenticated': False}
 
     if not provider:
         result['status'] = 'not_configured'
         return result
 
-    # Check CLI installed
-    binary = {'claude': 'claude', 'llm': 'llm', 'gemini': 'gemini'}.get(provider, command.split()[0] if command else '')
-    if binary:
-        which = _sp.run(['which', binary], capture_output=True, text=True).stdout.strip()
-        result['cli_installed'] = bool(which)
-        result['cli_path'] = which
+    if not command:
+        result['status'] = 'no_command'
+        return result
 
-    # Check auth
+    # Determine auth status based on method
     if auth_method == 'api_key' and api_key:
         result['authenticated'] = True
-        result['status'] = 'ready' if result['cli_installed'] else 'cli_missing'
-    elif auth_method == 'setup_token':
-        # Claude with setup token — check if ~/.claude.json exists
-        claude_config = Path.home() / '.claude.json'
-        result['authenticated'] = claude_config.exists()
-        result['status'] = 'ready' if (result['cli_installed'] and result['authenticated']) else 'needs_auth'
+    elif auth_method == 'setup_token' and setup_token:
+        result['authenticated'] = True
     elif auth_method == 'oauth':
-        claude_config = Path.home() / '.claude.json'
-        result['authenticated'] = claude_config.exists()
-        result['status'] = 'ready' if (result['cli_installed'] and result['authenticated']) else 'needs_oauth'
-    else:
-        result['status'] = 'unknown'
+        # Can't verify OAuth from container — assume configured if command is set
+        result['authenticated'] = bool(command)
 
+    result['status'] = 'ready' if result['authenticated'] else ('needs_auth' if auth_method != 'oauth' else 'needs_oauth')
     return result
 
 

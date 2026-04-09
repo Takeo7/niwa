@@ -2,6 +2,8 @@
 
 /* Cards */
 .niwa-card{background-color:var(--c-card)!important}
+.bg-primary,button.bg-primary,.bg-gradient-to-br.from-primary{background-color:var(--c-btn-primary,var(--c-primary))!important}
+.text-on-primary{color:var(--c-btn-text,var(--c-on-primary))!important}
 .bg-\[var\(--c-input-bg\)\],select,input[type="text"],input[type="password"],input[type="number"],input[type="date"],textarea{background-color:var(--c-input-bg)!important}
 .glass-card{background:color-mix(in srgb,var(--c-card) 92%,transparent);backdrop-filter:blur(16px);box-shadow:0 2px 12px rgba(0,0,0,0.04),0 0 0 1px rgba(0,0,0,0.02);border-radius:1.25rem}
 

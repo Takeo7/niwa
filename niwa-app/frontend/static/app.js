@@ -2662,8 +2662,8 @@ function _flushStyleOverrides() {
     } else if (key === 'on-surface') { vars += '--c-on-surface:' + val + '!important;--c-on-bg:' + val + '!important;';
     } else if (key === 'on-surface-var') { vars += '--c-on-surface-var:' + val + '!important;--c-nav-text:' + val + '!important;';
     } else if (key === 'input-bg') { vars += '--c-input-bg:' + val + '!important;';
-    } else if (key === 'btn-primary') { vars += '--c-primary:' + val + '!important;--c-tint:' + val + '!important;';
-    } else if (key === 'btn-text') { vars += '--c-on-primary:' + val + '!important;';
+    } else if (key === 'btn-primary') { vars += '--c-btn-primary:' + val + '!important;';
+    } else if (key === 'btn-text') { vars += '--c-btn-text:' + val + '!important;';
     } else { vars += '--c-' + key + ':' + val + '!important;'; }
   }
   sheet.textContent = vars ? 'html,html.dark{' + vars + '}' : '';

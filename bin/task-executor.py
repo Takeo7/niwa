@@ -122,6 +122,7 @@ def _conn() -> sqlite3.Connection:
     try:
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA busy_timeout=10000")
+        c.execute("PRAGMA foreign_keys=ON")
     except sqlite3.OperationalError:
         pass
     return c
