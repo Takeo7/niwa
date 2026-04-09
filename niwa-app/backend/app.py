@@ -878,10 +878,27 @@ def test_telegram():
     settings = fetch_settings()
     token = settings.get('int.telegram_bot_token') or os.environ.get('NIWA_TELEGRAM_BOT_TOKEN', '')
     chat_id = settings.get('int.telegram_chat_id') or os.environ.get('NIWA_TELEGRAM_CHAT_ID', '')
-    if not token or not chat_id:
-        return {'ok': False, 'error': 'Telegram not configured (missing token or chat_id)'}
-    ok = notifier.send_telegram('Niwa test message', chat_id=chat_id, bot_token=token)
-    return {'ok': ok, 'error': '' if ok else 'Failed to send — check token and chat_id'}
+    if not token:
+        return {'ok': False, 'error': 'Bot token is empty — enter it above and save first'}
+    if not chat_id:
+        return {'ok': False, 'error': 'Chat ID is empty — enter it above and save first'}
+    # Try sending with detailed error capture
+    import urllib.request, urllib.error
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = json.dumps({"chat_id": chat_id, "text": "Niwa test message", "parse_mode": "Markdown"}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return {'ok': True}
+    except urllib.error.HTTPError as e:
+        body = ''
+        try:
+            body = json.loads(e.read().decode()).get('description', '')
+        except Exception:
+            pass
+        return {'ok': False, 'error': f'Telegram API error {e.code}: {body}' if body else f'HTTP {e.code}'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
 
 
 def search_tasks(q, limit=30):

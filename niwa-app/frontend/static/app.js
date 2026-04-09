@@ -1559,20 +1559,22 @@ async function loadConfig() {
           <span class="text-sm font-medium">Telegram</span>
           ${ig.telegram_bot_token_set ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary font-bold">Configurado</span>' : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-outline-variant/20 text-on-surface-variant font-bold">No configurado</span>'}
         </div>
+        ${!ig.telegram_bot_token_set ? '<div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"><p><b>Setup:</b> 1. Abre @BotFather en Telegram y crea un bot con /newbot</p><p>2. Copia el token que te da (ej: 123456:ABC-DEF...)</p><p>3. Abre @userinfobot para obtener tu Chat ID numérico</p><p>4. Pega ambos aquí y dale a Guardar, luego Test</p></div>' : ''}
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bot Token</label>
-            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? ig.telegram_bot_token : 'No configurado'}" value="">
+            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? ig.telegram_bot_token : '123456:ABC-DEF1234...'}" value="">
           </div>
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat ID</label>
-            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_chat_id || 'No configurado'}" value="">
+            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_chat_id || '123456789'}" value="">
           </div>
         </div>
         <div class="flex gap-2">
           <button onclick="saveIntegration('telegram')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
           <button onclick="testTelegram()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Test</button>
         </div>
+        <div id="telegram-test-result" class="mt-2 text-xs hidden"></div>
       </div>
 
       <!-- Webhook -->
@@ -1593,11 +1595,12 @@ async function loadConfig() {
         <div class="flex items-center gap-2 mb-3">
           <span class="material-symbols-outlined text-tertiary text-base">smart_toy</span>
           <span class="text-sm font-medium">LLM Provider</span>
+          <span class="text-[10px] text-on-surface-variant">(ejecuta tareas automáticamente)</span>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Provider</label>
-            <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface">
+            <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
               <option value="" ${!ig.llm_provider?'selected':''}>No configurado</option>
               <option value="claude" ${ig.llm_provider==='claude'?'selected':''}>Claude (Anthropic)</option>
               <option value="llm" ${ig.llm_provider==='llm'?'selected':''}>llm CLI (Simon Willison)</option>
@@ -1610,6 +1613,7 @@ async function loadConfig() {
             <input id="int-llm-command" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --output-format text" value="${escHtml(ig.llm_command || '')}">
           </div>
         </div>
+        <div id="llm-setup-help" class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"></div>
         <button onclick="saveIntegration('llm')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
       </div>
 
@@ -1618,6 +1622,11 @@ async function loadConfig() {
         <div class="flex items-center gap-2 mb-3">
           <span class="material-symbols-outlined text-primary text-base">play_circle</span>
           <span class="text-sm font-medium">Task Executor</span>
+        </div>
+        <div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant">
+          <p>El executor recoge tareas en estado <b>pendiente</b> y las ejecuta con el LLM configurado arriba.</p>
+          <p>Corre como daemon en el host (no en Docker). Poll = cada cuántos segundos busca tareas. Timeout = máximo por tarea.</p>
+          <p>Cambios aquí se guardan en la DB. Para que el executor los lea, reinícialo: <code>niwa restart</code></p>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
@@ -1668,6 +1677,8 @@ async function loadConfig() {
       </div>
       <pre class="bg-black/20 p-4 rounded-lg text-[11px] font-mono text-on-surface/80 overflow-x-auto max-h-64 overflow-y-auto">${escHtml(JSON.stringify(val.data, null, 2))}</pre>
     </div>`).join('') : '');
+  // Initialize contextual help
+  updateLlmHelp();
 }
 
 function _renderSettingToggle(label, desc, isOn, onclickExpr, opts) {
@@ -1720,11 +1731,35 @@ async function saveIntegration(group) {
 }
 
 async function testTelegram() {
-  // Save first so the test uses the latest form values
+  const resultEl = document.getElementById('telegram-test-result');
+  if (resultEl) { resultEl.classList.remove('hidden'); resultEl.innerHTML = '<span class="text-on-surface-variant">Guardando y enviando test...</span>'; }
   await saveIntegration('telegram');
   const res = await api('settings/integrations/test-telegram', { method: 'POST', body: '{}' });
-  if (res && res.ok) toast('Mensaje de test enviado');
-  else toast(res && res.error ? res.error : 'Error al enviar test');
+  if (res && res.ok) {
+    toast('Mensaje de test enviado');
+    if (resultEl) resultEl.innerHTML = '<span class="text-tertiary">OK — revisa tu Telegram</span>';
+  } else {
+    const err = (res && res.error) || 'Error desconocido';
+    toast(err, 'error');
+    if (resultEl) resultEl.innerHTML = '<span class="text-error">' + escHtml(err) + '</span>';
+  }
+}
+
+function updateLlmHelp() {
+  const provider = document.getElementById('int-llm-provider').value;
+  const cmdInput = document.getElementById('int-llm-command');
+  const helpEl = document.getElementById('llm-setup-help');
+  if (!helpEl) return;
+  const guides = {
+    '': '<p>Selecciona un provider para ver las instrucciones de setup.</p><p>El LLM se usa para ejecutar tareas automáticamente (task executor).</p>',
+    'claude': '<p><b>1. Instalar:</b> <code>npm install -g @anthropic-ai/claude-code</code></p><p><b>2. Autenticar:</b> ejecutar <code>claude</code> en el terminal del servidor (interactivo, una sola vez)</p><p><b>3. Comando:</b> <code>claude -p --max-turns 50 --output-format text --dangerously-skip-permissions</code></p><p class="text-on-surface-variant mt-1">Requiere Node.js 18+ en el host. La autenticación se guarda en ~/.claude.json</p>',
+    'llm': '<p><b>1. Instalar:</b> <code>pip install llm</code></p><p><b>2. Configurar API key:</b> <code>llm keys set openai</code> (o instalar plugin para Anthropic/Gemini)</p><p><b>3. Comando:</b> <code>llm -m gpt-4 --no-stream</code></p><p class="text-on-surface-variant mt-1">Soporta múltiples backends vía plugins. Ver <code>llm plugins</code></p>',
+    'gemini': '<p><b>1. Instalar:</b> <code>pip install google-generativeai</code> + CLI</p><p><b>2. Autenticar:</b> <code>gemini auth</code></p><p><b>3. Comando:</b> <code>gemini chat --model gemini-1.5-pro</code></p>',
+    'custom': '<p>Escribe cualquier comando que acepte el prompt como último argumento.</p><p>Ejemplo: <code>python3 /path/to/my-agent.py</code></p><p>El executor ejecuta: <code>[tu comando] [prompt de la tarea]</code></p>',
+  };
+  const defaults = { claude: 'claude -p --max-turns 50 --output-format text --dangerously-skip-permissions', llm: 'llm -m gpt-4 --no-stream', gemini: 'gemini chat --model gemini-1.5-pro', custom: '' };
+  helpEl.innerHTML = guides[provider] || guides[''];
+  if (provider && defaults[provider] && !cmdInput.value) cmdInput.placeholder = defaults[provider];
 }
 
 async function toggleSetting(key) {
@@ -2276,10 +2311,21 @@ document.addEventListener('keydown', e => {
 
 // ======================== POLLING ========================
 let _pollInProgress = false;
+function _shouldSkipPoll() {
+  // Don't reload while user is editing forms — it wipes input values
+  if (S.view === 'system' && S.systemTab === 'config') return true;
+  // Don't poll while any modal is open
+  const modals = ['task-modal', 'note-editor-modal', 'routine-editor-modal', 'search-overlay'];
+  for (const id of modals) {
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden')) return true;
+  }
+  return false;
+}
 function startPolling() {
   if (S.pollTimer) clearInterval(S.pollTimer);
   S.pollTimer = setInterval(async () => {
-    if (_pollInProgress) return;
+    if (_pollInProgress || _shouldSkipPoll()) return;
     _pollInProgress = true;
     try {
       await loadViewData(S.view);
