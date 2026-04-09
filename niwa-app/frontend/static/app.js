@@ -1774,7 +1774,8 @@ async function saveIntegration(group) {
   const res = await api('settings/integrations', { method: 'POST', body: JSON.stringify(payload) });
   if (res && res.ok) {
     toast('Configuración guardada', 'success');
-    // Don't reload the form — user may want to continue editing or click Test
+    // Show restart banner for settings that need a service restart
+    if (['llm', 'executor'].includes(group)) showRestartBanner();
   } else {
     toast('Error al guardar', 'error');
   }
@@ -2461,6 +2462,32 @@ function showDisconnectBanner() {
 function dismissDisconnectBanner() {
   const el = document.getElementById('disconnect-banner');
   if (el) el.remove();
+}
+
+function showRestartBanner() {
+  if (document.getElementById('restart-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'restart-banner';
+  el.className = 'fixed top-0 left-0 right-0 z-50 bg-secondary text-on-secondary text-center py-3 px-4 text-sm flex items-center justify-center gap-3';
+  el.innerHTML = '<span class="material-symbols-outlined text-sm">restart_alt</span>' +
+    '<span>Configuración actualizada. Reinicia Niwa para aplicar los cambios.</span>' +
+    '<button onclick="restartNiwa()" class="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-bold transition-all">Reiniciar</button>' +
+    '<button onclick="this.parentElement.remove()" class="p-1 hover:bg-white/20 rounded-lg transition-all"><span class="material-symbols-outlined text-sm">close</span></button>';
+  document.body.prepend(el);
+}
+
+async function restartNiwa() {
+  const banner = document.getElementById('restart-banner');
+  if (banner) banner.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">refresh</span> Reiniciando...';
+  const res = await api('system/restart', { method: 'POST', body: '{}' });
+  if (res && res.ok) {
+    toast('Niwa reiniciado', 'success');
+    if (banner) banner.remove();
+    setTimeout(() => location.reload(), 3000);
+  } else {
+    toast((res && res.error) || 'Error al reiniciar', 'error');
+    if (banner) banner.innerHTML = '<span class="text-error">Error al reiniciar</span>';
+  }
 }
 
 // ======================== NOTES ========================

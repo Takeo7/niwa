@@ -1555,6 +1555,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/settings/llm/setup-token':
             token = payload.get('token', '')
             return self._json(apply_setup_token(token))
+        if path == '/api/system/restart':
+            # Restart the app container — docker will auto-restart it
+            import threading
+            def _delayed_exit():
+                import time; time.sleep(1)
+                os._exit(0)
+            threading.Thread(target=_delayed_exit, daemon=True).start()
+            return self._json({'ok': True, 'message': 'Restarting...'})
         if path == '/api/settings/integrations/test-telegram':
             return self._json(test_telegram())
         if path == '/api/security/scan':

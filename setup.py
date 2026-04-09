@@ -509,7 +509,7 @@ class WizardConfig:
         self.public_domain: str = ""
         self.cloudflared_tunnel_id: str = ""
         self.cloudflared_config_path: Path = Path.home() / ".cloudflared" / "config.yml"
-        self.executor_enabled: bool = False
+        self.executor_enabled: bool = True
         self.llm_provider: str = ""
         self.llm_command: str = ""
         self.projects: list[dict] = []  # [{name, slug, directory}, ...]
