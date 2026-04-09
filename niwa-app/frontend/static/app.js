@@ -169,6 +169,9 @@ function toggleTheme() {
   localStorage.setItem('niwa_theme', isDark ? 'dark' : 'light');
   const icon = document.getElementById('theme-toggle-icon');
   if (icon) icon.textContent = isDark ? 'light_mode' : 'dark_mode';
+  _applySavedStyles(); // Re-apply custom colors for the new mode
+  // If styles tab is open, reload it to show correct mode colors
+  if (S.view === 'system' && S.systemTab === 'styles') loadStyles();
 }
 
 // Set initial icon
@@ -2510,45 +2513,73 @@ async function restartNiwa() {
 
 // ======================== STYLES ========================
 const STYLE_COLORS = [
-  { key: 'primary', label: 'Primary', lightDefault: '#3b6eb5', darkDefault: '#85adff' },
-  { key: 'secondary', label: 'Secondary', lightDefault: '#7c5cc7', darkDefault: '#ac8aff' },
-  { key: 'tertiary', label: 'Tertiary (success)', lightDefault: '#1a9a5c', darkDefault: '#9bffce' },
-  { key: 'error', label: 'Error', lightDefault: '#d94444', darkDefault: '#ff716c' },
-  { key: 'warning', label: 'Warning', lightDefault: '#f59e0b', darkDefault: '#fbbf24' },
-  { key: 'bg', label: 'Background', lightDefault: '#e8edf5', darkDefault: '#060e20' },
-  { key: 'surface', label: 'Surface', lightDefault: '#eef1f6', darkDefault: '#0a1122' },
-  { key: 'on-surface', label: 'Text', lightDefault: '#1a2234', darkDefault: '#dee5ff' },
+  { key: 'primary', label: 'Primary', light: '#3b6eb5', dark: '#85adff' },
+  { key: 'secondary', label: 'Secondary', light: '#7c5cc7', dark: '#ac8aff' },
+  { key: 'tertiary', label: 'Success', light: '#1a9a5c', dark: '#9bffce' },
+  { key: 'error', label: 'Error', light: '#d94444', dark: '#ff716c' },
+  { key: 'warning', label: 'Warning', light: '#f59e0b', dark: '#fbbf24' },
+  { key: 'bg', label: 'Fondo', light: '#e8edf5', dark: '#060e20' },
+  { key: 'surface', label: 'Surface', light: '#eef1f6', dark: '#0a1122' },
+  { key: 'on-surface', label: 'Texto', light: '#1a2234', dark: '#dee5ff' },
 ];
 
 const STYLE_PRESETS = [
-  { name: 'Default', colors: {} },
-  { name: 'Ocean', colors: { primary: '#0077b6', secondary: '#00b4d8', tertiary: '#06d6a0', bg: '#edf6f9', 'bg-dark': '#001219', 'surface-dark': '#001824' } },
-  { name: 'Forest', colors: { primary: '#2d6a4f', secondary: '#74c69d', tertiary: '#40916c', bg: '#f0f7f4', 'bg-dark': '#0a1f14', 'surface-dark': '#0d2818' } },
-  { name: 'Sunset', colors: { primary: '#e76f51', secondary: '#f4a261', tertiary: '#2a9d8f', bg: '#fdf5ef', 'bg-dark': '#1a0f09', 'surface-dark': '#231510' } },
-  { name: 'Monochrome', colors: { primary: '#6b7280', secondary: '#9ca3af', tertiary: '#4b5563', bg: '#f3f4f6', 'bg-dark': '#0a0a0a', 'surface-dark': '#111111' } },
-  { name: 'Lavender', colors: { primary: '#7c3aed', secondary: '#a78bfa', tertiary: '#06b6d4', bg: '#f5f3ff', 'bg-dark': '#0f0720', 'surface-dark': '#150a2e' } },
+  { name: 'Default', light: {}, dark: {} },
+  { name: 'Ocean',
+    light: { primary:'#0077b6', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#edf6f9', surface:'#e0f2f7' },
+    dark:  { primary:'#48cae4', secondary:'#00b4d8', tertiary:'#06d6a0', bg:'#001219', surface:'#001824', 'on-surface':'#caf0f8' } },
+  { name: 'Forest',
+    light: { primary:'#2d6a4f', secondary:'#74c69d', tertiary:'#40916c', bg:'#f0f7f4', surface:'#e8f5ee' },
+    dark:  { primary:'#74c69d', secondary:'#95d5b2', tertiary:'#52b788', bg:'#0a1f14', surface:'#0d2818', 'on-surface':'#d8f3dc' } },
+  { name: 'Sunset',
+    light: { primary:'#e76f51', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#fdf5ef', surface:'#fceee4' },
+    dark:  { primary:'#f4845f', secondary:'#f4a261', tertiary:'#2a9d8f', bg:'#1a0f09', surface:'#231510', 'on-surface':'#fde8d8' } },
+  { name: 'Monochrome',
+    light: { primary:'#374151', secondary:'#6b7280', tertiary:'#4b5563', bg:'#f3f4f6', surface:'#e5e7eb' },
+    dark:  { primary:'#9ca3af', secondary:'#d1d5db', tertiary:'#6b7280', bg:'#0a0a0a', surface:'#141414', 'on-surface':'#e5e7eb' } },
+  { name: 'Lavender',
+    light: { primary:'#7c3aed', secondary:'#a78bfa', tertiary:'#06b6d4', bg:'#f5f3ff', surface:'#ede9fe' },
+    dark:  { primary:'#a78bfa', secondary:'#c4b5fd', tertiary:'#22d3ee', bg:'#0f0720', surface:'#150a2e', 'on-surface':'#e0d6ff' } },
+  { name: 'Rose',
+    light: { primary:'#e11d48', secondary:'#f472b6', tertiary:'#10b981', bg:'#fff1f2', surface:'#ffe4e6' },
+    dark:  { primary:'#fb7185', secondary:'#f9a8d4', tertiary:'#34d399', bg:'#1a0a10', surface:'#2a0f18', 'on-surface':'#ffe4e6' } },
 ];
 
+function _getStylesData() {
+  return JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+}
+
 function loadStyles() {
-  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  const saved = _getStylesData();
   const isDark = document.documentElement.classList.contains('dark');
+  const mode = isDark ? 'dark' : 'light';
+
+  // Mode indicator
+  const modeLabel = document.getElementById('style-mode-label');
+  if (modeLabel) modeLabel.innerHTML = isDark
+    ? '<span class="material-symbols-outlined text-sm">dark_mode</span> Editando modo oscuro'
+    : '<span class="material-symbols-outlined text-sm">light_mode</span> Editando modo claro';
+  const switchLabel = document.getElementById('style-mode-switch-label');
+  if (switchLabel) switchLabel.textContent = isDark ? 'claro' : 'oscuro';
 
   // Render color pickers
   const colorsEl = document.getElementById('style-colors');
   if (colorsEl) {
     colorsEl.innerHTML = STYLE_COLORS.map(c => {
-      const currentVal = saved[`${c.key}${isDark ? '-dark' : ''}`] || (isDark ? c.darkDefault : c.lightDefault);
+      const savedVal = saved[mode + '.' + c.key];
+      const defaultVal = c[mode];
+      const currentVal = savedVal || defaultVal;
       return `<div>
         <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">${c.label}</label>
         <div class="flex items-center gap-2">
-          <input type="color" id="style-c-${c.key}" value="${currentVal}" onchange="applyStyleChange()" class="w-8 h-8 rounded-lg border border-outline-variant/30 cursor-pointer" style="padding:0">
-          <input type="text" value="${currentVal}" oninput="document.getElementById('style-c-${c.key}').value=this.value;applyStyleChange()" class="flex-1 bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-1 px-2 text-xs text-on-surface font-mono">
+          <input type="color" data-style-key="${c.key}" value="${currentVal}" onchange="onStyleColorChange(this)" class="w-8 h-8 rounded-lg border border-outline-variant/30 cursor-pointer" style="padding:0">
+          <input type="text" value="${currentVal}" oninput="this.previousElementSibling.value=this.value;onStyleColorChange(this.previousElementSibling)" class="flex-1 bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-1 px-2 text-xs text-on-surface font-mono">
         </div>
       </div>`;
     }).join('');
   }
 
-  // Restore font/size/radius selects
+  // Restore selects
   const fontBody = document.getElementById('style-font-body');
   const fontHead = document.getElementById('style-font-headline');
   const fontSize = document.getElementById('style-font-size');
@@ -2562,8 +2593,11 @@ function loadStyles() {
   const presetsEl = document.getElementById('style-presets');
   if (presetsEl) {
     presetsEl.innerHTML = STYLE_PRESETS.map(p => {
-      const colors = Object.values(p.colors).slice(0, 4);
-      const preview = colors.length ? colors.map(c => `<span class="w-4 h-4 rounded-full" style="background:${c}"></span>`).join('') : '<span class="text-[10px] text-on-surface-variant">tema por defecto</span>';
+      const pColors = p[mode] || {};
+      const swatches = Object.values(pColors).slice(0, 4);
+      const preview = swatches.length
+        ? swatches.map(c => `<span class="w-4 h-4 rounded-full border border-outline-variant/20" style="background:${c}"></span>`).join('')
+        : '<span class="text-[10px] text-on-surface-variant">default</span>';
       return `<button onclick="applyPreset('${escJsAttr(p.name)}')" class="w-full flex items-center justify-between p-3 rounded-lg bg-surface-dim/50 hover:bg-surface-bright transition-all text-left">
         <span class="text-sm font-medium">${escHtml(p.name)}</span>
         <div class="flex gap-1">${preview}</div>
@@ -2572,43 +2606,40 @@ function loadStyles() {
   }
 }
 
-function applyStyleChange() {
-  const isDark = document.documentElement.classList.contains('dark');
-  const suffix = isDark ? '-dark' : '';
+function onStyleColorChange(input) {
+  const key = input.dataset.styleKey;
+  const val = input.value;
+  const textInput = input.parentElement.querySelector('input[type="text"]');
+  if (textInput && textInput !== input) textInput.value = val;
+  // Apply live
   const root = document.documentElement.style;
+  if (key === 'bg') root.setProperty('--c-bg', val);
+  else if (key === 'surface') root.setProperty('--c-surface', val);
+  else if (key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
+  else root.setProperty('--c-' + key, val);
+}
 
-  STYLE_COLORS.forEach(c => {
-    const input = document.getElementById('style-c-' + c.key);
-    if (!input) return;
-    const val = input.value;
-    if (c.key === 'bg') root.setProperty('--c-bg', val);
-    else if (c.key === 'surface') root.setProperty('--c-surface', val);
-    else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
-    else root.setProperty('--c-' + c.key, val);
-  });
-
+function applyStyleChange() {
   const fontBody = document.getElementById('style-font-body');
   const fontHead = document.getElementById('style-font-headline');
   const fontSize = document.getElementById('style-font-size');
   const radius = document.getElementById('style-radius');
-  if (fontBody) root.setProperty('--font-body', fontBody.value);
-  if (fontHead) root.setProperty('--font-headline', fontHead.value);
-  if (fontSize) document.body.style.fontSize = fontSize.value;
-  if (radius) root.setProperty('--radius', radius.value);
-
-  // Update body font
   if (fontBody) document.body.style.fontFamily = fontBody.value + ', system-ui, sans-serif';
+  if (fontSize) document.body.style.fontSize = fontSize.value;
+  if (radius) document.documentElement.style.setProperty('--radius', radius.value);
 }
 
 function saveStyles() {
   const isDark = document.documentElement.classList.contains('dark');
-  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  const mode = isDark ? 'dark' : 'light';
+  const saved = _getStylesData();
 
-  STYLE_COLORS.forEach(c => {
-    const input = document.getElementById('style-c-' + c.key);
-    if (input) saved[c.key + (isDark ? '-dark' : '')] = input.value;
+  // Save colors for current mode
+  document.querySelectorAll('[data-style-key]').forEach(input => {
+    saved[mode + '.' + input.dataset.styleKey] = input.value;
   });
 
+  // Save shared settings
   const fontBody = document.getElementById('style-font-body');
   const fontHead = document.getElementById('style-font-headline');
   const fontSize = document.getElementById('style-font-size');
@@ -2619,7 +2650,7 @@ function saveStyles() {
   if (radius) saved.radius = radius.value;
 
   localStorage.setItem('niwa_styles', JSON.stringify(saved));
-  toast('Estilos guardados', 'success');
+  toast('Estilos guardados (' + (isDark ? 'oscuro' : 'claro') + ')', 'success');
 }
 
 function resetStyles() {
@@ -2627,7 +2658,7 @@ function resetStyles() {
   document.documentElement.style.cssText = '';
   document.body.style.fontSize = '';
   document.body.style.fontFamily = '';
-  toast('Estilos restaurados a defaults', 'success');
+  toast('Estilos restaurados', 'success');
   loadStyles();
 }
 
@@ -2635,35 +2666,40 @@ function applyPreset(name) {
   const preset = STYLE_PRESETS.find(p => p.name === name);
   if (!preset) return;
   const isDark = document.documentElement.classList.contains('dark');
+  const saved = _getStylesData();
 
-  // Reset first
-  document.documentElement.style.cssText = '';
-
-  // Apply preset colors
-  STYLE_COLORS.forEach(c => {
-    const input = document.getElementById('style-c-' + c.key);
-    if (!input) return;
-    const darkKey = c.key + '-dark';
-    const val = isDark ? (preset.colors[darkKey] || c.darkDefault) : (preset.colors[c.key] || c.lightDefault);
-    input.value = val;
-    // Also update the text input next to it
-    const textInput = input.parentElement.querySelector('input[type="text"]');
-    if (textInput) textInput.value = val;
+  // Save BOTH modes from preset
+  ['light', 'dark'].forEach(mode => {
+    const pColors = preset[mode] || {};
+    STYLE_COLORS.forEach(c => {
+      saved[mode + '.' + c.key] = pColors[c.key] || c[mode];
+    });
   });
 
-  applyStyleChange();
-  toast('Preset: ' + name, 'info');
+  localStorage.setItem('niwa_styles', JSON.stringify(saved));
+  _applySavedStyles();
+  loadStyles();
+  toast('Preset: ' + name, 'success');
 }
 
-// Apply saved styles on page load
+// Apply saved styles — called on load and on theme toggle
 function _applySavedStyles() {
-  const saved = JSON.parse(localStorage.getItem('niwa_styles') || '{}');
+  const saved = _getStylesData();
   if (!Object.keys(saved).length) return;
   const isDark = document.documentElement.classList.contains('dark');
+  const mode = isDark ? 'dark' : 'light';
   const root = document.documentElement.style;
 
+  // Clear previous custom props first (so defaults from CSS take over for unset ones)
   STYLE_COLORS.forEach(c => {
-    const val = saved[c.key + (isDark ? '-dark' : '')];
+    root.removeProperty('--c-' + c.key);
+    if (c.key === 'on-surface') root.removeProperty('--c-on-bg');
+  });
+  root.removeProperty('--c-bg');
+
+  // Apply saved colors for current mode
+  STYLE_COLORS.forEach(c => {
+    const val = saved[mode + '.' + c.key];
     if (!val) return;
     if (c.key === 'bg') root.setProperty('--c-bg', val);
     else if (c.key === 'surface') root.setProperty('--c-surface', val);
@@ -2671,7 +2707,7 @@ function _applySavedStyles() {
     else root.setProperty('--c-' + c.key, val);
   });
 
-  if (saved.fontBody) { root.setProperty('--font-body', saved.fontBody); document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif'; }
+  if (saved.fontBody) document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif';
   if (saved.fontSize) document.body.style.fontSize = saved.fontSize;
   if (saved.radius) root.setProperty('--radius', saved.radius);
 }
