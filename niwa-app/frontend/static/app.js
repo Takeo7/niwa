@@ -2524,7 +2524,7 @@ const STYLE_COLORS = [
   { key: 'sidebar', label: 'Sidebar/Topbar', light: '#ffffff', dark: '#091328' },
   { key: 'on-surface', label: 'Texto', light: '#1a2234', dark: '#dee5ff' },
   { key: 'btn-primary', label: 'Botón principal', light: '#3b6eb5', dark: '#85adff' },
-  { key: 'btn-text', label: 'Texto botón', light: '#ffffff', dark: '#002c66' },
+  { key: 'btn-text', label: 'Texto botón', light: '#ffffff', dark: '#001a40' },
 ];
 
 function _hexToRgb(hex) {
@@ -2640,32 +2640,26 @@ function loadStyles() {
 // Keys that use rgb triplet format (r,g,b) instead of hex
 const _RGB_KEYS = { card: '--c-card', sidebar: '--c-sidebar' };
 
+function _applyColor(key, val) {
+  const root = document.documentElement.style;
+  if (key in _RGB_KEYS) {
+    const rgb = _hexToRgb(val);
+    root.setProperty(_RGB_KEYS[key], rgb);
+    if (key === 'sidebar') root.setProperty('--c-topbar', rgb);
+  } else if (key === 'bg') { root.setProperty('--c-bg', val);
+  } else if (key === 'surface') { root.setProperty('--c-surface', val);
+  } else if (key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val);
+  } else if (key === 'btn-primary') { root.setProperty('--c-primary', val); root.setProperty('--c-tint', val);
+  } else if (key === 'btn-text') { root.setProperty('--c-on-primary', val);
+  } else { root.setProperty('--c-' + key, val); }
+}
+
 function onStyleColorChange(input) {
   const key = input.dataset.styleKey;
   const val = input.value;
   const textInput = input.parentElement.querySelector('input[type="text"]');
   if (textInput && textInput !== input) textInput.value = val;
-  const root = document.documentElement.style;
-  if (key in _RGB_KEYS) {
-    const rgb = _hexToRgb(val);
-    root.setProperty(_RGB_KEYS[key], rgb);
-    // Sidebar also controls topbar
-    if (key === 'sidebar') root.setProperty('--c-topbar', rgb);
-  } else if (key === 'bg') {
-    root.setProperty('--c-bg', val);
-  } else if (key === 'surface') {
-    root.setProperty('--c-surface', val);
-  } else if (key === 'on-surface') {
-    root.setProperty('--c-on-surface', val);
-    root.setProperty('--c-on-bg', val);
-  } else if (key === 'btn-primary') {
-    root.setProperty('--c-primary', val);
-    root.setProperty('--c-tint', val);
-  } else if (key === 'btn-text') {
-    root.setProperty('--c-on-primary', val);
-  } else {
-    root.setProperty('--c-' + key, val);
-  }
+  _applyColor(key, val);
 }
 
 function applyStyleChange() {
@@ -2674,19 +2668,27 @@ function applyStyleChange() {
   const fontSize = document.getElementById('style-font-size');
   const radius = document.getElementById('style-radius');
   if (fontBody) document.body.style.fontFamily = fontBody.value + ', system-ui, sans-serif';
-  if (fontHead) {
-    // Apply headline font to all .font-headline elements
-    document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = fontHead.value + ', system-ui, serif');
-  }
+  if (fontHead) document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = fontHead.value + ', system-ui, serif');
   if (fontSize) document.body.style.fontSize = fontSize.value;
-  if (radius) {
-    const r = radius.value;
-    // Apply to cards, inputs, buttons
-    document.documentElement.style.setProperty('--radius', r);
-    document.querySelectorAll('.rounded-2xl').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
-    document.querySelectorAll('.rounded-xl').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
-    document.querySelectorAll('.rounded-lg').forEach(el => el.style.borderRadius = r === '0' ? '0' : '');
+  if (radius) _applyRadius(radius.value);
+}
+
+function _applyRadius(r) {
+  let sheet = document.getElementById('niwa-radius-override');
+  if (!sheet) {
+    sheet = document.createElement('style');
+    sheet.id = 'niwa-radius-override';
+    document.head.appendChild(sheet);
   }
+  if (!r || r === '8px') { sheet.textContent = ''; return; }
+  // Scale radius classes proportionally
+  const base = parseInt(r);
+  sheet.textContent = `.rounded-2xl{border-radius:${Math.round(base*1.5)}px!important}`
+    + `.rounded-xl{border-radius:${base}px!important}`
+    + `.rounded-lg{border-radius:${Math.round(base*0.75)}px!important}`
+    + `.rounded-full{border-radius:9999px!important}`
+    + `input,select,textarea{border-radius:${Math.round(base*0.75)}px!important}`
+    + `button{border-radius:${Math.round(base*0.75)}px!important}`;
 }
 
 function saveStyles() {
@@ -2714,17 +2716,25 @@ function saveStyles() {
 }
 
 function saveAsCustomPreset() {
+  // First save current picker values for the active mode
+  saveStyles();
+  // Then build the preset from saved data (includes both modes if previously saved)
   const saved = _getStylesData();
+  const isDark = document.documentElement.classList.contains('dark');
+  const activeMode = isDark ? 'dark' : 'light';
+  const otherMode = isDark ? 'light' : 'dark';
   const custom = { light: {}, dark: {} };
-  ['light', 'dark'].forEach(mode => {
-    STYLE_COLORS.forEach(c => {
-      const val = saved[mode + '.' + c.key];
-      if (val) custom[mode][c.key] = val;
-    });
+  // Active mode: read from pickers (freshest)
+  document.querySelectorAll('[data-style-key]').forEach(input => {
+    custom[activeMode][input.dataset.styleKey] = input.value;
+  });
+  // Other mode: read from saved (if exists), else defaults
+  STYLE_COLORS.forEach(c => {
+    custom[otherMode][c.key] = saved[otherMode + '.' + c.key] || c[otherMode];
   });
   saved._customPreset = custom;
   localStorage.setItem('niwa_styles', JSON.stringify(saved));
-  toast('Preset Custom guardado', 'success');
+  toast('Preset Custom guardado con los colores actuales', 'success');
   loadStyles();
 }
 
@@ -2794,16 +2804,7 @@ function _applySavedStyles() {
   STYLE_COLORS.forEach(c => {
     const val = saved[mode + '.' + c.key];
     if (!val) return;
-    if (c.key in _RGB_KEYS) {
-      const rgb = _hexToRgb(val);
-      root.setProperty(_RGB_KEYS[c.key], rgb);
-      if (c.key === 'sidebar') root.setProperty('--c-topbar', rgb);
-    } else if (c.key === 'bg') { root.setProperty('--c-bg', val);
-    } else if (c.key === 'surface') { root.setProperty('--c-surface', val);
-    } else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val);
-    } else if (c.key === 'btn-primary') { root.setProperty('--c-primary', val); root.setProperty('--c-tint', val);
-    } else if (c.key === 'btn-text') { root.setProperty('--c-on-primary', val);
-    } else { root.setProperty('--c-' + c.key, val); }
+    _applyColor(c.key, val);
   });
 
   if (saved.fontBody) document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif';
@@ -2811,7 +2812,7 @@ function _applySavedStyles() {
     document.querySelectorAll('.font-headline').forEach(el => el.style.fontFamily = saved.fontHeadline + ', system-ui, serif');
   }
   if (saved.fontSize) document.body.style.fontSize = saved.fontSize;
-  if (saved.radius) root.setProperty('--radius', saved.radius);
+  if (saved.radius) _applyRadius(saved.radius);
 }
 // Defer to after DOM is ready
 if (document.readyState === 'loading') {

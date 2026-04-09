@@ -725,7 +725,7 @@ tailwind.config = {
             <span class="material-symbols-outlined text-primary">text_fields</span>
             <h3 class="text-sm font-semibold uppercase tracking-wider">Tipografía</h3>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Fuente principal</label>
               <select id="style-font-body" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
@@ -748,20 +748,28 @@ tailwind.config = {
             <div>
               <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Tamaño base</label>
               <select id="style-font-size" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
-                <option value="12px">Compacto (12px)</option>
-                <option value="13px" selected>Normal (13px)</option>
-                <option value="14px">Grande (14px)</option>
-                <option value="15px">Extra grande (15px)</option>
+                <option value="12px">Compacto</option>
+                <option value="13px" selected>Normal</option>
+                <option value="14px">Grande</option>
+                <option value="15px">Extra grande</option>
               </select>
             </div>
+          </div>
+        </div>
+        <div class="bg-surface-container-high rounded-lg p-6 mb-6">
+          <div class="flex items-center gap-3 mb-6">
+            <span class="material-symbols-outlined text-tertiary">rounded_corner</span>
+            <h3 class="text-sm font-semibold uppercase tracking-wider">Forma</h3>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Border radius</label>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bordes</label>
               <select id="style-radius" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
-                <option value="0">Sin bordes redondeados</option>
-                <option value="0.25rem">Sutil</option>
-                <option value="0.5rem" selected>Normal</option>
-                <option value="0.75rem">Redondeado</option>
-                <option value="1.25rem">Muy redondeado</option>
+                <option value="0px">Cuadrado</option>
+                <option value="4px">Sutil</option>
+                <option value="8px" selected>Normal</option>
+                <option value="12px">Redondeado</option>
+                <option value="20px">Muy redondeado</option>
               </select>
             </div>
           </div>
