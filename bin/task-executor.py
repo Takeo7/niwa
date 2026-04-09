@@ -68,11 +68,27 @@ def _resolve_install_dir() -> Path:
 
 INSTALL_DIR = _resolve_install_dir()
 ENV = _read_env_file(INSTALL_DIR / "secrets" / "mcp.env")
+
+# Also read settings.json (written by the web UI) — overlays env file values
+_SETTINGS_PATH = Path(ENV.get("NIWA_DB_PATH", str(INSTALL_DIR / "data" / "niwa.sqlite3"))).parent / "settings.json"
+_SETTINGS: dict = {}
+if _SETTINGS_PATH.exists():
+    try:
+        import json as _json
+        _SETTINGS = _json.loads(_SETTINGS_PATH.read_text())
+    except Exception:
+        pass
+
+def _cfg(key: str, env_key: str, default: str = "") -> str:
+    """Read config: settings.json (UI) > mcp.env (wizard) > default."""
+    return (_SETTINGS.get(f"int.{key}") or ENV.get(env_key, "") or default).strip()
+
 DB_PATH = ENV.get("NIWA_DB_PATH") or str(INSTALL_DIR / "data" / "niwa.sqlite3")
-LLM_COMMAND = ENV.get("NIWA_LLM_COMMAND", "").strip()
-LLM_API_KEY = ENV.get("NIWA_LLM_API_KEY", "").strip()
-POLL_SECONDS = int(ENV.get("NIWA_EXECUTOR_POLL_SECONDS", "30"))
-TIMEOUT_SECONDS = int(ENV.get("NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
+LLM_COMMAND = _cfg("llm_command", "NIWA_LLM_COMMAND")
+LLM_API_KEY = _cfg("llm_api_key", "NIWA_LLM_API_KEY")
+LLM_SETUP_TOKEN = _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
+POLL_SECONDS = int(_cfg("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
+TIMEOUT_SECONDS = int(_cfg("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
 MAX_OUTPUT_CHARS = int(ENV.get("NIWA_EXECUTOR_MAX_OUTPUT", "10000"))
 HEARTBEAT_SECONDS = int(ENV.get("NIWA_EXECUTOR_HEARTBEAT_SECONDS", "60"))
 
@@ -255,12 +271,14 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
         return False, "NIWA_LLM_COMMAND is not configured"
     cmd = shlex.split(LLM_COMMAND) + [prompt]
     log.info("→ exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
-    # Build env with API key injected for all common providers
+    # Build env with credentials injected for all common providers
     run_env = os.environ.copy()
     if LLM_API_KEY:
         run_env["ANTHROPIC_API_KEY"] = LLM_API_KEY
         run_env["OPENAI_API_KEY"] = LLM_API_KEY
         run_env["GOOGLE_API_KEY"] = LLM_API_KEY
+    if LLM_SETUP_TOKEN:
+        run_env["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=run_env,

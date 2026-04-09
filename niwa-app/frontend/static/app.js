@@ -1814,18 +1814,18 @@ function updateLlmHelp() {
   const guides = {
     'api_key': {
       '': '<p>Selecciona un provider para ver las instrucciones.</p>',
-      'claude': '<p><b>1.</b> Pega tu <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">Anthropic API key</a></p><p><b>2.</b> Instala el CLI en el servidor: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">La API key se inyecta automáticamente como ANTHROPIC_API_KEY</p>',
-      'llm': '<p><b>1.</b> Pega tu <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">OpenAI API key</a></p><p><b>2.</b> Instala: <code>pip install llm</code></p><p class="mt-1">Se inyecta como OPENAI_API_KEY</p>',
-      'gemini': '<p><b>1.</b> Pega tu <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">Google API key</a></p><p><b>2.</b> Instala: <code>pip install google-generativeai</code></p>',
-      'custom': '<p>Pega tu API key y escribe el comando. La key se inyecta como env var.</p>',
+      'claude': '<p><b>1.</b> Ve a <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-primary underline">console.anthropic.com/settings/keys</a> y crea una API key</p><p><b>2.</b> Pégala en el campo "API Key" de arriba</p><p><b>3.</b> Instala el CLI en el servidor: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">Funciona con todos los planes. La key se inyecta como ANTHROPIC_API_KEY. No necesitas navegador ni terminal extra.</p>',
+      'llm': '<p><b>1.</b> Ve a <a href="https://platform.openai.com/api-keys" target="_blank" class="text-primary underline">platform.openai.com/api-keys</a> y crea una key</p><p><b>2.</b> Pégala arriba</p><p><b>3.</b> Instala en el servidor: <code>pip install llm</code></p><p class="mt-1">Se inyecta como OPENAI_API_KEY. Para Anthropic/Gemini vía llm, instala plugins.</p>',
+      'gemini': '<p><b>1.</b> Ve a <a href="https://aistudio.google.com/apikey" target="_blank" class="text-primary underline">aistudio.google.com/apikey</a></p><p><b>2.</b> Pégala arriba</p><p><b>3.</b> Instala: <code>pip install google-generativeai</code></p>',
+      'custom': '<p>Pega tu API key y escribe el comando. La key se inyecta como env var al subprocess.</p>',
     },
     'setup_token': {
-      '': '<p>El setup token es para Claude Max, Team o Enterprise.</p>',
-      'claude': '<p><b>1.</b> Ve a <a href="https://claude.ai/settings" target="_blank" class="text-primary underline">claude.ai/settings</a> → "Claude Code" → Copiar token</p><p><b>2.</b> Pégalo arriba y pulsa "Aplicar token"</p><p><b>3.</b> Instala el CLI: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">El token autentica Claude Code sin necesidad de API key ni navegador.</p>',
+      '': '<p>El setup token es solo para Claude Pro/Max.</p>',
+      'claude': '<p><b>1.</b> En tu laptop (con navegador), ejecuta: <code>claude setup-token</code></p><p><b>2.</b> Se abre el navegador para autenticarte. Te da un token (empieza por <code>sk-ant-oat01-</code>)</p><p><b>3.</b> Pega ese token aquí arriba y pulsa "Aplicar token"</p><p><b>4.</b> Instala el CLI en el servidor: <code>npm install -g @anthropic-ai/claude-code</code></p><p class="mt-1">Solo para planes Pro/Max. El token dura 1 año. Si tienes API key, usa mejor el método "API Key" — funciona con todos los planes.</p>',
     },
     'oauth': {
-      '': '<p>OAuth requiere ejecutar <code>claude</code> una vez en el terminal del servidor.</p>',
-      'claude': '<p><b>1.</b> Instala el CLI: <code>npm install -g @anthropic-ai/claude-code</code></p><p><b>2.</b> Ejecuta <code>claude</code> en el terminal — se abre un enlace de auth</p><p><b>3.</b> Una vez autenticado, la sesión se guarda en <code>~/.claude.json</code></p><p class="mt-1">Después ya funciona sin intervención. Usa "Verificar" para comprobar.</p>',
+      '': '<p>OAuth requiere terminal + navegador en el servidor.</p>',
+      'claude': '<p><b>1.</b> Instala el CLI: <code>npm install -g @anthropic-ai/claude-code</code></p><p><b>2.</b> Ejecuta <code>claude</code> en el terminal del servidor</p><p><b>3.</b> Abre el enlace que te da en un navegador y autoriza</p><p class="mt-1">Solo necesitas hacerlo una vez. La sesión se guarda en ~/.claude/. Usa "Verificar" para comprobar. Si el servidor no tiene navegador, usa "API Key" en su lugar.</p>',
     },
   };
 

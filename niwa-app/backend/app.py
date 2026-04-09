@@ -904,24 +904,15 @@ def test_telegram():
 
 
 def apply_setup_token(token: str) -> dict:
-    """Run 'claude setup-token <token>' to authenticate Claude Code non-interactively."""
-    import subprocess as _sp
+    """Store a Claude setup token as CLAUDE_CODE_OAUTH_TOKEN for the executor to use."""
     if not token or not token.strip():
         return {'ok': False, 'error': 'Token is empty'}
-    # Check if claude CLI is installed
-    claude_path = _sp.run(['which', 'claude'], capture_output=True, text=True).stdout.strip()
-    if not claude_path:
-        return {'ok': False, 'error': 'Claude CLI not installed. Install: npm install -g @anthropic-ai/claude-code'}
-    try:
-        result = _sp.run(
-            ['claude', 'setup-token', token.strip()],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            return {'ok': True, 'message': 'Setup token applied — Claude is authenticated'}
-        return {'ok': False, 'error': result.stderr.strip() or result.stdout.strip() or f'Exit code {result.returncode}'}
-    except Exception as e:
-        return {'ok': False, 'error': str(e)}
+    token = token.strip()
+    if not token.startswith('sk-ant-'):
+        return {'ok': False, 'error': 'Invalid token format — should start with sk-ant-oat01-'}
+    # Store it in settings so the executor can read it
+    save_setting('int.llm_setup_token', token)
+    return {'ok': True, 'message': 'Token saved — the executor will use it as CLAUDE_CODE_OAUTH_TOKEN'}
 
 
 def check_llm_status() -> dict:
