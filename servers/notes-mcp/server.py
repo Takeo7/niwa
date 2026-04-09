@@ -62,14 +62,17 @@ server = Server("notes")
 
 
 def _ro_conn() -> sqlite3.Connection:
-    c = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    c = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=10)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA busy_timeout=10000")
     return c
 
 
 def _rw_conn() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH)
+    c = sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=10000")
     return c
 
 

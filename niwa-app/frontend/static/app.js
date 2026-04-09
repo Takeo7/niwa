@@ -407,7 +407,7 @@ function renderActivityFeed(items) {
     r += '<span class="text-[10px] font-bold text-' + color + ' tracking-widest uppercase">' + typeLabel + '</span>';
     r += '<span class="text-[10px] text-on-surface-variant">' + ago + '</span>';
     r += '</div>';
-    r += '<h5 class="text-sm font-medium text-on-surface mb-1">' + (item.task_title || 'Task') + '</h5>';
+    r += '<h5 class="text-sm font-medium text-on-surface mb-1">' + escHtml(item.task_title || 'Task') + '</h5>';
     if (agent) {
       r += '<span class="text-[10px] text-on-surface-variant">by ' + escHtml(agent) + '</span>';
     }
@@ -474,6 +474,7 @@ function getKanbanColumns() {
   return [
     { key: 'todo', label: _t('kanban.col_todo'), statuses: ['inbox', 'pendiente'], color: 'primary' },
     { key: 'doing', label: _t('kanban.col_doing'), statuses: ['en_progreso'], color: 'tertiary' },
+    { key: 'review', label: _t('kanban.col_review'), statuses: ['revision'], color: 'secondary' },
     { key: 'blocked', label: _t('kanban.col_blocked'), statuses: ['bloqueada'], color: 'error' },
     { key: 'done', label: _t('kanban.col_done'), statuses: ['hecha', 'archivada'], color: 'on-surface-variant' },
   ];
@@ -2234,7 +2235,7 @@ function toast(msg, type = 'info') {
   const c = colors[type] || 'primary';
   const el = document.createElement('div');
   el.className = `toast-enter glass-card px-4 py-3 rounded-lg text-sm text-on-surface flex items-center gap-3 max-w-sm`;
-  el.innerHTML = `<span class="material-symbols-outlined text-${c} text-sm">${type==='error'?'error':type==='success'?'check_circle':'info'}</span>${msg}`;
+  el.innerHTML = `<span class="material-symbols-outlined text-${c} text-sm">${type==='error'?'error':type==='success'?'check_circle':'info'}</span>${escHtml(msg)}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => { el.style.animation = 'toastOut .3s ease forwards'; setTimeout(() => el.remove(), 300); }, 3000);
 }
@@ -2524,6 +2525,9 @@ async function loadRoutines() {
         </button>
         <button onclick="openRoutineEditor('${r.id}')" class="p-1.5 hover:bg-surface-bright rounded-lg text-on-surface-variant" title="Editar">
           <span class="material-symbols-outlined text-sm">edit</span>
+        </button>
+        <button onclick="deleteRoutine('${r.id}')" class="p-1.5 hover:bg-error/10 rounded-lg text-on-surface-variant" title="Eliminar">
+          <span class="material-symbols-outlined text-sm">delete</span>
         </button>
         <button onclick="toggleRoutine('${r.id}')" class="relative w-10 h-5 rounded-full transition-colors ${r.enabled ? 'bg-tertiary' : 'bg-outline-variant'}" title="${r.enabled ? 'Desactivar' : 'Activar'}">
           <span class="absolute top-0.5 ${r.enabled ? 'left-5' : 'left-0.5'} w-4 h-4 bg-white rounded-full shadow transition-all"></span>

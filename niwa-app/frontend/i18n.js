@@ -149,6 +149,7 @@ I18N.register('es', {
   // Search
   'search.placeholder': 'Buscar tareas, proyectos...',
   'search.no_results': 'Sin resultados.',
+  'error.loading_dashboard': 'Error al cargar el dashboard',
   'search.esc': 'ESC para cerrar',
   'search.enter': 'ENTER para seleccionar',
 
@@ -226,6 +227,11 @@ I18N.register('es', {
   'stats.overdue': 'Vencidas',
 
   // Task extra
+  'task.save_error': 'Error al guardar tarea',
+  'task.reject_reason': 'Motivo del rechazo',
+  'task.rejected': 'Tarea rechazada',
+  'task.reject_failed': 'Error al rechazar tarea',
+  'task.create_failed': 'Error al crear tarea',
   'task.delete_failed': 'Error al eliminar tarea',
   'task.move_failed': 'Error al mover tarea',
   'task.no_attachments': 'Sin adjuntos',
@@ -401,6 +407,7 @@ I18N.register('en', {
   // Search
   'search.placeholder': 'Search tasks, projects...',
   'search.no_results': 'No results found.',
+  'error.loading_dashboard': 'Error loading dashboard',
   'search.esc': 'ESC to close',
   'search.enter': 'ENTER to select',
 
@@ -478,6 +485,11 @@ I18N.register('en', {
   'stats.overdue': 'Overdue',
 
   // Task extra
+  'task.save_error': 'Failed to save task',
+  'task.reject_reason': 'Rejection reason',
+  'task.rejected': 'Task rejected',
+  'task.reject_failed': 'Failed to reject task',
+  'task.create_failed': 'Failed to create task',
   'task.delete_failed': 'Failed to delete task',
   'task.move_failed': 'Failed to move task',
   'task.no_attachments': 'No attachments',

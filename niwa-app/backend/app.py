@@ -1106,8 +1106,6 @@ def toggle_cron_delivery(job_id, action='mute'):
         return {'error': 'job_not_found'}
     except Exception as e:
         return {'error': str(e)}
-    except Exception:
-        return False
 
 
 _INDEX_HTML_CACHE = {'html': None, 'mtime': 0}
@@ -1166,7 +1164,10 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b''
         ctype = self.headers.get('Content-Type', '')
         if 'application/json' in ctype:
-            return json.loads(raw.decode('utf-8') or '{}')
+            try:
+                return json.loads(raw.decode('utf-8') or '{}')
+            except (json.JSONDecodeError, ValueError):
+                return {}
         if 'application/x-www-form-urlencoded' in ctype:
             parsed = parse_qs(raw.decode('utf-8'))
             return {k: v[0] if isinstance(v, list) and v else '' for k, v in parsed.items()}
@@ -1328,7 +1329,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/logs':
             source = (qs.get('source') or ['gateway'])[0]
             lines_count = int((qs.get('lines') or ['100'])[0])
-            return self._json(fetch_logs(source=source, lines=lines_count))
+            return self._json(fetch_logs(source=source, limit=lines_count))
         if path == '/api/routines':
             return self._json(scheduler.list_routines(db_conn))
         if re.match(r'^/api/routines/[^/]+$', path) and path.count('/') == 3:
@@ -1358,7 +1359,7 @@ class Handler(BaseHTTPRequestHandler):
                 'sort': (qs.get('sort') or ['completed_at'])[0],
                 'order': (qs.get('order') or ['desc'])[0],
             }
-            return self._json(fetch_task_history(params))
+            return self._json(fetch_task_history(params, db_conn))
         if path == '/api/search':
             q = (qs.get('q') or [''])[0]
             return self._json(search_tasks(q))

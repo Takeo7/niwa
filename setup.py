@@ -953,6 +953,7 @@ def step_summary(cfg: WizardConfig) -> bool:
 
 # ────────────────────────── execution ──────────────────────────
 def execute_install(cfg: WizardConfig) -> None:
+    import sqlite3
     header("Step 13 — Building install")
     cfg.niwa_home.mkdir(parents=True, exist_ok=True)
     (cfg.niwa_home / "config").mkdir(parents=True, exist_ok=True)
@@ -999,6 +1000,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_EXECUTOR_ENABLED": "1" if cfg.executor_enabled else "0",
         "NIWA_LLM_PROVIDER": cfg.llm_provider,
         "NIWA_LLM_COMMAND": cfg.llm_command,
+        "DOCKER_SOCKET_PATH": cfg.detected.get("docker_socket", "/var/run/docker.sock"),
         "NIWA_TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
         "NIWA_TELEGRAM_CHAT_ID": cfg.telegram_chat_id,
         "NIWA_WEBHOOK_URL": cfg.webhook_url,
@@ -1741,7 +1743,12 @@ def cmd_backup(args) -> None:
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dst = backup_dir / f"niwa-{stamp}.sqlite3"
-    shutil.copy2(str(db_path), str(dst))
+    import sqlite3 as _sq
+    src_conn = _sq.connect(str(db_path))
+    dst_conn = _sq.connect(str(dst))
+    src_conn.backup(dst_conn)
+    dst_conn.close()
+    src_conn.close()
     ok(f"Backup: {dst} ({dst.stat().st_size:,} bytes)")
     # Rotate backups older than 7 days
     cutoff = time.time() - 7 * 86400

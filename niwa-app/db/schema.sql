@@ -134,6 +134,12 @@ CREATE TABLE IF NOT EXISTS routines (
     updated_at TEXT NOT NULL
 );
 
+-- ── Settings (key-value store for app config) ──
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- ── Login attempts (auth rate limiting) ──
 CREATE TABLE IF NOT EXISTS login_attempts (
   key TEXT PRIMARY KEY,
@@ -151,6 +157,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_events_created_at ON task_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_notes_project_id ON notes(project_id);
 CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
 CREATE INDEX IF NOT EXISTS idx_notes_status ON notes(status);

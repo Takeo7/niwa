@@ -297,7 +297,7 @@ tailwind.config = {
       </button>
     </div>
   </div>
-  <div id="kanban-board" class="flex flex-col lg:grid lg:grid-cols-4 gap-4 lg:gap-6 items-start px-1 lg:px-0"></div>
+  <div id="kanban-board" class="flex flex-col lg:grid lg:grid-cols-5 gap-4 lg:gap-6 items-start px-1 lg:px-0"></div>
 </section>
 
 <!-- ============ PROJECTS VIEW ============ -->
@@ -479,7 +479,7 @@ tailwind.config = {
   <!-- Filters -->
   <div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-4 mb-6">
     <div class="flex flex-wrap items-center gap-3">
-      <select id="history-filter-project" multiple class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[160px]">
+      <select id="history-filter-project" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[160px]">
         <option value="" selected>Todos los proyectos</option>
       </select>
       <input type="date" id="history-filter-from" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface" placeholder="Desde">
@@ -857,8 +857,10 @@ tailwind.config = {
             <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.status">Estado</label>
             <select id="task-status" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface">
               <option value="inbox" data-i18n="status.inbox">Inbox</option>
+              <option value="pendiente" data-i18n="status.pendiente">Pendiente</option>
               <option value="en_progreso" data-i18n="status.en_progreso">En progreso</option>
               <option value="revision" data-i18n="status.revision">Revisión</option>
+              <option value="bloqueada" data-i18n="status.bloqueada">Bloqueada</option>
               <option value="hecha" data-i18n="status.hecha">Hecha</option>
             </select>
           </div>

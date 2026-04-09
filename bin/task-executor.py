@@ -125,7 +125,12 @@ def _claim_next_task() -> Optional[sqlite3.Row]:
             """
             SELECT * FROM tasks
             WHERE status = 'pendiente'
-            ORDER BY priority DESC, created_at ASC
+            ORDER BY CASE priority
+              WHEN 'critica' THEN 4 WHEN 'critical' THEN 4
+              WHEN 'alta' THEN 3 WHEN 'high' THEN 3
+              WHEN 'media' THEN 2 WHEN 'medium' THEN 2
+              WHEN 'baja' THEN 1 WHEN 'low' THEN 1
+              ELSE 0 END DESC, created_at ASC
             LIMIT 1
             """
         ).fetchone()
@@ -135,7 +140,8 @@ def _claim_next_task() -> Optional[sqlite3.Row]:
             "UPDATE tasks SET status = 'en_progreso', updated_at = ? WHERE id = ? AND status = 'pendiente'",
             (_now_iso(), row["id"]),
         )
-        if c.total_changes == 0:
+        changed = c.execute("SELECT changes()").fetchone()[0]
+        if changed == 0:
             # Someone else got it first
             return None
         c.commit()
