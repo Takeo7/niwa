@@ -2521,8 +2521,10 @@ const STYLE_COLORS = [
   { key: 'bg', label: 'Fondo', light: '#e8edf5', dark: '#060e20' },
   { key: 'surface', label: 'Surface', light: '#eef1f6', dark: '#0a1122' },
   { key: 'card', label: 'Tarjetas', light: '#ffffff', dark: '#0f1930' },
-  { key: 'sidebar', label: 'Sidebar', light: '#ffffff', dark: '#091328' },
+  { key: 'sidebar', label: 'Sidebar/Topbar', light: '#ffffff', dark: '#091328' },
   { key: 'on-surface', label: 'Texto', light: '#1a2234', dark: '#dee5ff' },
+  { key: 'btn-primary', label: 'Botón principal', light: '#3b6eb5', dark: '#85adff' },
+  { key: 'btn-text', label: 'Texto botón', light: '#ffffff', dark: '#002c66' },
 ];
 
 function _hexToRgb(hex) {
@@ -2603,7 +2605,24 @@ function loadStyles() {
   // Render presets
   const presetsEl = document.getElementById('style-presets');
   if (presetsEl) {
-    presetsEl.innerHTML = STYLE_PRESETS.map(p => {
+    let presetsHtml = '';
+    // Custom preset if saved
+    const customPreset = saved._customPreset;
+    if (customPreset) {
+      const cColors = customPreset[mode] || {};
+      const cSwatches = Object.values(cColors).slice(0, 4);
+      const cPreview = cSwatches.map(c => `<span class="w-4 h-4 rounded-full border border-outline-variant/20" style="background:${c}"></span>`).join('');
+      presetsHtml += `<div class="flex items-center gap-2">
+        <button onclick="applyPreset('Custom')" class="flex-1 flex items-center justify-between p-3 rounded-lg bg-secondary/10 hover:bg-secondary/20 transition-all text-left border border-secondary/30">
+          <span class="text-sm font-bold text-secondary">Custom</span>
+          <div class="flex gap-1">${cPreview}</div>
+        </button>
+        <button onclick="deleteCustomPreset()" class="p-2 hover:bg-error/10 rounded-lg text-on-surface-variant" title="Eliminar">
+          <span class="material-symbols-outlined text-sm">delete</span>
+        </button>
+      </div>`;
+    }
+    presetsHtml += STYLE_PRESETS.map(p => {
       const pColors = p[mode] || {};
       const swatches = Object.values(pColors).slice(0, 4);
       const preview = swatches.length
@@ -2614,6 +2633,7 @@ function loadStyles() {
         <div class="flex gap-1">${preview}</div>
       </button>`;
     }).join('');
+    presetsEl.innerHTML = presetsHtml;
   }
 }
 
@@ -2625,10 +2645,12 @@ function onStyleColorChange(input) {
   const val = input.value;
   const textInput = input.parentElement.querySelector('input[type="text"]');
   if (textInput && textInput !== input) textInput.value = val;
-  // Apply live
   const root = document.documentElement.style;
   if (key in _RGB_KEYS) {
-    root.setProperty(_RGB_KEYS[key], _hexToRgb(val));
+    const rgb = _hexToRgb(val);
+    root.setProperty(_RGB_KEYS[key], rgb);
+    // Sidebar also controls topbar
+    if (key === 'sidebar') root.setProperty('--c-topbar', rgb);
   } else if (key === 'bg') {
     root.setProperty('--c-bg', val);
   } else if (key === 'surface') {
@@ -2636,6 +2658,11 @@ function onStyleColorChange(input) {
   } else if (key === 'on-surface') {
     root.setProperty('--c-on-surface', val);
     root.setProperty('--c-on-bg', val);
+  } else if (key === 'btn-primary') {
+    root.setProperty('--c-primary', val);
+    root.setProperty('--c-tint', val);
+  } else if (key === 'btn-text') {
+    root.setProperty('--c-on-primary', val);
   } else {
     root.setProperty('--c-' + key, val);
   }
@@ -2686,6 +2713,29 @@ function saveStyles() {
   toast('Estilos guardados (' + (isDark ? 'oscuro' : 'claro') + ')', 'success');
 }
 
+function saveAsCustomPreset() {
+  const saved = _getStylesData();
+  const custom = { light: {}, dark: {} };
+  ['light', 'dark'].forEach(mode => {
+    STYLE_COLORS.forEach(c => {
+      const val = saved[mode + '.' + c.key];
+      if (val) custom[mode][c.key] = val;
+    });
+  });
+  saved._customPreset = custom;
+  localStorage.setItem('niwa_styles', JSON.stringify(saved));
+  toast('Preset Custom guardado', 'success');
+  loadStyles();
+}
+
+function deleteCustomPreset() {
+  const saved = _getStylesData();
+  delete saved._customPreset;
+  localStorage.setItem('niwa_styles', JSON.stringify(saved));
+  toast('Preset Custom eliminado');
+  loadStyles();
+}
+
 function resetStyles() {
   localStorage.removeItem('niwa_styles');
   document.documentElement.style.cssText = '';
@@ -2696,7 +2746,14 @@ function resetStyles() {
 }
 
 function applyPreset(name) {
-  const preset = STYLE_PRESETS.find(p => p.name === name);
+  let preset;
+  if (name === 'Custom') {
+    const saved = _getStylesData();
+    preset = saved._customPreset;
+    if (!preset) return;
+  } else {
+    preset = STYLE_PRESETS.find(p => p.name === name);
+  }
   if (!preset) return;
   const isDark = document.documentElement.classList.contains('dark');
   const saved = _getStylesData();
@@ -2725,9 +2782,11 @@ function _applySavedStyles() {
 
   // Clear previous custom props first (so defaults from CSS take over for unset ones)
   STYLE_COLORS.forEach(c => {
-    if (c.key in _RGB_KEYS) root.removeProperty(_RGB_KEYS[c.key]);
+    if (c.key in _RGB_KEYS) { root.removeProperty(_RGB_KEYS[c.key]); }
     else root.removeProperty('--c-' + c.key);
     if (c.key === 'on-surface') root.removeProperty('--c-on-bg');
+    if (c.key === 'sidebar') root.removeProperty('--c-topbar');
+    if (c.key === 'btn-primary') root.removeProperty('--c-tint');
   });
   root.removeProperty('--c-bg');
 
@@ -2735,11 +2794,16 @@ function _applySavedStyles() {
   STYLE_COLORS.forEach(c => {
     const val = saved[mode + '.' + c.key];
     if (!val) return;
-    if (c.key in _RGB_KEYS) root.setProperty(_RGB_KEYS[c.key], _hexToRgb(val));
-    else if (c.key === 'bg') root.setProperty('--c-bg', val);
-    else if (c.key === 'surface') root.setProperty('--c-surface', val);
-    else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val); }
-    else root.setProperty('--c-' + c.key, val);
+    if (c.key in _RGB_KEYS) {
+      const rgb = _hexToRgb(val);
+      root.setProperty(_RGB_KEYS[c.key], rgb);
+      if (c.key === 'sidebar') root.setProperty('--c-topbar', rgb);
+    } else if (c.key === 'bg') { root.setProperty('--c-bg', val);
+    } else if (c.key === 'surface') { root.setProperty('--c-surface', val);
+    } else if (c.key === 'on-surface') { root.setProperty('--c-on-surface', val); root.setProperty('--c-on-bg', val);
+    } else if (c.key === 'btn-primary') { root.setProperty('--c-primary', val); root.setProperty('--c-tint', val);
+    } else if (c.key === 'btn-text') { root.setProperty('--c-on-primary', val);
+    } else { root.setProperty('--c-' + c.key, val); }
   });
 
   if (saved.fontBody) document.body.style.fontFamily = saved.fontBody + ', system-ui, sans-serif';
