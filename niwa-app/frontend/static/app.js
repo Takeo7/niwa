@@ -1005,7 +1005,7 @@ function renderProjectTypeChart(projectTasks, total, done) {
     }
     var pct = Math.round((done / total) * 100);
     var _d = '<div style="width:120px;height:120px;border-radius:50%;background:conic-gradient(' + gradientParts.join(',') + ');" class="flex items-center justify-center">';
-    _d += '<div class="w-[76px] h-[76px] rounded-full bg-[rgb(var(--c-card))] flex flex-col items-center justify-center">';
+    _d += '<div class="w-[76px] h-[76px] rounded-full bg-[var(--c-card)] flex flex-col items-center justify-center">';
     _d += '<span class="text-lg font-headline font-bold text-on-surface leading-none">' + pct + '%</span>';
     _d += '<span class="text-[9px] text-on-surface-variant uppercase">hecho</span>';
     _d += '</div>';
@@ -1517,7 +1517,7 @@ async function loadDocs() {
     if (!content) continue;
     const lines = content.split('\n').length;
     const preview = content.split('\n').slice(0, 3).join(' ').substring(0, 150);
-    html += `<details class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm overflow-hidden">
+    html += `<details class="bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden">
       <summary class="p-5 cursor-pointer hover:bg-surface-bright/30 transition-colors flex items-center gap-3">
         <span class="material-symbols-outlined text-primary">${doc.icon}</span>
         <div class="flex-1">
@@ -1989,7 +1989,7 @@ function renderKpiPhaseCards(data) {
     const successPct = s.success_rate || 0;
     const limitPct = s.limit_hit_rate || 0;
     const barW = Math.min(100, Math.max(0, successPct));
-    return `<div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-5">
+    return `<div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5">
       <div class="flex items-center gap-2 mb-3">
         <span class="material-symbols-outlined text-${phaseColors[p]} text-lg">${phaseIcons[p]}</span>
         <h4 class="text-sm font-headline font-bold uppercase">${p}</h4>
@@ -2527,14 +2527,6 @@ const STYLE_COLORS = [
   { key: 'btn-text', label: 'Texto botón', light: '#ffffff', dark: '#001a40' },
 ];
 
-function _hexToRgb(hex) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  return r+','+g+','+b;
-}
-function _rgbToHex(rgb) {
-  const [r,g,b] = rgb.split(',').map(Number);
-  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
-}
 
 const STYLE_PRESETS = [
   { name: 'Default', light: {}, dark: {} },
@@ -2637,8 +2629,7 @@ function loadStyles() {
   }
 }
 
-// Keys that use rgb triplet format (r,g,b) instead of hex
-const _RGB_KEYS = { card: '--c-card', sidebar: '--c-sidebar' };
+// No more RGB triplet keys — all colors use hex now
 
 // All style overrides go through a single <style> element for maximum specificity
 let _styleOverrideState = {};
@@ -2655,10 +2646,7 @@ function _flushStyleOverrides() {
   const s = _styleOverrideState;
   let vars = '';
   for (const [key, val] of Object.entries(s)) {
-    if (key in _RGB_KEYS) {
-      const rgb = _hexToRgb(val);
-      vars += _RGB_KEYS[key] + ':' + rgb + '!important;';
-      if (key === 'sidebar') vars += '--c-topbar:' + rgb + '!important;';
+    if (key === 'sidebar') { vars += '--c-sidebar:' + val + '!important;--c-topbar:' + val + '!important;';
     } else if (key === 'bg') { vars += '--c-bg:' + val + '!important;';
     } else if (key === 'surface') { vars += '--c-surface:' + val + '!important;';
     } else if (key === 'on-surface') { vars += '--c-on-surface:' + val + '!important;--c-on-bg:' + val + '!important;';
@@ -2925,7 +2913,7 @@ function renderNotesList(notes) {
     var preview = (n.content || '').substring(0, 150).replace(/</g, '&lt;');
     if ((n.content || '').length > 150) preview += '…';
     var updated = n.updated_at ? new Date(n.updated_at).toLocaleDateString() : '';
-    var r = '<div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + escJsAttr(n.id) + '\')">';
+    var r = '<div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + escJsAttr(n.id) + '\')">';
     r += '<div class="flex justify-between items-start mb-2">';
     r += '<h4 class="font-bold text-sm text-on-surface truncate flex-1">' + escHtml(n.title || 'Sin título') + '</h4>';
     r += '<button onclick="event.stopPropagation();deleteNoteConfirm(\'' + escJsAttr(n.id) + '\')" class="opacity-0 group-hover:opacity-100 p-1 hover:bg-error-container rounded-lg transition-all" title="Eliminar">';
@@ -3040,7 +3028,7 @@ async function loadRoutines() {
                         r.last_status === 'error' ? '<span class="text-error text-xs">Error</span>' :
                         '<span class="text-on-surface-variant text-xs">\u2014</span>';
     const lastRun = r.last_run_at ? new Date(r.last_run_at).toLocaleString() : 'Nunca';
-    return `<div class="bg-[rgb(var(--c-card))] rounded-xl p-4 flex items-center justify-between gap-4">
+    return `<div class="bg-[var(--c-card)] rounded-xl p-4 flex items-center justify-between gap-4">
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span class="font-medium text-sm text-on-surface truncate">${escHtml(r.name)}</span>
