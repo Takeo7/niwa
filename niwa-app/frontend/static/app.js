@@ -2792,11 +2792,12 @@ function _applySavedStyles() {
 
   // Clear previous custom props first (so defaults from CSS take over for unset ones)
   STYLE_COLORS.forEach(c => {
-    if (c.key in _RGB_KEYS) { root.removeProperty(_RGB_KEYS[c.key]); }
+    if (c.key === 'btn-primary') { root.removeProperty('--c-primary'); root.removeProperty('--c-tint'); }
+    else if (c.key === 'btn-text') { root.removeProperty('--c-on-primary'); }
+    else if (c.key in _RGB_KEYS) { root.removeProperty(_RGB_KEYS[c.key]); }
     else root.removeProperty('--c-' + c.key);
     if (c.key === 'on-surface') root.removeProperty('--c-on-bg');
     if (c.key === 'sidebar') root.removeProperty('--c-topbar');
-    if (c.key === 'btn-primary') root.removeProperty('--c-tint');
   });
   root.removeProperty('--c-bg');
 
