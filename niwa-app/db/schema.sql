@@ -134,6 +134,29 @@ CREATE TABLE IF NOT EXISTS routines (
     updated_at TEXT NOT NULL
 );
 
+-- ── Task metrics (executor pipeline tracking) ──
+CREATE TABLE IF NOT EXISTS task_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    phase TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL,
+    error_message TEXT,
+    hit_limit INTEGER NOT NULL DEFAULT 0,
+    timestamp TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_metrics_task_id ON task_metrics(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_metrics_phase ON task_metrics(phase);
+CREATE INDEX IF NOT EXISTS idx_task_metrics_timestamp ON task_metrics(timestamp);
+
+-- ── Healthchecks (monitoring history) ──
+CREATE TABLE IF NOT EXISTS healthchecks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+
 -- ── Settings (key-value store for app config) ──
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

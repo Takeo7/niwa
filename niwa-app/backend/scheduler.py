@@ -418,7 +418,7 @@ BUILTIN_ROUTINES = [
         "name": "Idle project review",
         "description": "Creates improvement tasks for projects with zero open tasks.",
         "schedule": "0 9 * * 1-5",
-        "enabled": False,
+        "enabled": True,
         "action": "create_task",
         "action_config": {
             "title": "Review idle projects",
@@ -453,6 +453,34 @@ BUILTIN_ROUTINES = [
             "timeout": 30,
         },
         "notify_channel": "telegram",
+    },
+    {
+        "id": "task-review",
+        "name": "Stuck/blocked task review",
+        "description": "Every 15 minutes, checks for tasks stuck in en_progreso (>30 min no update) or bloqueada. Notifies if found.",
+        "schedule": "*/15 * * * *",
+        "enabled": True,
+        "action": "script",
+        "action_config": {
+            "command": "python3 -c \"\nimport sqlite3, os\nfrom datetime import datetime, timezone, timedelta\ndb = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')\nc = sqlite3.connect(db)\nnow = datetime.now(timezone.utc)\nblocked = c.execute(\\\"SELECT id, title FROM tasks WHERE status='bloqueada'\\\").fetchall()\nstuck = []\nfor r in c.execute(\\\"SELECT id, title, updated_at FROM tasks WHERE status='en_progreso'\\\").fetchall():\n    try:\n        ua = datetime.fromisoformat(r[2].replace('Z','+00:00'))\n        if ua.tzinfo is None: ua = ua.replace(tzinfo=timezone.utc)\n        if (now - ua).total_seconds() > 1800:\n            stuck.append(r)\n    except Exception:\n        pass\nif not blocked and not stuck:\n    exit(0)\nlines = []\nfor b in blocked:\n    lines.append(f'BLOCKED: {b[1]} ({b[0][:8]})')\nfor s in stuck:\n    lines.append(f'STUCK: {s[1]} ({s[0][:8]})')\nprint(chr(10).join(lines))\n\"",
+            "timeout": 30,
+        },
+        "notify_channel": "telegram",
+    },
+    {
+        "id": "daily-improvement",
+        "name": "Daily improvement suggestion",
+        "description": "Once a day, creates a task suggesting one small improvement for the system.",
+        "schedule": "0 9 * * 1-5",
+        "enabled": False,
+        "action": "create_task",
+        "action_config": {
+            "title": "Daily improvement suggestion",
+            "description": "Review recent activity, code quality, and system health. Suggest ONE small, concrete improvement (max 15 min) that can be done today. Focus on: code cleanup, test coverage, documentation, or automation.",
+            "area": "sistema",
+            "priority": "baja",
+        },
+        "notify_channel": "none",
     },
 ]
 

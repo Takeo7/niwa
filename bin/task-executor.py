@@ -79,15 +79,17 @@ HEARTBEAT_SECONDS = int(ENV.get("NIWA_EXECUTOR_HEARTBEAT_SECONDS", "60"))
 # ────────────────────────── logging ──────────────────────────
 LOG_PATH = INSTALL_DIR / "logs" / "executor.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+from logging.handlers import RotatingFileHandler
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(LOG_PATH)),
+        RotatingFileHandler(str(LOG_PATH), maxBytes=10 * 1024 * 1024, backupCount=3),
     ],
 )
 log = logging.getLogger("niwa-executor")
+MAX_CONSECUTIVE_FAILURES = int(ENV.get("NIWA_EXECUTOR_MAX_FAILURES", "3"))
 
 
 # ────────────────────────── DB helpers ──────────────────────────
@@ -273,15 +275,21 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
 
 # ────────────────────────── main loop ──────────────────────────
 _running = True
+_active_proc: Optional[subprocess.Popen] = None
 
 
 def _shutdown(signum, frame):
     global _running
     log.info("Received signal %d, shutting down...", signum)
     _running = False
+    # Kill active LLM subprocess so we don't wait up to TIMEOUT_SECONDS
+    if _active_proc and _active_proc.poll() is None:
+        log.info("Terminating active subprocess (pid %d)...", _active_proc.pid)
+        _active_proc.terminate()
 
 
 def main() -> None:
+    global _active_proc
     log.info("Niwa executor starting (db=%s, poll=%ds, timeout=%ds)",
              DB_PATH, POLL_SECONDS, TIMEOUT_SECONDS)
     if not LLM_COMMAND:
@@ -291,6 +299,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    consecutive_failures = 0
+
     while _running:
         try:
             task = _claim_next_task()
@@ -299,6 +309,8 @@ def main() -> None:
                 continue
             log.info("→ task %s: %s", task["id"], task["title"])
             project_dir = _resolve_project_dir(task["project_id"])
+            if not project_dir and task["project_id"]:
+                log.warning("Project dir not found for %s, using $HOME", task["project_id"])
             cwd = project_dir or Path.home()
             prompt = _build_prompt(task, project_dir)
             # Heartbeat keeps updated_at fresh while the LLM runs (could be 20+ min).
@@ -307,16 +319,24 @@ def main() -> None:
             try:
                 success, output = _run_llm(prompt, cwd)
             finally:
+                _active_proc = None
                 heartbeat.stop()
                 heartbeat.join(timeout=2)
             if success:
                 _finish_task(task["id"], "hecha", output)
                 _record_event(task["id"], "completed", {"executor": "niwa-executor"})
                 log.info("✓ task %s done", task["id"])
+                consecutive_failures = 0
             else:
                 _finish_task(task["id"], "bloqueada", output)
                 _record_event(task["id"], "status_changed", {"to": "bloqueada", "reason": "executor failure"})
                 log.warning("✗ task %s blocked: %s", task["id"], output[:200])
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    log.error("Pausing: %d consecutive failures — LLM command may be broken. Sleeping %ds.",
+                              consecutive_failures, POLL_SECONDS * 10)
+                    time.sleep(POLL_SECONDS * 10)
+                    consecutive_failures = 0
         except KeyboardInterrupt:
             break
         except Exception as e:
