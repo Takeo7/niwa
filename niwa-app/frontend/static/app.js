@@ -1562,12 +1562,12 @@ async function loadConfig() {
         ${!ig.telegram_bot_token_set ? '<div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"><p><b>Setup:</b> 1. Abre @BotFather en Telegram y crea un bot con /newbot</p><p>2. Copia el token que te da (ej: 123456:ABC-DEF...)</p><p>3. Abre @userinfobot para obtener tu Chat ID numérico</p><p>4. Pega ambos aquí y dale a Guardar, luego Test</p></div>' : ''}
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bot Token</label>
-            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? ig.telegram_bot_token : '123456:ABC-DEF1234...'}" value="">
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bot Token ${ig.telegram_bot_token_set ? '<span class="text-tertiary">(guardado)</span>' : ''}</label>
+            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? 'Guardado — deja vacío para mantener' : '123456:ABC-DEF1234...'}" value="">
           </div>
           <div>
             <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat ID</label>
-            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_chat_id || '123456789'}" value="">
+            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="123456789" value="${escHtml(ig.telegram_chat_id || '')}">
           </div>
         </div>
         <div class="flex gap-2">
@@ -1748,8 +1748,12 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
 async function saveIntegration(group) {
   const payload = {};
   if (group === 'telegram') {
-    payload.telegram_bot_token = document.getElementById('int-telegram-token').value.trim();
-    payload.telegram_chat_id = document.getElementById('int-telegram-chatid').value.trim();
+    const token = document.getElementById('int-telegram-token').value.trim();
+    const chatId = document.getElementById('int-telegram-chatid').value.trim();
+    // Only send values the user actually typed — empty means "keep current"
+    if (token) payload.telegram_bot_token = token;
+    if (chatId) payload.telegram_chat_id = chatId;
+    if (!token && !chatId) { toast('Nada que guardar — los campos vacíos mantienen el valor actual'); return; }
   } else if (group === 'webhook') {
     payload.webhook_url = document.getElementById('int-webhook-url').value.trim();
   } else if (group === 'llm') {
