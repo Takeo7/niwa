@@ -643,7 +643,7 @@ function renderKanbanCard(t, isDone) {
 
   var execStatus = renderExecPhase(t);
 
-  var r = '<div class="group relative bg-surface-container-high p-5 rounded-lg hover:bg-surface-bright transition-all duration-300 cursor-pointer ' + statusBorder + (isDone ? ' bg-surface-container-high/50' : '') + '" data-task-id="' + escHtml(String(t.id)) + '" onclick="openTaskById(\'' + escJsAttr(t.id) + '\')">';
+  var r = '<div class="group relative niwa-card p-5 rounded-lg hover:bg-surface-bright transition-all duration-300 cursor-pointer ' + statusBorder + (isDone ? ' opacity-60' : '') + '" data-task-id="' + escHtml(String(t.id)) + '" onclick="openTaskById(\'' + escJsAttr(t.id) + '\')">';
   r += '<div class="flex justify-between items-start mb-2">';
   r += '<span class="material-symbols-outlined text-on-surface-variant/30 cursor-grab active:cursor-grabbing group-hover:text-primary/50 drag-handle" onclick="event.stopPropagation()">drag_indicator</span>';
   r += '<div class="flex items-center gap-1.5 flex-wrap justify-end">' + areaBadge + projectBadge + '</div>';
@@ -866,7 +866,7 @@ function renderProjectCard(p, settings) {
     urlBadge = '<a href="' + escHtml(p.url) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary hover:bg-primary/20 transition-colors"><span class="material-symbols-outlined text-xs">language</span>' + escHtml(_hostname) + '</a>';
   }
   var html = '';
-  html += '<div class="bg-surface-container-high rounded-xl p-6 hover:bg-surface-bright transition-all cursor-pointer group" onclick="openProject(\'' + encodeURIComponent(p.name) + '\')">';
+  html += '<div class="niwa-card rounded-xl p-6 hover:bg-surface-bright transition-all cursor-pointer group" onclick="openProject(\'' + encodeURIComponent(p.name) + '\')">';
   html += '<div class="flex justify-between items-start mb-4">';
   html += '<span class="material-symbols-outlined text-primary text-2xl">folder_open</span>';
   html += '<span class="text-[10px] font-bold text-on-surface-variant uppercase tracking-tighter">' + total + ' tasks</span>';
@@ -1005,7 +1005,7 @@ function renderProjectTypeChart(projectTasks, total, done) {
     }
     var pct = Math.round((done / total) * 100);
     var _d = '<div style="width:120px;height:120px;border-radius:50%;background:conic-gradient(' + gradientParts.join(',') + ');" class="flex items-center justify-center">';
-    _d += '<div class="w-[76px] h-[76px] rounded-full bg-[var(--c-card)] flex flex-col items-center justify-center">';
+    _d += '<div class="w-[76px] h-[76px] rounded-full niwa-card flex flex-col items-center justify-center">';
     _d += '<span class="text-lg font-headline font-bold text-on-surface leading-none">' + pct + '%</span>';
     _d += '<span class="text-[9px] text-on-surface-variant uppercase">hecho</span>';
     _d += '</div>';
@@ -1517,7 +1517,7 @@ async function loadDocs() {
     if (!content) continue;
     const lines = content.split('\n').length;
     const preview = content.split('\n').slice(0, 3).join(' ').substring(0, 150);
-    html += `<details class="bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden">
+    html += `<details class="niwa-card rounded-2xl shadow-sm overflow-hidden">
       <summary class="p-5 cursor-pointer hover:bg-surface-bright/30 transition-colors flex items-center gap-3">
         <span class="material-symbols-outlined text-primary">${doc.icon}</span>
         <div class="flex-1">
@@ -1551,7 +1551,7 @@ async function loadConfig() {
 
   // Integrations panel
   let integrationsHtml = `
-    <div class="bg-surface-container-high rounded-lg p-6 mb-4">
+    <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-3">
           <span class="material-symbols-outlined text-secondary">integration_instructions</span>
@@ -1700,7 +1700,7 @@ async function loadConfig() {
     </div>`;
 
   let settingsHtml = `
-    <div class="bg-surface-container-high rounded-lg p-6 mb-4">
+    <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
         <span class="material-symbols-outlined text-tertiary">tune</span>
         <h3 class="text-sm font-semibold uppercase tracking-wider">${_t('settings.title')}</h3>
@@ -1719,7 +1719,7 @@ async function loadConfig() {
     </div>`;
 
   box.innerHTML = integrationsHtml + settingsHtml + (data ? Object.entries(data).map(([key, val]) => `
-    <div class="bg-surface-container-high rounded-lg p-6 mb-4">
+    <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
         <span class="material-symbols-outlined text-primary">settings</span>
         <h3 class="text-sm font-semibold uppercase tracking-wider">${key}</h3>
@@ -1947,7 +1947,7 @@ async function loadStats() {
     { label: _t('stats.open'), val: stats.open, icon: 'pending', color: 'secondary' },
     { label: _t('stats.done'), val: stats.done, icon: 'check_circle', color: 'tertiary' },
     { label: _t('stats.overdue'), val: stats.overdue, icon: 'warning', color: 'error' },
-  ].map(c => `<div class="bg-surface-container-high p-6 rounded-lg">
+  ].map(c => `<div class="niwa-card p-6 rounded-lg">
     <div class="flex justify-between items-start mb-3"><span class="material-symbols-outlined text-${c.color}">${c.icon}</span></div>
     <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">${c.label}</p>
     <p class="text-3xl font-headline font-bold">${c.val||0}</p>
@@ -1989,7 +1989,7 @@ function renderKpiPhaseCards(data) {
     const successPct = s.success_rate || 0;
     const limitPct = s.limit_hit_rate || 0;
     const barW = Math.min(100, Math.max(0, successPct));
-    return `<div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5">
+    return `<div class="niwa-card rounded-2xl shadow-sm p-5">
       <div class="flex items-center gap-2 mb-3">
         <span class="material-symbols-outlined text-${phaseColors[p]} text-lg">${phaseIcons[p]}</span>
         <h4 class="text-sm font-headline font-bold uppercase">${p}</h4>
@@ -2923,7 +2923,7 @@ function renderNotesList(notes) {
     var preview = (n.content || '').substring(0, 150).replace(/</g, '&lt;');
     if ((n.content || '').length > 150) preview += '…';
     var updated = n.updated_at ? new Date(n.updated_at).toLocaleDateString() : '';
-    var r = '<div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + escJsAttr(n.id) + '\')">';
+    var r = '<div class="niwa-card rounded-2xl shadow-sm p-5 hover:shadow-md transition-all cursor-pointer group" onclick="openNoteEditor(\'' + escJsAttr(n.id) + '\')">';
     r += '<div class="flex justify-between items-start mb-2">';
     r += '<h4 class="font-bold text-sm text-on-surface truncate flex-1">' + escHtml(n.title || 'Sin título') + '</h4>';
     r += '<button onclick="event.stopPropagation();deleteNoteConfirm(\'' + escJsAttr(n.id) + '\')" class="opacity-0 group-hover:opacity-100 p-1 hover:bg-error-container rounded-lg transition-all" title="Eliminar">';
@@ -3038,7 +3038,7 @@ async function loadRoutines() {
                         r.last_status === 'error' ? '<span class="text-error text-xs">Error</span>' :
                         '<span class="text-on-surface-variant text-xs">\u2014</span>';
     const lastRun = r.last_run_at ? new Date(r.last_run_at).toLocaleString() : 'Nunca';
-    return `<div class="bg-[var(--c-card)] rounded-xl p-4 flex items-center justify-between gap-4">
+    return `<div class="niwa-card rounded-xl p-4 flex items-center justify-between gap-4">
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span class="font-medium text-sm text-on-surface truncate">${escHtml(r.name)}</span>

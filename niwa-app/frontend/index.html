@@ -60,7 +60,6 @@ body{background:var(--c-bg)!important;color:var(--c-on-surface)!important}
 .nav-active{color:var(--c-primary)!important;background:rgba(var(--c-primary),.08)!important}
 .nav-active::before{background:var(--c-primary)!important}
 .nav-item{color:var(--c-nav-text)!important}.nav-item:hover{color:var(--c-nav-hover)!important;background:var(--c-nav-hover-bg)!important}
-.bg-\[var\(--c-card\)\]{background-color:var(--c-card)!important}
 *{transition:background-color .2s,color .2s,border-color .2s}
 </style>
 <script>
@@ -183,7 +182,7 @@ tailwind.config = {
 <section id="view-dashboard" class="view-section active">
   <!-- KPI Row -->
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Hoy</span>
         <span class="material-symbols-outlined text-primary text-lg">today</span>
@@ -191,7 +190,7 @@ tailwind.config = {
       <div id="kpi-today" class="text-2xl font-headline font-bold">--</div>
       <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-today-sub">pendientes</p>
     </div>
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm cursor-pointer" onclick="switchView('system');setTimeout(()=>switchSystemTab('routines'),100)">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm cursor-pointer" onclick="switchView('system');setTimeout(()=>switchSystemTab('routines'),100)">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Rutinas</span>
         <span class="material-symbols-outlined text-secondary text-lg">schedule</span>
@@ -206,7 +205,7 @@ tailwind.config = {
     <!-- Left column -->
     <div class="col-span-12 xl:col-span-8 space-y-6">
       <!-- Needs attention -->
-      <section class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Necesita tu atención</h3>
           <a class="text-[10px] text-primary hover:underline font-medium cursor-pointer" onclick="switchView('kanban')">Ver kanban</a>
@@ -215,7 +214,7 @@ tailwind.config = {
       </section>
 
       <!-- Projects overview -->
-      <section class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Proyectos</h3>
           <a class="text-[10px] text-primary hover:underline font-medium cursor-pointer" onclick="switchView('projects')">Ver todos</a>
@@ -224,7 +223,7 @@ tailwind.config = {
       </section>
 
       <!-- Velocity -->
-      <section class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Velocidad (7d)</h3>
@@ -235,7 +234,7 @@ tailwind.config = {
       </section>
 
       <!-- Pipeline / Bottlenecks -->
-      <section class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6" id="pipeline-card">
+      <section class="niwa-card rounded-2xl shadow-sm p-6" id="pipeline-card">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider" id="pipeline-title">Pipeline</h3>
@@ -260,12 +259,12 @@ tailwind.config = {
     <!-- Right column -->
     <div class="col-span-12 xl:col-span-4 space-y-6">
       <!-- Activity feed -->
-      <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5 flex flex-col">
+      <div class="niwa-card rounded-2xl shadow-sm p-5 flex flex-col">
         <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider mb-4">Actividad reciente</h3>
         <div id="activity-feed" class="space-y-3 overflow-y-auto max-h-[400px]"></div>
       </div>
       <!-- Mi día -->
-      <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-5">
+      <div class="niwa-card rounded-2xl shadow-sm p-5">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Mi día</h3>
           <span class="text-[10px] text-on-surface-variant" id="dash-myday-date"></span>
@@ -329,7 +328,7 @@ tailwind.config = {
     </div>
     <div id="project-live-preview"></div>
     <div class="grid grid-cols-12 gap-6">
-      <section class="col-span-12 lg:col-span-7 bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden flex flex-col">
+      <section class="col-span-12 lg:col-span-7 niwa-card rounded-2xl shadow-sm overflow-hidden flex flex-col">
         <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
           <h3 class="text-sm font-semibold flex items-center gap-2">
             <span class="material-symbols-outlined text-on-surface-variant text-lg">list</span>Project Tasks
@@ -345,7 +344,7 @@ tailwind.config = {
         </div>
       </section>
       <section class="col-span-12 lg:col-span-5 flex flex-col gap-6">
-        <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6 flex-1">
+        <div class="niwa-card rounded-2xl shadow-sm p-6 flex-1">
           <div class="flex justify-between items-center mb-5">
             <h3 class="text-sm font-semibold flex items-center gap-2">
               <span class="material-symbols-outlined text-primary text-lg">insights</span>Task Breakdown
@@ -361,7 +360,7 @@ tailwind.config = {
         </div>
       </section>
       <!-- Project Files -->
-      <section class="col-span-12 bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden">
+      <section class="col-span-12 niwa-card rounded-2xl shadow-sm overflow-hidden">
         <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
           <h3 class="text-sm font-semibold flex items-center gap-2">
             <span class="material-symbols-outlined text-on-surface-variant text-lg">folder_open</span>Archivos
@@ -392,7 +391,7 @@ tailwind.config = {
         </div>
       </section>
       <!-- Live Preview -->
-      <section id="project-preview-section" class="col-span-12 bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden hidden">
+      <section id="project-preview-section" class="col-span-12 niwa-card rounded-2xl shadow-sm overflow-hidden hidden">
         <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
           <h3 class="text-sm font-semibold flex items-center gap-2">
             <span class="material-symbols-outlined text-tertiary text-lg">play_circle</span>Live Preview
@@ -424,7 +423,7 @@ tailwind.config = {
           <iframe id="project-preview-iframe" class="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups" onload="document.getElementById('preview-loader').style.display='none'"></iframe>
         </div>
       </section>
-      <section class="col-span-12 bg-[var(--c-card)] rounded-2xl shadow-sm p-8">
+      <section class="col-span-12 niwa-card rounded-2xl shadow-sm p-8">
         <div class="flex items-center justify-between mb-6">
           <h3 class="text-lg font-headline font-bold flex items-center gap-3">
             <span class="material-symbols-outlined text-primary">analytics</span>Project Activity Stream
@@ -447,28 +446,28 @@ tailwind.config = {
 
   <!-- Stats Cards -->
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Total</span>
         <span class="material-symbols-outlined text-primary text-lg">functions</span>
       </div>
       <p class="text-2xl font-headline font-bold text-on-surface" id="history-stat-total">0</p>
     </div>
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Exitosas</span>
         <span class="material-symbols-outlined text-tertiary text-lg">check_circle</span>
       </div>
       <p class="text-2xl font-headline font-bold text-tertiary" id="history-stat-success">0</p>
     </div>
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Fallidas</span>
         <span class="material-symbols-outlined text-error text-lg">error</span>
       </div>
       <p class="text-2xl font-headline font-bold text-error" id="history-stat-failed">0</p>
     </div>
-    <div class="bg-[var(--c-card)] p-5 rounded-2xl shadow-sm">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
       <div class="flex justify-between items-start mb-3">
         <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Duración Prom.</span>
         <span class="material-symbols-outlined text-secondary text-lg">timer</span>
@@ -478,7 +477,7 @@ tailwind.config = {
   </div>
 
   <!-- Filters -->
-  <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-4 mb-6">
+  <div class="niwa-card rounded-2xl shadow-sm p-4 mb-6">
     <div class="flex flex-wrap items-center gap-3">
       <select id="history-filter-project" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[160px]">
         <option value="" selected>Todos los proyectos</option>
@@ -507,7 +506,7 @@ tailwind.config = {
   </div>
 
   <!-- Table -->
-  <div class="bg-[var(--c-card)] rounded-2xl shadow-sm overflow-hidden">
+  <div class="niwa-card rounded-2xl shadow-sm overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm" id="history-table">
         <thead>
@@ -533,10 +532,10 @@ tailwind.config = {
   <div id="history-pagination" class="flex items-center justify-between mt-4 text-sm text-on-surface-variant">
     <span id="history-page-info">Mostrando 0 de 0</span>
     <div class="flex gap-2">
-      <button id="history-prev" class="px-3 py-1.5 rounded-lg bg-[var(--c-card)] border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
+      <button id="history-prev" class="px-3 py-1.5 rounded-lg niwa-card border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
         <span class="material-symbols-outlined text-sm">chevron_left</span>
       </button>
-      <button id="history-next" class="px-3 py-1.5 rounded-lg bg-[var(--c-card)] border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
+      <button id="history-next" class="px-3 py-1.5 rounded-lg niwa-card border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
         <span class="material-symbols-outlined text-sm">chevron_right</span>
       </button>
     </div>
@@ -568,17 +567,17 @@ tailwind.config = {
   <div id="sys-overview" class="sys-panel">
     <div class="grid grid-cols-12 gap-6">
       <div class="col-span-12 lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-6">
-        <div class="bg-surface-container-high p-6 rounded-lg">
+        <div class="niwa-card p-6 rounded-lg">
           <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-primary">memory</span></div>
           <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Total Tasks</h3>
           <div id="sys-total" class="text-4xl font-headline font-bold text-on-surface">--</div>
         </div>
-        <div class="bg-surface-container-high p-6 rounded-lg">
+        <div class="niwa-card p-6 rounded-lg">
           <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-secondary">layers</span></div>
           <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Open Tasks</h3>
           <div id="sys-open" class="text-4xl font-headline font-bold text-on-surface">--</div>
         </div>
-        <div class="bg-surface-container-high p-6 rounded-lg">
+        <div class="niwa-card p-6 rounded-lg">
           <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-tertiary">database</span></div>
           <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Done Today</h3>
           <div id="sys-done-today" class="text-4xl font-headline font-bold text-on-surface">--</div>
@@ -600,7 +599,7 @@ tailwind.config = {
       </div>
       <!-- Stats by status -->
       <div class="col-span-12">
-        <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+        <div class="niwa-card rounded-2xl shadow-sm p-6">
           <h3 class="text-sm font-semibold mb-4">Tasks by Status</h3>
           <div id="sys-by-status" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"></div>
         </div>
@@ -630,7 +629,7 @@ tailwind.config = {
 
   <!-- Routines Tab -->
   <div id="sys-routines" class="sys-panel hidden">
-    <div class="bg-surface-container-high p-6 rounded-lg">
+    <div class="niwa-card p-6 rounded-lg">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-3">
           <span class="material-symbols-outlined text-secondary">schedule</span>
@@ -652,7 +651,7 @@ tailwind.config = {
   <!-- Stats Tab -->
   <div id="sys-stats" class="sys-panel hidden">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8" id="stats-cards"></div>
-    <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+    <div class="niwa-card rounded-2xl shadow-sm p-6">
       <h3 class="text-sm font-semibold mb-4">By Priority</h3>
       <div id="stats-priority" class="grid grid-cols-2 md:grid-cols-5 gap-4"></div>
     </div>
@@ -663,15 +662,15 @@ tailwind.config = {
     <h3 class="text-xl sm:text-2xl font-headline font-bold mb-6">Pipeline KPIs</h3>
     <!-- Overall summary -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-      <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6 text-center">
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
         <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Completed Today</p>
         <p id="kpi-completed-today" class="text-3xl font-headline font-bold text-green-500">--</p>
       </div>
-      <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6 text-center">
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
         <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Blocked Today</p>
         <p id="kpi-blocked-today" class="text-3xl font-headline font-bold text-error">--</p>
       </div>
-      <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6 text-center">
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
         <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Avg Pipeline Duration</p>
         <p id="kpi-avg-pipeline" class="text-3xl font-headline font-bold text-primary">--</p>
       </div>
@@ -679,7 +678,7 @@ tailwind.config = {
     <!-- Per-phase cards -->
     <div id="kpi-phase-cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8"></div>
     <!-- Bar chart -->
-    <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6 mb-8">
+    <div class="niwa-card rounded-2xl shadow-sm p-6 mb-8">
       <h4 class="text-sm font-headline font-bold mb-4 text-on-surface-variant uppercase">Completions vs Blocks (14 days)</h4>
       <div id="kpi-bar-chart" class="flex items-end gap-1 h-40 overflow-x-auto"></div>
       <div id="kpi-bar-labels" class="flex gap-1 mt-1 text-[9px] text-on-surface-variant overflow-x-auto"></div>
@@ -690,7 +689,7 @@ tailwind.config = {
       </div>
     </div>
     <!-- Limit-hit events table -->
-    <div class="bg-[var(--c-card)] rounded-2xl shadow-sm p-6">
+    <div class="niwa-card rounded-2xl shadow-sm p-6">
       <h4 class="text-sm font-headline font-bold mb-4 text-on-surface-variant uppercase">Recent Limit-Hit Events</h4>
       <div id="kpi-limit-table" class="overflow-x-auto"></div>
     </div>
@@ -820,7 +819,7 @@ tailwind.config = {
 <!-- Note Editor Modal -->
 <div id="note-editor-modal" class="fixed inset-0 z-[200] hidden">
   <div class="absolute inset-0 bg-[rgba(var(--c-modal-overlay))]" onclick="closeNoteEditor()"></div>
-  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl bg-[var(--c-card)] rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl niwa-card rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
     <div class="flex justify-between items-center mb-4">
       <h3 class="text-lg font-headline font-bold" id="note-editor-title">Nueva nota</h3>
       <button onclick="closeNoteEditor()" class="p-1 hover:bg-surface-bright rounded-lg">
@@ -848,7 +847,7 @@ tailwind.config = {
 <!-- Routine Editor Modal -->
 <div id="routine-editor-modal" class="fixed inset-0 z-[200] hidden">
   <div class="absolute inset-0 bg-[rgba(var(--c-modal-overlay))]" onclick="closeRoutineEditor()"></div>
-  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-[var(--c-card)] rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg niwa-card rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
     <div class="flex justify-between items-center mb-4">
       <h3 class="text-lg font-headline font-bold" id="routine-editor-title">Nueva rutina</h3>
       <button onclick="closeRoutineEditor()" class="p-1 hover:bg-surface-bright rounded-lg">
@@ -917,7 +916,7 @@ tailwind.config = {
 <!-- ============ TASK EDIT MODAL ============ -->
 <div id="task-modal" class="fixed inset-0 z-[100] hidden">
   <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeTaskModal()"></div>
-  <div class="absolute right-0 top-0 h-full w-full max-w-xl bg-[var(--c-card)] overflow-y-auto shadow-2xl">
+  <div class="absolute right-0 top-0 h-full w-full max-w-xl niwa-card overflow-y-auto shadow-2xl">
     <div class="p-4 sm:p-8">
       <div class="flex justify-between items-center mb-8">
         <h3 id="task-modal-title" class="text-xl font-headline font-bold">New Task</h3>
@@ -1024,7 +1023,7 @@ tailwind.config = {
 <!-- ============ CONNECTION MODAL ============ -->
 <div id="search-overlay" class="fixed inset-0 z-[110] hidden">
   <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeSearchOverlay()"></div>
-  <div class="absolute top-20 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-full max-w-2xl bg-[var(--c-card)] rounded-2xl shadow-sm p-4 sm:p-6">
+  <div class="absolute top-20 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-full max-w-2xl niwa-card rounded-2xl shadow-sm p-4 sm:p-6">
     <div class="relative mb-4">
       <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
       <input id="search-input" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 pl-10 pr-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50" data-i18n-placeholder="search.placeholder" placeholder="Buscar tareas, proyectos..." autofocus oninput="performSearch(this.value)">
