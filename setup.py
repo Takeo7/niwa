@@ -1290,19 +1290,100 @@ def _install_launchd_agent(cfg: WizardConfig, executor_path: Path) -> None:
 
 
 def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
-    """User-level systemd unit (no sudo needed)."""
-    unit_dir = Path.home() / ".config" / "systemd" / "user"
-    unit_dir.mkdir(parents=True, exist_ok=True)
-    unit_name = f"niwa-{cfg.instance_name}-executor.service"
-    unit_path = unit_dir / unit_name
+    """Install systemd unit for the executor. If running as root, creates a
+    dedicated 'niwa' user (--dangerously-skip-permissions fails as root)."""
+    import grp
+    run_as_root = os.getuid() == 0
+    niwa_user = "niwa" if run_as_root else None
     log_path = cfg.niwa_home / "logs" / "executor.log"
-    unit = f"""[Unit]
+
+    if run_as_root:
+        # Create niwa user if needed
+        try:
+            subprocess.run(["id", "niwa"], capture_output=True, check=True)
+        except subprocess.CalledProcessError:
+            subprocess.run(["useradd", "-m", "-s", "/bin/bash", "niwa"], check=True)
+            ok("Created system user 'niwa' for the executor")
+        # Setup niwa home with copies/links
+        niwa_home = Path("/home/niwa") / f".{cfg.instance_name}"
+        niwa_home.mkdir(parents=True, exist_ok=True)
+        (niwa_home / "secrets").mkdir(parents=True, exist_ok=True)
+        (niwa_home / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy(str(cfg.niwa_home / "secrets" / "mcp.env"), str(niwa_home / "secrets" / "mcp.env"))
+        shutil.copy(str(executor_path), str(niwa_home / "bin" / "task-executor.py"))
+        # Data/logs in a shared location
+        shared_dir = Path("/opt") / cfg.instance_name
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        if not (shared_dir / "data").exists():
+            shutil.copytree(str(cfg.niwa_home / "data"), str(shared_dir / "data"))
+        if not (shared_dir / "logs").exists():
+            shutil.copytree(str(cfg.niwa_home / "logs"), str(shared_dir / "logs"))
+        # Update DB path in niwa user's env
+        env = _read_env_file(niwa_home / "secrets" / "mcp.env")
+        env["NIWA_DB_PATH"] = str(shared_dir / "data" / "niwa.sqlite3")
+        write_env_file(niwa_home / "secrets" / "mcp.env", env)
+        # Update compose to mount from shared dir
+        compose_path = cfg.niwa_home / "docker-compose.yml"
+        if compose_path.exists():
+            content = compose_path.read_text()
+            old_data_dir = str(cfg.niwa_home / "data")
+            if old_data_dir in content:
+                content = content.replace(old_data_dir, str(shared_dir / "data"))
+                compose_path.write_text(content)
+                info(f"Updated compose to mount {shared_dir / 'data'}")
+        # Symlinks from niwa home
+        for d in ("data", "logs"):
+            target = niwa_home / d
+            if target.exists() or target.is_symlink():
+                target.unlink() if target.is_symlink() else shutil.rmtree(str(target))
+            target.symlink_to(shared_dir / d)
+        subprocess.run(["chown", "-R", "niwa:niwa", str(niwa_home), str(shared_dir)], check=True)
+        subprocess.run(["loginctl", "enable-linger", "niwa"], capture_output=True)
+        executor_path = niwa_home / "bin" / "task-executor.py"
+        niwa_home_env = str(niwa_home)
+        log_path = shared_dir / "logs" / "executor.log"
+    else:
+        niwa_home_env = str(cfg.niwa_home)
+
+    unit_name = f"niwa-{cfg.instance_name}-executor.service"
+
+    if run_as_root:
+        # System-level unit running as niwa user
+        unit_dir = Path("/etc/systemd/system")
+        unit = f"""[Unit]
 Description=Niwa task executor ({cfg.instance_name})
 After=network.target
 
 [Service]
 Type=simple
-Environment="NIWA_HOME={cfg.niwa_home}"
+User=niwa
+Group=niwa
+Environment="NIWA_HOME={niwa_home_env}"
+ExecStart=/usr/bin/env python3 {executor_path}
+StandardOutput=append:{log_path}
+StandardError=append:{log_path}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"""
+        unit_path = unit_dir / unit_name
+        unit_path.write_text(unit)
+        ok(f"Wrote systemd unit: {unit_path} (runs as user niwa)")
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        result = subprocess.run(["systemctl", "enable", "--now", unit_name], capture_output=True, text=True)
+    else:
+        # User-level unit
+        unit_dir = Path.home() / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        unit = f"""[Unit]
+Description=Niwa task executor ({cfg.instance_name})
+After=network.target
+
+[Service]
+Type=simple
+Environment="NIWA_HOME={niwa_home_env}"
 ExecStart=/usr/bin/env python3 {executor_path}
 StandardOutput=append:{log_path}
 StandardError=append:{log_path}
@@ -1312,18 +1393,20 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 """
-    unit_path.write_text(unit)
-    ok(f"Wrote systemd unit: {unit_path}")
-    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-    result = subprocess.run(
-        ["systemctl", "--user", "enable", "--now", unit_name],
-        capture_output=True, text=True,
-    )
+        unit_path = unit_dir / unit_name
+        unit_path.write_text(unit)
+        ok(f"Wrote systemd unit: {unit_path}")
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name], capture_output=True, text=True)
+
     if result.returncode == 0:
         ok(f"Enabled and started {unit_name}")
     else:
         warn(f"systemctl enable failed: {result.stderr.strip()[:300]}")
-        warn(f"Enable manually: systemctl --user enable --now {unit_name}")
+        if run_as_root:
+            warn(f"Enable manually: systemctl enable --now {unit_name}")
+        else:
+            warn(f"Enable manually: systemctl --user enable --now {unit_name}")
 
 
 def _uninstall_task_executor(install_dir: Path, instance: str) -> None:

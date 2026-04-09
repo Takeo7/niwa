@@ -2,20 +2,24 @@
 
 > Personal MCP gateway with built-in task management, notes, platform ops and filesystem access — installable on any machine with Docker.
 
-**Status:** beta — feature-complete (install/uninstall/status, autonomous task execution, public exposure via Cloudflare). Validated on macOS (OrbStack). Linux paths included but not yet tested on a real fresh Linux machine.
+**Status:** beta — feature-complete and tested on both macOS (OrbStack) and Linux VPS (Ubuntu 24.04). Autonomous task execution verified end-to-end.
 
 ## What is Niwa
 
 Niwa is a self-contained Docker stack you install on your machine. It gives you:
 
 - **44 MCP tools** that any Claude/LLM client can call to manage your tasks, notes, projects, containers, and files.
-- **A web UI** (Niwa app) with 6 views: dashboard, kanban, projects, notes, history, system.
+- **A web UI** (Niwa app) with 6 views: dashboard, kanban, projects, notes, history, system (8 sub-tabs: overview, routines, logs, config, stats, KPIs, docs, styles).
 - **Two MCP gateway transports** (streamable HTTP + legacy SSE) so it works with both modern and older MCP clients (Claude Code, OpenClaw, custom builds).
 - **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.
-- **Optional task executor** (host-side launchd/systemd worker) that runs pending tasks via Claude / GPT (via `llm` CLI) / Gemini / custom command.
+- **Autonomous task executor** (host-side systemd/launchd worker) that runs pending tasks via Claude / GPT (via `llm` CLI) / Gemini / custom command. Supports API key, setup token, and OAuth authentication.
+- **Built-in scheduler** with 7 routines (healthcheck, daily backup, task review, idle project review, morning brief, daily summary, daily improvement).
+- **Web terminal** (ttyd) for server administration from the browser.
+- **Theme customization** with 14 color pickers, font/size/radius controls, and 6 presets.
+- **Integrations config** (Telegram, webhook, LLM provider) configurable from UI, API, or CLI.
 - **Aislamiento Docker** via socket-proxy: only one container ever touches the Docker socket.
 
-It runs as 5 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`) + spawns ephemeral MCP server containers per tool call. With the optional executor enabled, also a host-side launchd/systemd worker that polls the DB.
+It runs as 6 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`, `terminal`) + spawns ephemeral MCP server containers per tool call. The executor runs on the host as a systemd service (as a dedicated `niwa` user when installed as root).
 
 ## What you can do with it
 
