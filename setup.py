@@ -501,6 +501,7 @@ class WizardConfig:
         self.caddy_port: int = 18811
         self.app_port: int = 8080
         self.terminal_port: int = 7681
+        self.bind_host: str = "127.0.0.1"
         self.tokens: dict[str, str] = {}
         self.username: str = "arturo"
         self.password: str = ""
@@ -716,7 +717,12 @@ def step_credentials(cfg: WizardConfig) -> None:
 
 def step_ports(cfg: WizardConfig) -> None:
     header("Step 7 — Ports")
-    print("All ports are bound to 127.0.0.1 (loopback only) by default.")
+    cfg.bind_host = "127.0.0.1"
+    if prompt_bool("Is this a remote server/VPS (bind ports to all interfaces for external access)?", default=False):
+        cfg.bind_host = "0.0.0.0"
+        info("Ports will be accessible from outside. Make sure the app has a strong password.")
+    else:
+        print("All ports are bound to 127.0.0.1 (loopback only).")
     defaults = [
         ("Gateway streaming HTTP", "gateway_streaming_port", 18810),
         ("Gateway SSE legacy", "gateway_sse_port", 18812),
@@ -742,13 +748,50 @@ def step_ports(cfg: WizardConfig) -> None:
             break
 
 
+def _auto_install_nodejs_linux() -> bool:
+    """Try to install Node.js on Linux. Returns True if successful."""
+    if which("node"):
+        return True
+    info("Node.js not found — installing automatically...")
+    try:
+        r = subprocess.run(["apt-get", "update", "-qq"], capture_output=True, timeout=60)
+        r = subprocess.run(["apt-get", "install", "-y", "-qq", "nodejs", "npm"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and which("node"):
+            ok(f"Installed Node.js {subprocess.run(['node', '--version'], capture_output=True, text=True).stdout.strip()}")
+            return True
+    except Exception as e:
+        warn(f"Auto-install failed: {e}")
+    return False
+
+
+def _auto_install_claude() -> bool:
+    """Try to install Claude CLI via npm. Returns True if successful."""
+    if which("claude"):
+        return True
+    if not which("npm"):
+        warn("npm not found — cannot install Claude CLI automatically")
+        return False
+    info("Installing Claude CLI...")
+    try:
+        r = subprocess.run(["npm", "install", "-g", "@anthropic-ai/claude-code"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and which("claude"):
+            version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
+            ok(f"Installed Claude CLI {version}")
+            return True
+        warn(f"npm install failed: {r.stderr[:200]}")
+    except Exception as e:
+        warn(f"Auto-install failed: {e}")
+    return False
+
+
 def step_executor(cfg: WizardConfig) -> None:
-    header("Step 8 — Autonomous task execution (optional)")
-    print("Enable a background worker that polls Niwa for tasks marked 'pendiente'")
-    print("with assigned_to_yume=1 or assigned_to_claude=1, dispatches them to an")
-    print("LLM CLI, captures the output, and updates the task status.")
+    header("Step 8 — Autonomous task execution")
+    print("The executor is a background worker that picks up tasks marked 'pendiente',")
+    print("runs them via an LLM CLI (Claude, GPT, Gemini), and updates the status.")
     print()
-    if not prompt_bool("Enable autonomous task execution?", default=False):
+    if not prompt_bool("Enable autonomous task execution?", default=True):
         cfg.executor_enabled = False
         return
     cfg.executor_enabled = True
@@ -762,14 +805,23 @@ def step_executor(cfg: WizardConfig) -> None:
     else:
         binary = provider["binary"]
         if binary and not which(binary):
-            warn(f"'{binary}' not found in PATH.")
-            print_install_hint(binary)
-            warn(f"Auth hint after install: {provider['auth_hint']}")
-            warn("The executor will fail until the binary is available + authenticated.")
-            if not prompt_bool("Continue anyway? (you can install it before the executor first runs)", default=False):
-                cfg.executor_enabled = False
-                return
+            installed = False
+            # Auto-install on Linux
+            if _platform_key() == "linux" and cfg.llm_provider == "claude":
+                _auto_install_nodejs_linux()
+                installed = _auto_install_claude()
+            if not installed:
+                warn(f"'{binary}' not found in PATH.")
+                print_install_hint(binary)
+                warn(f"You can install it later from the web terminal in Niwa.")
+                if not prompt_bool("Continue anyway?", default=True):
+                    cfg.executor_enabled = False
+                    return
         cfg.llm_command = provider["command"]
+        # Add --dangerously-skip-permissions for non-root executor on Linux
+        if cfg.llm_provider == "claude" and _platform_key() == "linux" and os.getuid() == 0:
+            cfg.llm_command += " --dangerously-skip-permissions"
+            info("Added --dangerously-skip-permissions (executor will run as non-root 'niwa' user)")
         info(f"LLM command: {cfg.llm_command}")
         info(f"Auth hint:   {provider['auth_hint']}")
 
@@ -985,6 +1037,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_CADDY_PORT": str(cfg.caddy_port),
         "NIWA_APP_PORT": str(cfg.app_port),
         "NIWA_TERMINAL_PORT": str(cfg.terminal_port),
+        "NIWA_BIND_HOST": cfg.bind_host,
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],

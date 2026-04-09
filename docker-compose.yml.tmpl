@@ -67,7 +67,7 @@ services:
       - ${NIWA_SECRETS_DIR}:/secrets:ro
       - ${NIWA_LOGS_DIR}:/logs:rw
     ports:
-      - "127.0.0.1:${NIWA_GATEWAY_STREAMING_PORT}:8811"
+      - "${NIWA_BIND_HOST}:${NIWA_GATEWAY_STREAMING_PORT}:8811"
     networks:
       - niwa-net
     mem_limit: 256m
@@ -104,7 +104,7 @@ services:
       - ${NIWA_SECRETS_DIR}:/secrets:ro
       - ${NIWA_LOGS_DIR}:/logs:rw
     ports:
-      - "127.0.0.1:${NIWA_GATEWAY_SSE_PORT}:8811"
+      - "${NIWA_BIND_HOST}:${NIWA_GATEWAY_SSE_PORT}:8811"
     networks:
       - niwa-net
     mem_limit: 256m
@@ -128,7 +128,7 @@ services:
     volumes:
       - ${NIWA_DATA_DIR}:/data
     ports:
-      - "127.0.0.1:${NIWA_APP_PORT}:8080"
+      - "${NIWA_BIND_HOST}:${NIWA_APP_PORT}:8080"
     networks:
       - niwa-net
     mem_limit: 256m
@@ -149,7 +149,7 @@ services:
     volumes:
       - ${NIWA_HOME}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
     ports:
-      - "127.0.0.1:${NIWA_CADDY_PORT}:8443"
+      - "${NIWA_BIND_HOST}:${NIWA_CADDY_PORT}:8443"
     networks:
       - niwa-net
     mem_limit: 64m
@@ -176,7 +176,7 @@ services:
     volumes:
       - /:/host
     ports:
-      - "127.0.0.1:${NIWA_TERMINAL_PORT}:7681"
+      - "${NIWA_BIND_HOST}:${NIWA_TERMINAL_PORT}:7681"
     mem_limit: 128m
     logging:
       driver: json-file
