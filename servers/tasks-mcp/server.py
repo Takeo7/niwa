@@ -132,6 +132,21 @@ async def list_tools() -> list[Tool]:
                 "required": ["task_id", "status"],
             },
         ),
+        Tool(
+            name="project_context",
+            description="Full project context in one call: metadata, active tasks, notes, decisions. Use at the start of working on a project task.",
+            inputSchema={"type": "object", "properties": {"project_id": {"type": "string"}, "include_done": {"type": "boolean", "default": False}}, "required": ["project_id"]},
+        ),
+        Tool(
+            name="task_log",
+            description="Record a finding or progress update on a task (stored in task_events, not notes). kind: finding|progress|decision|warning.",
+            inputSchema={"type": "object", "properties": {"task_id": {"type": "string"}, "message": {"type": "string"}, "kind": {"type": "string", "enum": ["finding","progress","decision","warning"], "default": "progress"}}, "required": ["task_id", "message"]},
+        ),
+        Tool(
+            name="task_request_input",
+            description="Formally ask the human a question before proceeding. Sets task to revision status. Use instead of just blocking.",
+            inputSchema={"type": "object", "properties": {"task_id": {"type": "string"}, "question": {"type": "string"}, "context": {"type": "string"}}, "required": ["task_id", "question"]},
+        ),
     ]
 
 
@@ -240,6 +255,68 @@ def _task_update_status(args: dict[str, Any]) -> dict[str, Any]:
         return _row_to_dict(updated)
 
 
+
+def _project_context(args):
+    project_id = args["project_id"]
+    include_done = args.get("include_done", False)
+    with _ro_conn() as c:
+        project = c.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not project:
+            raise ValueError(f"project not found: {project_id}")
+        sf = "" if include_done else "AND status NOT IN ('hecha','archivada')"
+        tasks = c.execute(
+            f"SELECT id,title,status,priority,description FROM tasks WHERE project_id=? {sf} ORDER BY CASE status WHEN 'en_progreso' THEN 0 WHEN 'pendiente' THEN 1 WHEN 'bloqueada' THEN 2 ELSE 3 END, updated_at DESC",
+            (project_id,),
+        ).fetchall()
+        notes, decisions = [], []
+        try:
+            notes = c.execute("SELECT id,title,type,content,created_at FROM notes WHERE project_id=? AND type!='decision' ORDER BY updated_at DESC LIMIT 10", (project_id,)).fetchall()
+            decisions = c.execute("SELECT id,title,content,created_at FROM notes WHERE project_id=? AND type='decision' ORDER BY updated_at DESC LIMIT 10", (project_id,)).fetchall()
+        except Exception:
+            pass
+        return {
+            "project": _row_to_dict(project),
+            "tasks": [_row_to_dict(r) for r in tasks],
+            "notes": [_row_to_dict(r) for r in notes],
+            "decisions": [_row_to_dict(r) for r in decisions],
+        }
+
+
+def _task_log(args):
+    task_id, message = args["task_id"], args["message"].strip()
+    kind = args.get("kind", "progress")
+    if not message:
+        raise ValueError("message cannot be empty")
+    with _rw_conn() as c:
+        if not c.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone():
+            raise ValueError(f"task not found: {task_id}")
+        eid = str(uuid.uuid4())
+        c.execute(
+            "INSERT INTO task_events(id,task_id,type,payload_json,created_at) VALUES(?,?,?,?,?)",
+            (eid, task_id, "comment", json.dumps({"author":"claude","kind":kind,"message":message},ensure_ascii=False), _now_iso()),
+        )
+        c.commit()
+    return {"ok": True, "event_id": eid, "kind": kind}
+
+
+def _task_request_input(args):
+    task_id, question = args["task_id"], args["question"].strip()
+    context = args.get("context","").strip()
+    if not question:
+        raise ValueError("question cannot be empty")
+    with _rw_conn() as c:
+        if not c.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone():
+            raise ValueError(f"task not found: {task_id}")
+        now = _now_iso()
+        c.execute("UPDATE tasks SET status='revision', updated_at=? WHERE id=?", (now, task_id))
+        eid = str(uuid.uuid4())
+        c.execute(
+            "INSERT INTO task_events(id,task_id,type,payload_json,created_at) VALUES(?,?,?,?,?)",
+            (eid, task_id, "alerted", json.dumps({"author":"claude","question":question,"context":context},ensure_ascii=False), now),
+        )
+        c.commit()
+    return {"ok": True, "status": "revision", "event_id": eid, "question": question}
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
@@ -257,6 +334,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _task_create(arguments or {})
         elif name == "task_update_status":
             payload = _task_update_status(arguments or {})
+        elif name == "project_context":
+            payload = _project_context(arguments or {})
+        elif name == "task_log":
+            payload = _task_log(arguments or {})
+        elif name == "task_request_input":
+            payload = _task_request_input(arguments or {})
         else:
             return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
         return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]
