@@ -1,7 +1,7 @@
 /**
  * i18n.js — Lightweight internationalization for Niwa
  * Usage: t('key') returns the translated string for the current locale.
- * Supports interpolation: t('greeting', {name: 'Arturo'}) → "Hola, Arturo"
+ * Supports interpolation: t('greeting', {name: 'World'}) → "Hola, World"
  */
 
 const I18N = {
@@ -55,15 +55,9 @@ I18N.register('es', {
   'dash.completed': 'Completadas',
   'dash.all_time': 'total',
   'dash.today': 'hoy',
-  'dash.security': 'Seguridad',
-  'dash.agents': 'Agentes activos',
   'dash.velocity': 'Velocidad (7d)',
   'dash.activity': 'Actividad reciente',
   'dash.loading': 'cargando...',
-  'dash.secure': 'Seguro',
-  'dash.review': 'Revisar',
-  'dash.alert': 'Alerta',
-  'dash.issues': '{n} problemas',
 
   // Kanban
   'kanban.all_statuses': 'Todos los estados',
@@ -134,34 +128,23 @@ I18N.register('es', {
   'proj.active': '{n} activo(s)',
   'proj.tasks': 'tareas',
 
-  // Calendar
-
-  // Email
-
   // System
   'sys.overview': 'General',
   'sys.logs': 'Logs',
-  'sys.crons': 'Crons',
   'sys.config': 'Config',
   'sys.stats': 'Stats',
-  'sys.flows': 'Flujos',
-  'sys.security': 'Seguridad',
+  'sys.routines': 'Rutinas',
   'sys.no_logs': 'No hay logs disponibles.',
-  'sys.no_crons': 'No hay crons configurados.',
+  'sys.no_routines': 'No hay rutinas configuradas.',
   'sys.no_config': 'No se pudo cargar la configuración.',
-  'sys.no_flows': 'No se encontraron flujos.',
-  'sys.no_security': 'Sin datos de seguridad. Ejecuta una auditoría.',
-  'sys.cron_enabled': 'Cron activado',
-  'sys.cron_disabled': 'Cron desactivado',
+  'sys.routine_enabled': 'Rutina activada',
+  'sys.routine_disabled': 'Rutina desactivada',
+  'sys.routine_executed': 'Rutina ejecutada',
   'sys.notify_muted': 'Notificaciones silenciadas',
   'sys.notify_active': 'Notificaciones activadas',
   'sys.run_audit': 'Ejecutar auditoría',
   'sys.auto_mode': 'Modo auto: tareas pasan al executor',
   'sys.manual_mode': 'Modo manual: tú decides qué ejecutar',
-
-  // Connections
-
-  // Terminal
 
   // Search
   'search.placeholder': 'Buscar tareas, proyectos...',
@@ -201,6 +184,9 @@ I18N.register('es', {
   'proj.idle_review_enabled': 'Activado: se generarán mejoras automáticas',
   'proj.idle_review_disabled': 'Desactivado: no se generarán mejoras',
 
+  // Dashboard
+  'dashboard.my_day': 'Mi día',
+
   // Dashboard extra
   'dash.pending_blocked': '{p} pendientes · {b} bloqueadas',
   'dash.completed_summary': '{n} completadas total · ~{avg}/día media',
@@ -226,16 +212,10 @@ I18N.register('es', {
   'proj.no_activity': 'Sin actividad para este proyecto.',
   'proj.tree_truncated': 'Árbol truncado — proyecto grande. Usa carpetas para navegar.',
 
-  // Agents
-
   // System extra
   'sys.last_run': 'Última ejecución:',
   'sys.next_run': 'Próxima:',
   'sys.never': 'nunca',
-  'sys.flow_nodes': 'Nodos del flujo',
-  'sys.nodes': 'Nodos',
-  'sys.no_node_detail': 'Sin detalle de nodos',
-  'sys.nodos_count': '{n} nodos',
   'sys.error_msg': 'Error: {msg}',
   'sys.running_audit': 'Ejecutando auditoría...',
 
@@ -245,33 +225,6 @@ I18N.register('es', {
   'stats.done': 'Hechas',
   'stats.overdue': 'Vencidas',
 
-  // Security
-  'sec.risk_level': 'Nivel de riesgo',
-  'sec.detected_threats': 'Amenazas detectadas',
-  'sec.prompt_injections': 'Prompt Injections',
-  'sec.files_scanned': '{n} archivos escaneados',
-  'sec.permission_issues': 'Permisos',
-  'sec.found': '{n} encontrados',
-  'sec.exposed_secrets': 'Secretos expuestos',
-  'sec.api_keys_config': 'API keys en archivos de config',
-  'sec.network_security': 'Seguridad de red',
-  'sec.port_issues': 'Puertos',
-  'sec.system_vulns': 'Vulnerabilidades del sistema',
-  'sec.overly_permissive': 'Archivos con permisos excesivos',
-  'sec.integrity_checks': 'Integridad',
-  'sec.core_hash': 'Validación de hash de módulos core',
-  'sec.flags': '{n} Flags',
-  'sec.clean': 'Limpio',
-  'sec.changes': '{n} Cambios',
-  'sec.verified': 'Verificado',
-  'sec.audit_timeline': 'Línea de auditoría',
-  'sec.last_audit': 'Última auditoría completada',
-  'sec.issues_duration': '{n} problemas. Duración: {dur}s',
-
-  // Calendar extra
-
-  // Email extra
-
   // Task extra
   'task.delete_failed': 'Error al eliminar tarea',
   'task.move_failed': 'Error al mover tarea',
@@ -279,8 +232,6 @@ I18N.register('es', {
   'task.upload_error': 'Error al subir',
   'task.labels_sync_warning': 'Error al sincronizar etiquetas',
   'task.delete_attachment_failed': 'Error al eliminar adjunto',
-
-  // Connections extra
 
   // Search extra
   'search.tasks': 'Tareas',
@@ -356,15 +307,9 @@ I18N.register('en', {
   'dash.completed': 'Completed',
   'dash.all_time': 'all time',
   'dash.today': 'today',
-  'dash.security': 'Security',
-  'dash.agents': 'Active Agents',
   'dash.velocity': 'Velocity (7d)',
   'dash.activity': 'Recent Activity',
   'dash.loading': 'loading...',
-  'dash.secure': 'Secure',
-  'dash.review': 'Review',
-  'dash.alert': 'Alert',
-  'dash.issues': '{n} issues',
 
   // Kanban
   'kanban.all_statuses': 'All Statuses',
@@ -435,34 +380,23 @@ I18N.register('en', {
   'proj.active': '{n} active',
   'proj.tasks': 'tasks',
 
-  // Calendar
-
-  // Email
-
   // System
   'sys.overview': 'Overview',
   'sys.logs': 'Logs',
-  'sys.crons': 'Crons',
   'sys.config': 'Config',
   'sys.stats': 'Stats',
-  'sys.flows': 'Flows',
-  'sys.security': 'Security',
+  'sys.routines': 'Routines',
   'sys.no_logs': 'No logs available.',
-  'sys.no_crons': 'No crons configured.',
+  'sys.no_routines': 'No routines configured.',
   'sys.no_config': 'Could not load config.',
-  'sys.no_flows': 'No flows found.',
-  'sys.no_security': 'No security data. Run an audit.',
-  'sys.cron_enabled': 'Cron enabled',
-  'sys.cron_disabled': 'Cron disabled',
+  'sys.routine_enabled': 'Routine enabled',
+  'sys.routine_disabled': 'Routine disabled',
+  'sys.routine_executed': 'Routine executed',
   'sys.notify_muted': 'Notifications muted',
   'sys.notify_active': 'Notifications enabled',
   'sys.run_audit': 'Run Audit',
   'sys.auto_mode': 'Auto mode: tasks go to the executor',
   'sys.manual_mode': 'Manual mode: you decide what to execute',
-
-  // Connections
-
-  // Terminal
 
   // Search
   'search.placeholder': 'Search tasks, projects...',
@@ -502,6 +436,9 @@ I18N.register('en', {
   'proj.idle_review_enabled': 'Enabled: automatic improvements will be generated',
   'proj.idle_review_disabled': 'Disabled: no improvements will be generated',
 
+  // Dashboard
+  'dashboard.my_day': 'My Day',
+
   // Dashboard extra
   'dash.pending_blocked': '{p} pending · {b} blocked',
   'dash.completed_summary': '{n} completed total · ~{avg}/day avg',
@@ -527,16 +464,10 @@ I18N.register('en', {
   'proj.no_activity': 'No activity for this project.',
   'proj.tree_truncated': 'Tree truncated — large project. Use folders to browse.',
 
-  // Agents
-
   // System extra
   'sys.last_run': 'Last run:',
   'sys.next_run': 'Next:',
   'sys.never': 'never',
-  'sys.flow_nodes': 'Flow nodes',
-  'sys.nodes': 'Nodes',
-  'sys.no_node_detail': 'No node detail',
-  'sys.nodos_count': '{n} nodes',
   'sys.error_msg': 'Error: {msg}',
   'sys.running_audit': 'Running security audit...',
 
@@ -546,33 +477,6 @@ I18N.register('en', {
   'stats.done': 'Done',
   'stats.overdue': 'Overdue',
 
-  // Security
-  'sec.risk_level': 'Risk Level',
-  'sec.detected_threats': 'Detected Threats',
-  'sec.prompt_injections': 'Prompt Injections',
-  'sec.files_scanned': '{n} files scanned',
-  'sec.permission_issues': 'Permission Issues',
-  'sec.found': '{n} found',
-  'sec.exposed_secrets': 'Exposed Secrets',
-  'sec.api_keys_config': 'API keys in config files',
-  'sec.network_security': 'Network Security',
-  'sec.port_issues': 'Port Issues',
-  'sec.system_vulns': 'System Vulnerabilities',
-  'sec.overly_permissive': 'Overly permissive files',
-  'sec.integrity_checks': 'Integrity Checks',
-  'sec.core_hash': 'Core module hash validation',
-  'sec.flags': '{n} Flags',
-  'sec.clean': 'Clean',
-  'sec.changes': '{n} Changes',
-  'sec.verified': 'Verified',
-  'sec.audit_timeline': 'Audit Timeline',
-  'sec.last_audit': 'Last Audit Completed',
-  'sec.issues_duration': '{n} issues. Duration: {dur}s',
-
-  // Calendar extra
-
-  // Email extra
-
   // Task extra
   'task.delete_failed': 'Failed to delete task',
   'task.move_failed': 'Failed to move task',
@@ -580,8 +484,6 @@ I18N.register('en', {
   'task.upload_error': 'Upload error',
   'task.labels_sync_warning': 'Error syncing labels',
   'task.delete_attachment_failed': 'Error deleting attachment',
-
-  // Connections extra
 
   // Search extra
   'search.tasks': 'Tasks',

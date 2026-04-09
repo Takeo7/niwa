@@ -190,15 +190,13 @@ tailwind.config = {
       <div id="kpi-today" class="text-2xl font-headline font-bold">--</div>
       <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-today-sub">pendientes</p>
     </div>
-    <div class="bg-[rgb(var(--c-card))] p-5 rounded-2xl shadow-sm cursor-pointer" onclick="switchView('system');setTimeout(()=>switchSystemTab('security'),100)">
+    <div class="bg-[rgb(var(--c-card))] p-5 rounded-2xl shadow-sm cursor-pointer" onclick="switchView('system');setTimeout(()=>switchSystemTab('routines'),100)">
       <div class="flex justify-between items-start mb-3">
-        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Seguridad</span>
-        <span class="material-symbols-outlined text-lg" id="kpi-security-icon">shield</span>
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Rutinas</span>
+        <span class="material-symbols-outlined text-secondary text-lg">schedule</span>
       </div>
-      <div class="text-2xl font-headline font-bold flex items-center gap-2" id="kpi-security-level">
-        <span class="w-2 h-2 rounded-full bg-tertiary"></span><span>--</span>
-      </div>
-      <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-security-sub">cargando...</p>
+      <div class="text-2xl font-headline font-bold" id="kpi-routines-count">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-routines-sub">activas</p>
     </div>
   </div>
 
@@ -265,13 +263,15 @@ tailwind.config = {
         <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider mb-4">Actividad reciente</h3>
         <div id="activity-feed" class="space-y-3 overflow-y-auto max-h-[400px]"></div>
       </div>
-      <!-- Agents compact -->
+      <!-- Mi día -->
       <div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-5">
         <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Agentes</h3>
-          <a class="text-[10px] text-primary hover:underline cursor-pointer" onclick="switchView('agents')">Gestionar</a>
+          <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Mi día</h3>
+          <span class="text-[10px] text-on-surface-variant" id="dash-myday-date"></span>
         </div>
-        <div id="dash-agents" class="space-y-2"></div>
+        <div id="dash-myday-summary" class="text-xs text-on-surface-variant mb-3 hidden"></div>
+        <div id="dash-myday-tasks" class="space-y-2"></div>
+        <p id="dash-myday-empty" class="text-xs text-on-surface-variant hidden">Sin tareas para hoy. Añade desde el kanban.</p>
       </div>
     </div>
   </div>
@@ -487,7 +487,7 @@ tailwind.config = {
       <select id="history-filter-source" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface">
         <option value="">Todas las fuentes</option>
         <option value="manual">Manual</option>
-        <option value="cron">Cron</option>
+        <option value="routine">Routine</option>
         <option value="webhook">Webhook</option>
         <option value="agent">Agente</option>
       </select>
@@ -549,22 +549,16 @@ tailwind.config = {
       <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight">System Panel</h2>
       <p class="text-on-surface-variant mt-2 max-w-lg">Core infrastructure monitoring and configuration.</p>
     </div>
-    <div class="px-4 py-2 bg-surface-container-high rounded-lg flex items-center gap-3 shrink-0 self-start sm:self-auto">
-      <span class="w-2 h-2 rounded-full bg-tertiary shadow-[0_0_8px_#9bffce]"></span>
-      <span class="text-xs font-label text-on-surface uppercase tracking-widest">VPS Active</span>
-    </div>
+    <div></div>
   </div>
   <!-- System sub-tabs -->
   <div class="flex gap-2 mb-8 overflow-x-auto pb-1 -webkit-overflow-scrolling-touch scrollbar-none" style="-webkit-overflow-scrolling:touch">
     <button data-systab="overview" onclick="switchSystemTab('overview')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Overview</button>
+    <button data-systab="routines" onclick="switchSystemTab('routines')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Routines</button>
     <button data-systab="logs" onclick="switchSystemTab('logs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Logs</button>
-    <button data-systab="crons" onclick="switchSystemTab('crons')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Crons</button>
     <button data-systab="config" onclick="switchSystemTab('config')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Config</button>
     <button data-systab="stats" onclick="switchSystemTab('stats')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Stats</button>
-    <button data-systab="flows" onclick="switchSystemTab('flows')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Flows</button>
-    <button data-systab="security" onclick="switchSystemTab('security')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Security</button>
     <button data-systab="kpis" onclick="switchSystemTab('kpis')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">KPIs</button>
-    <button data-systab="health" onclick="switchSystemTab('health')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Health</button>
     <button data-systab="docs" onclick="switchSystemTab('docs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Docs</button>
   </div>
 
@@ -590,17 +584,14 @@ tailwind.config = {
       </div>
       <div class="col-span-12 lg:col-span-4">
         <div class="bg-gradient-to-br from-primary-container to-surface-container-highest p-6 rounded-lg relative overflow-hidden group h-full flex flex-col justify-between">
-          <div class="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
-            <span class="material-symbols-outlined text-8xl">rocket_launch</span>
-          </div>
-          <h3 class="text-xs font-label text-primary uppercase tracking-[0.2em] mb-4">Engine Health</h3>
+          <h3 class="text-xs font-label text-primary uppercase tracking-[0.2em] mb-4">Scheduler</h3>
           <div class="flex items-center gap-4">
             <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <span class="material-symbols-outlined text-primary">bolt</span>
+              <span class="material-symbols-outlined text-primary">schedule</span>
             </div>
             <div>
-              <p class="text-xl font-headline font-bold text-on-surface">Online</p>
-              <p class="text-[10px] text-on-surface-variant uppercase tracking-widest">All Systems Nominal</p>
+              <p class="text-xl font-headline font-bold text-on-surface" id="sys-scheduler-status">--</p>
+              <p class="text-[10px] text-on-surface-variant uppercase tracking-widest" id="sys-scheduler-sub">routines</p>
             </div>
           </div>
         </div>
@@ -621,34 +612,33 @@ tailwind.config = {
       <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/30">
         <div class="flex items-center gap-3">
           <span class="material-symbols-outlined text-sm text-on-surface-variant">terminal</span>
-          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Real-Time VPS Logs</h3>
+          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Logs</h3>
         </div>
         <div class="flex gap-4 items-center">
           <select id="log-source" class="bg-surface-dim border-none rounded text-xs py-1 px-2 text-on-surface" onchange="loadLogs()">
             <option value="all">All Sources</option>
             <option value="gateway">Gateway</option>
-            <option value="sync">Sync</option>
-            <option value="bridge">Bridge</option>
             <option value="executor">Executor</option>
-            <option value="watchdog">Watchdog</option>
           </select>
-          <span class="text-[10px] text-on-surface-variant flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-error animate-pulse"></span> Streaming</span>
         </div>
       </div>
       <div id="logs-container" class="p-6 font-mono text-[11px] h-96 overflow-y-auto space-y-1 bg-black/20"></div>
     </div>
   </div>
 
-  <!-- Crons Tab -->
-  <div id="sys-crons" class="sys-panel hidden">
+  <!-- Routines Tab -->
+  <div id="sys-routines" class="sys-panel hidden">
     <div class="bg-surface-container-high p-6 rounded-lg">
       <div class="flex justify-between items-center mb-6">
         <div class="flex items-center gap-3">
           <span class="material-symbols-outlined text-secondary">schedule</span>
-          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Active Crons</h3>
+          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Scheduled Routines</h3>
         </div>
+        <button onclick="openRoutineEditor()" class="px-3 py-2 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90 transition-all flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">add</span> Nueva
+        </button>
       </div>
-      <div id="crons-list" class="space-y-3"></div>
+      <div id="routines-list" class="space-y-3"></div>
     </div>
   </div>
 
@@ -663,30 +653,6 @@ tailwind.config = {
     <div class="bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-6">
       <h3 class="text-sm font-semibold mb-4">By Priority</h3>
       <div id="stats-priority" class="grid grid-cols-2 md:grid-cols-5 gap-4"></div>
-    </div>
-  </div>
-
-  <!-- Flows Tab -->
-  <div id="sys-flows" class="sys-panel hidden">
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="flows-grid"></div>
-  </div>
-
-  <!-- Security Tab -->
-  <div id="sys-security" class="sys-panel hidden">
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-      <h3 class="text-xl sm:text-2xl font-headline font-bold">Security Audit</h3>
-      <div class="flex flex-wrap items-center gap-4">
-        <div id="security-risk-badge" class="glass-card px-4 sm:px-6 py-3 sm:py-4 rounded-xl flex items-center gap-4"></div>
-        <button onclick="runSecurityScan()" class="h-10 sm:h-12 px-4 sm:px-6 bg-gradient-to-br from-primary to-primary-container text-on-primary font-headline font-bold rounded-xl flex items-center gap-3 hover:scale-[1.02] active:scale-95 transition-all text-sm sm:text-base">
-          <span class="material-symbols-outlined">bolt</span>Run Audit
-        </button>
-      </div>
-    </div>
-    <div class="grid grid-cols-12 gap-6">
-      <div class="col-span-12 lg:col-span-7 bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-6" id="security-threats"></div>
-      <div class="col-span-12 lg:col-span-5 bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-6" id="security-network"></div>
-      <div class="col-span-12 lg:col-span-8 bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-6" id="security-vulns"></div>
-      <div class="col-span-12 lg:col-span-4 bg-[rgb(var(--c-card))] rounded-2xl shadow-sm p-6" id="security-timeline"></div>
     </div>
   </div>
 
@@ -733,10 +699,6 @@ tailwind.config = {
     <div id="docs-content"></div>
   </div>
 
-  <!-- Health Tab -->
-  <div id="sys-health" class="sys-panel hidden">
-    <div id="health-dashboard"></div>
-  </div>
 </section>
 
 <!-- ============ NOTES VIEW ============ -->
@@ -791,6 +753,72 @@ tailwind.config = {
 </div>
 
 <!-- CHAT REMOVED -->
+
+<!-- Routine Editor Modal -->
+<div id="routine-editor-modal" class="fixed inset-0 z-[200] hidden">
+  <div class="absolute inset-0 bg-[rgba(var(--c-modal-overlay))]" onclick="closeRoutineEditor()"></div>
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-[rgb(var(--c-card))] rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-headline font-bold" id="routine-editor-title">Nueva rutina</h3>
+      <button onclick="closeRoutineEditor()" class="p-1 hover:bg-surface-bright rounded-lg">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <input type="hidden" id="routine-editor-id">
+    <div class="flex flex-col gap-4">
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Nombre</label>
+        <input id="routine-editor-name" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Backup diario">
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Descripción</label>
+        <input id="routine-editor-desc" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Opcional">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Cron (5 campos)</label>
+          <input id="routine-editor-schedule" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface font-mono" placeholder="0 3 * * *">
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Timezone</label>
+          <input id="routine-editor-tz" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="UTC" value="UTC">
+        </div>
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Acción</label>
+        <select id="routine-editor-action" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" onchange="toggleRoutineActionFields()">
+          <option value="script">Script / Comando</option>
+          <option value="create_task">Crear tarea</option>
+          <option value="webhook">Webhook</option>
+        </select>
+      </div>
+      <div id="routine-action-script">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Comando</label>
+        <textarea id="routine-editor-command" rows="3" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface font-mono resize-y" placeholder="python3 -c 'print(42)'"></textarea>
+      </div>
+      <div id="routine-action-task" class="hidden">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Título de la tarea</label>
+        <input id="routine-editor-task-title" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Review idle projects">
+      </div>
+      <div id="routine-action-webhook" class="hidden">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">URL del webhook</label>
+        <input id="routine-editor-webhook-url" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="https://example.com/hook">
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Notificación</label>
+        <select id="routine-editor-notify" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface">
+          <option value="none">Sin notificación</option>
+          <option value="telegram">Telegram</option>
+          <option value="webhook">Webhook</option>
+        </select>
+      </div>
+      <div class="flex justify-end gap-3">
+        <button onclick="closeRoutineEditor()" class="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-bright rounded-lg transition-all">Cancelar</button>
+        <button onclick="saveRoutine()" class="px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:opacity-90 transition-all">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 </div>
 </main>
@@ -923,8 +951,6 @@ tailwind.config = {
 <div class="fixed bottom-0 left-16 w-[300px] h-[300px] bg-primary/5 rounded-full blur-[100px] -z-10 pointer-events-none"></div>
 
 <script src="/static/i18n.js?v=1775292039"></script>
-<script src="/static/health-view.js?v=1775292039"></script>
-<script src="/static/security-view.js?v=1775292039"></script>
 <script src="/static/task-card-utils.js?v=1775292039"></script>
 <script src="/static/pipeline-view.js?v=1775292039"></script>
 <script>document.write('<scr'+'ipt src="/static/app.js?v='+Date.now()+'"><\/scr'+'ipt>')</script>

@@ -513,6 +513,9 @@ class WizardConfig:
         self.llm_provider: str = ""
         self.llm_command: str = ""
         self.projects: list[dict] = []  # [{name, slug, directory}, ...]
+        self.telegram_bot_token: str = ""
+        self.telegram_chat_id: str = ""
+        self.webhook_url: str = ""
 
 
 # ────────────────────────── LLM provider catalog ──────────────────────────
@@ -853,6 +856,23 @@ def step_remote(cfg: WizardConfig) -> None:
         info(f"will be ready at http://localhost:{cfg.caddy_port}/mcp — point your tunnel there.")
 
 
+def step_notifications(cfg: WizardConfig) -> None:
+    header("Step 11 — Notifications (optional)")
+    print("Niwa routines can send notifications when they run. Currently supported:")
+    print("  - Telegram Bot API")
+    print("  - Generic webhook (POST JSON)")
+    print()
+    if prompt_bool("Configure Telegram notifications?", default=False):
+        cfg.telegram_bot_token = prompt("Telegram bot token (from @BotFather)")
+        cfg.telegram_chat_id = prompt("Telegram chat ID (your user or group ID)")
+        ok(f"Telegram: bot token set, chat ID = {cfg.telegram_chat_id}")
+        print()
+    if prompt_bool("Configure a generic webhook URL?", default=False):
+        cfg.webhook_url = prompt("Webhook URL (receives POST with {text, source})")
+        ok(f"Webhook: {cfg.webhook_url}")
+    print()
+
+
 def _check_claude_authenticated() -> Optional[str]:
     """Returns None if claude is auth'd, else a message describing what's missing."""
     # ~/.claude.json exists when claude is configured at all
@@ -921,6 +941,10 @@ def step_summary(cfg: WizardConfig) -> bool:
         print(f"  Projects to register:")
         for p in cfg.projects:
             print(f"    - {p['name']} ({p['slug']}) → {p['directory']}")
+    if cfg.telegram_bot_token:
+        print(f"  Telegram:           chat_id={cfg.telegram_chat_id}")
+    if cfg.webhook_url:
+        print(f"  Webhook:            {cfg.webhook_url}")
     print(f"  Register Claude:    {cfg.register_claude}")
     print(f"  Register OpenClaw:  {cfg.register_openclaw}")
     print()
@@ -975,6 +999,9 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_EXECUTOR_ENABLED": "1" if cfg.executor_enabled else "0",
         "NIWA_LLM_PROVIDER": cfg.llm_provider,
         "NIWA_LLM_COMMAND": cfg.llm_command,
+        "NIWA_TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
+        "NIWA_TELEGRAM_CHAT_ID": cfg.telegram_chat_id,
+        "NIWA_WEBHOOK_URL": cfg.webhook_url,
     }
 
     # Write secrets file
@@ -1407,6 +1434,7 @@ def cmd_install(args) -> None:
     step_executor(cfg)
     step_projects(cfg)
     step_remote(cfg)
+    step_notifications(cfg)
     step_clients(cfg)
     if not step_summary(cfg):
         info("Aborted — nothing was installed")
@@ -1632,6 +1660,36 @@ def cmd_logs(args) -> None:
         pass
 
 
+def cmd_backup(args) -> None:
+    """Backup the Niwa database with 7-day rotation."""
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found.")
+        sys.exit(1)
+    env = _read_env_file(install_dir / "secrets" / "mcp.env")
+    db_path = Path(env.get("NIWA_DB_PATH", str(install_dir / "data" / "niwa.sqlite3")))
+    if not db_path.exists():
+        err(f"Database not found at {db_path}")
+        sys.exit(1)
+    backup_dir = db_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dst = backup_dir / f"niwa-{stamp}.sqlite3"
+    shutil.copy2(str(db_path), str(dst))
+    ok(f"Backup: {dst} ({dst.stat().st_size:,} bytes)")
+    # Rotate backups older than 7 days
+    cutoff = time.time() - 7 * 86400
+    rotated = 0
+    for old in sorted(backup_dir.glob("niwa-*.sqlite3")):
+        if old == dst:
+            continue
+        if old.stat().st_mtime < cutoff:
+            old.unlink()
+            rotated += 1
+    if rotated:
+        info(f"Rotated {rotated} backup(s) older than 7 days")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Niwa installer and CLI")
     sub = parser.add_subparsers(dest="cmd")
@@ -1655,6 +1713,9 @@ def main():
     p_logs.add_argument("--dir", help="Install location (auto-detect by default)")
     p_logs.add_argument("--tail", type=int, default=50, help="Lines to tail (default 50)")
 
+    p_backup = sub.add_parser("backup", help="Backup the Niwa database")
+    p_backup.add_argument("--dir", help="Install location (auto-detect by default)")
+
     args = parser.parse_args()
     cmd = args.cmd or "install"
     if cmd == "install":
@@ -1667,6 +1728,8 @@ def main():
         cmd_restart(args)
     elif cmd == "logs":
         cmd_logs(args)
+    elif cmd == "backup":
+        cmd_backup(args)
 
 
 if __name__ == "__main__":

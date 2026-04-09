@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 import tasks_helpers
 import tasks_service
 import health_service
+import scheduler
+import notifier
+
+_scheduler: scheduler.SchedulerThread | None = None
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1255,6 +1259,14 @@ class Handler(BaseHTTPRequestHandler):
             source = (qs.get('source') or ['gateway'])[0]
             lines_count = int((qs.get('lines') or ['100'])[0])
             return self._json(fetch_logs(source=source, lines=lines_count))
+        if path == '/api/routines':
+            return self._json(scheduler.list_routines(db_conn))
+        if re.match(r'^/api/routines/[^/]+$', path) and path.count('/') == 3:
+            routine_id = path.split('/')[3]
+            routine = scheduler.get_routine(db_conn, routine_id)
+            if not routine:
+                return self._json({'error': 'not_found'}, 404)
+            return self._json(routine)
         if path == '/api/crons':
             return self._json(fetch_crons())
         if path == '/api/config':
@@ -1409,6 +1421,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/notes':
             note_id = create_note(payload)
             return self._json({'ok': True, 'id': note_id}, 201)
+        if path == '/api/routines':
+            rid = scheduler.create_routine(db_conn, payload)
+            return self._json({'ok': True, 'id': rid}, 201)
+        if path == '/api/routines/toggle':
+            rid = payload.get('id', '')
+            new_state = scheduler.toggle_routine(db_conn, rid)
+            if new_state is None:
+                return self._json({'error': 'not_found'}, 404)
+            return self._json({'ok': True, 'enabled': new_state})
+        if path == '/api/routines/run':
+            rid = payload.get('id', '')
+            routine = scheduler.get_routine(db_conn, rid)
+            if not routine:
+                return self._json({'error': 'not_found'}, 404)
+            if _scheduler:
+                import threading as _thr
+                _thr.Thread(target=_scheduler._execute_routine, args=(routine,), daemon=True).start()
+            return self._json({'ok': True, 'message': f'Routine {rid} queued'})
         return self._json({'error': 'not_found'}, 404)
 
     def do_PATCH(self):
@@ -1433,6 +1463,10 @@ class Handler(BaseHTTPRequestHandler):
                 if str(exc) == 'note_not_found':
                     return self._json({'error': 'not_found'}, 404)
                 raise
+            return self._json({'ok': True})
+        if path.startswith('/api/routines/') and path.count('/') == 3:
+            routine_id = path.split('/')[3]
+            scheduler.update_routine(db_conn, routine_id, payload)
             return self._json({'ok': True})
         return self._json({'error': 'not_found'}, 404)
 
@@ -1462,6 +1496,10 @@ class Handler(BaseHTTPRequestHandler):
             note_id = path.split('/')[3]
             delete_note(note_id)
             return self._json({'ok': True})
+        if path.startswith('/api/routines/') and path.count('/') == 3:
+            routine_id = path.split('/')[3]
+            scheduler.delete_routine(db_conn, routine_id)
+            return self._json({'ok': True})
         return self._json({'error': 'not_found'}, 404)
 
     def log_message(self, format, *args):
@@ -1471,6 +1509,14 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     init_db()
     seed_if_empty()
+    # Scheduler: init routines table, seed built-ins, start daemon thread
+    scheduler.init_routines_table(db_conn)
+    seeded = scheduler.seed_builtin_routines(db_conn)
+    if seeded:
+        logger.info('Seeded %d built-in routines', seeded)
+    _scheduler = scheduler.SchedulerThread(db_conn, BASE_DIR.parent)
+    _scheduler.start()
+    logger.info('Scheduler started (daemon thread)')
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     logger.info(f'Niwa app listening on {HOST}:{PORT}')
     server.serve_forever()

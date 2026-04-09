@@ -21,7 +21,6 @@ let S = {
   tasks: [],
   agents: [],
   projects: [],
-  connections: [],
   stats: null,
   dashboard: null,
   currentProject: null,
@@ -231,11 +230,11 @@ function handleHashRoute() {
   if (S._skipHashRoute) { S._skipHashRoute = false; return; }
   const raw = window.location.hash.replace('#/', '').replace('#', '') || 'dashboard';
   const parts = raw.split('/');
-  const validViews = ['dashboard','kanban','projects','calendar','email','agents','system','connections',/* 'terminal' — hidden: VPS only */ 'history','notes'];
+  const validViews = ['dashboard','kanban','projects','notes','history','system'];
   const view = validViews.includes(parts[0]) ? parts[0] : 'dashboard';
   // Restore system sub-tab from hash (e.g. #/system/logs)
   if (view === 'system' && parts[1]) {
-    const validTabs = ['overview','logs','crons','config','stats','flows','security','kpis','health'];
+    const validTabs = ['overview','routines','logs','config','stats','kpis','docs'];
     if (validTabs.includes(parts[1])) S.systemTab = parts[1];
   }
   switchView(view, false);
@@ -261,21 +260,30 @@ async function loadViewData(view) {
 
 // ======================== DASHBOARD ========================
 async function loadDashboard() {
-  const [dash, stats, agents, activity, sec, projects] = await Promise.all([
-    api('dashboard'), api('stats'), api('agents-status'),
-    api('activity?limit=8'), api('security'), api('projects'),
+  const [dash, stats, activity, projects] = await Promise.all([
+    api('dashboard'), api('stats'),
+    api('activity?limit=8'), api('projects'),
     S.settings ? Promise.resolve(S.settings) : loadSettings()
   ]);
   S.dashboard = dash;
 
   renderDashboardKPIs(dash, stats);
-  renderSecurityWidget(sec);
   await renderAttentionItems(dash);
   renderProjectsOverview(projects);
 
-  // Agents compact
-  if (agents && agents.agents) renderDashAgents(agents.agents);
+  // Mi día
+  loadMyDay();
+
   if (activity) renderActivityFeed(activity);
+
+  // Routines KPI
+  api('routines').then(r => {
+    const count = r ? r.filter(x => x.enabled).length : 0;
+    const el = document.getElementById('kpi-routines-count');
+    if (el) el.textContent = count;
+    const sub = document.getElementById('kpi-routines-sub');
+    if (sub) sub.textContent = count === 1 ? 'activa' : 'activas';
+  });
 
   // Pipeline / Bottlenecks (non-blocking)
   loadPipelineChart().catch(() => {});
@@ -298,20 +306,6 @@ function renderDashboardKPIs(dash, stats) {
   if (el) el.textContent = _t('dash.completed_summary', {n: stats.done || 0, avg});
 }
 
-function renderSecurityWidget(sec) {
-  if (!(sec && sec.summary)) return;
-  const s = sec.summary;
-  const level = (s.risk_level || 'unknown').toUpperCase();
-  const colorMap = { LOW: 'tertiary', MEDIUM: 'primary', HIGH: 'error' };
-  const iconMap = { LOW: 'verified_user', MEDIUM: 'shield', HIGH: 'gpp_maybe' };
-  const labelMap = { LOW: _t('dash.secure'), MEDIUM: _t('dash.review'), HIGH: _t('dash.alert') };
-  const cl = colorMap[level] || 'on-surface-variant';
-  document.getElementById('kpi-security-level').innerHTML =
-    `<span class="w-2 h-2 rounded-full bg-${cl} ${level==='HIGH'?'animate-pulse shadow-[0_0_8px_#ff5555]':''}"></span><span class="text-${cl}">${labelMap[level]||level}</span>`;
-  document.getElementById('kpi-security-icon').textContent = iconMap[level] || 'shield';
-  document.getElementById('kpi-security-icon').className = `material-symbols-outlined text-${cl} text-lg`;
-  document.getElementById('kpi-security-sub').textContent = _t('dash.issues', {n: s.total_issues || 0});
-}
 
 async function renderAttentionItems(dash) {
   if (!dash) return;
@@ -371,27 +365,6 @@ function renderProjectsOverview(projects) {
   }).join('');
 }
 
-function renderDashAgents(agents) {
-  const box = document.getElementById('dash-agents');
-  box.innerHTML = agents.map(function(a) {
-    var c = AGENT_THEME.color(a);
-    var statusText = a.status || 'idle';
-    var icon = AGENT_THEME.icon(a);
-    var r = '<div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-bright/30 transition-all">';
-    r += '<div class="w-8 h-8 rounded-lg bg-' + c + '/10 flex items-center justify-center relative">';
-    r += '<span class="material-symbols-outlined text-' + c + ' text-base">' + icon + '</span>';
-    if (statusText === 'working') {
-      r += '<span class="absolute -top-0.5 -right-0.5 w-2 h-2 bg-' + c + ' rounded-full animate-pulse"></span>';
-    }
-    r += '</div>';
-    r += '<div class="flex-1 min-w-0">';
-    r += '<span class="text-sm font-medium text-on-surface">' + escHtml(a.name || a.id) + '</span>';
-    r += '</div>';
-    r += '<span class="px-2 py-0.5 rounded-full bg-' + c + '/10 text-' + c + ' text-[9px] font-bold uppercase">' + escHtml(statusText) + '</span>';
-    r += '</div>';
-    return r;
-  }).join('');
-}
 
 function renderVelocityChart(data) {
   const box = document.getElementById('velocity-chart');
@@ -1482,14 +1455,11 @@ async function loadSystem() {
 function loadSystemTabData(tab) {
   switch (tab) {
     case 'overview': loadSystemOverview(); break;
+    case 'routines': loadRoutines(); break;
     case 'logs': loadLogs(); break;
-    case 'crons': loadCrons(); break;
     case 'config': loadConfig(); break;
     case 'stats': loadStats(); break;
-    case 'flows': loadFlows(); break;
-    case 'security': loadSecurity(); break;
     case 'kpis': loadKpis(); break;
-    case 'health': loadHealth(); break;
     case 'docs': loadDocs(); break;
   }
 }
@@ -1508,6 +1478,16 @@ async function loadSystemOverview() {
       <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">${statusLabel(status)}</p>
       <p class="text-xl font-headline font-bold">${count}</p>
     </div>`).join('');
+
+  // Routines scheduler info
+  api('routines').then(r => {
+    const enabled = r ? r.filter(x => x.enabled).length : 0;
+    const total = r ? r.length : 0;
+    const el = document.getElementById('sys-scheduler-status');
+    if (el) el.textContent = enabled + '/' + total;
+    const sub = document.getElementById('sys-scheduler-sub');
+    if (sub) sub.textContent = 'routines activas';
+  });
 }
 
 async function loadLogs() {
@@ -1557,115 +1537,7 @@ async function loadDocs() {
   box.innerHTML = html;
 }
 
-// loadHealth() → moved to health-view.js
-// _timeSince() → moved to health-view.js
 
-async function loadCrons() {
-  const data = await api('crons');
-  const box = document.getElementById('crons-list');
-  if (!data || !data.length) { box.innerHTML = '<p class="text-on-surface-variant">' + _t('sys.no_crons') + '</p>'; return; }
-  const seen = new Set();
-  const unique = data.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
-  box.innerHTML = unique.map(c => {
-    const expr = typeof c.schedule === 'object' ? (c.schedule.expr || '') : (c.schedule || '');
-    const tz = typeof c.schedule === 'object' ? (c.schedule.tz || 'UTC') : 'UTC';
-    const statusColor = c.last_status === 'ok' ? 'tertiary' : c.last_status === 'error' ? 'error' : 'on-surface-variant';
-    const dur = c.last_duration_ms ? (c.last_duration_ms / 1000).toFixed(1) + 's' : '';
-    const badges = [
-      c.agent ? `<span class="text-[10px] bg-primary/10 px-2 py-0.5 rounded text-primary">agent:${escHtml(c.agent)}</span>` : '',
-      c.has_script ? '<span class="text-[10px] bg-tertiary/10 px-2 py-0.5 rounded text-tertiary">script</span>' : '',
-      c.has_skill ? '<span class="text-[10px] bg-secondary/10 px-2 py-0.5 rounded text-secondary">skill</span>' : '',
-      c.delivery_channel ? `<span class="text-[10px] bg-surface-dim px-2 py-0.5 rounded text-on-surface-variant">${escHtml(c.delivery_channel)}</span>` : '',
-    ].filter(Boolean).join(' ');
-    const nodesHtml = (c.nodes || []).map((n, i) => {
-      const icon = {script:'terminal', agent:'smart_toy', skill:'psychology', delivery:'send'}[n.type] || 'circle';
-      const color = {script:'tertiary', agent:'primary', skill:'secondary', delivery:'on-surface-variant'}[n.type] || 'on-surface-variant';
-      return `<div class="flex items-center gap-2">
-        ${i > 0 ? '<div class="w-px h-4 bg-outline-variant/30 ml-3"></div>' : ''}
-        <div class="flex items-center gap-2 py-1">
-          <span class="material-symbols-outlined text-${color} text-sm">${icon}</span>
-          <span class="text-xs text-on-surface-variant">${escHtml(n.label)}</span>
-        </div>
-      </div>`;
-    }).join('');
-    return `
-    <div class="bg-surface-bright/30 rounded-xl overflow-hidden hover:bg-surface-bright/60 transition-all">
-      <div class="p-4 flex items-center gap-4 cursor-pointer" onclick="this.parentElement.querySelector('.cron-detail').classList.toggle('hidden')">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 mb-1">
-            <p class="text-sm font-bold text-on-surface">${escHtml(c.name)}</p>
-            ${c.last_status ? `<span class="w-2 h-2 rounded-full bg-${statusColor}"></span>` : ''}
-          </div>
-          ${c.description ? `<p class="text-xs text-on-surface-variant mb-1 leading-snug">${escHtml(c.description)}</p>` : ''}
-          <div class="flex items-center gap-3 text-[10px] text-on-surface-variant font-mono">
-            <span>${escHtml(expr)}</span>
-            <span>${escHtml(tz)}</span>
-            ${dur ? `<span>${dur}</span>` : ''}
-          </div>
-          <div class="flex gap-1.5 mt-2 flex-wrap">${badges}</div>
-        </div>
-        <div class="flex items-center gap-3 shrink-0">
-          <span class="material-symbols-outlined text-on-surface-variant text-sm">expand_more</span>
-          ${c.delivery_channel ? renderCronFormatBtn(c) : ''}
-          ${c.delivery_channel ? `<button onclick="event.stopPropagation();toggleCronNotify('${escHtml(c.id)}')" class="w-8 h-8 rounded-full flex items-center justify-center transition-colors ${c.delivery_muted ? 'bg-outline-variant/30 text-on-surface-variant' : 'bg-tertiary/15 text-tertiary'}" title="${c.delivery_muted ? 'Notificaciones silenciadas — click para activar' : 'Notificaciones activas — click para silenciar'}">
-            <span class="material-symbols-outlined text-base">${c.delivery_muted ? 'notifications_off' : 'notifications_active'}</span>
-          </button>` : ''}
-          <button onclick="event.stopPropagation();toggleCron('${escHtml(c.id)}')" class="relative w-10 h-5 rounded-full transition-colors ${c.enabled ? 'bg-tertiary' : 'bg-outline-variant'}" title="${c.enabled ? 'Desactivar cron' : 'Activar cron'}">
-            <div class="absolute top-0.5 ${c.enabled ? 'left-5' : 'left-0.5'} w-4 h-4 bg-white rounded-full shadow transition-all"></div>
-          </button>
-        </div>
-      </div>
-      <div class="cron-detail hidden border-t border-outline-variant/10 px-4 py-3 bg-surface-container-low/50">
-        <div class="grid grid-cols-2 gap-3 mb-3 text-xs">
-          <div><span class="text-on-surface-variant">${_t('sys.last_run')}</span> <span class="text-on-surface">${c.last_run ? timeAgo(c.last_run) : _t('sys.never')}</span></div>
-          <div><span class="text-on-surface-variant">${_t('sys.next_run')}</span> <span class="text-on-surface">${c.next_run ? timeAgo(c.next_run) : '—'}</span></div>
-        </div>
-        ${c.prompt_preview ? `<div class="text-[11px] text-on-surface-variant bg-black/10 rounded-lg p-3 mb-3 font-mono leading-relaxed">${escHtml(c.prompt_preview)}${c.prompt_preview.length >= 200 ? '...' : ''}</div>` : ''}
-        ${nodesHtml ? `<div class="mt-2"><div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold mb-2">${_t('sys.flow_nodes')}</div>${nodesHtml}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function renderCronFormatBtn(c) {
-  const fmt = c.delivery_format || 'text';
-  const icons = {text:'text_fields', audio:'volume_up', both:'brand_awareness'};
-  const colors = {text:'on-surface-variant', audio:'secondary', both:'primary'};
-  const bgs = {text:'outline-variant/20', audio:'secondary/15', both:'primary/15'};
-  const labels = {text:'texto', audio:'audio', both:'texto + audio'};
-  return `<button onclick="event.stopPropagation();toggleCronFormat('${escHtml(c.id)}')" class="w-8 h-8 rounded-full flex items-center justify-center transition-colors bg-${bgs[fmt]||bgs.text} text-${colors[fmt]||colors.text}" title="Formato: ${labels[fmt]||fmt}"><span class="material-symbols-outlined text-base">${icons[fmt]||icons.text}</span></button>`;
-}
-
-async function toggleCron(jobId) {
-  const res = await api('crons/toggle', { method: 'POST', body: JSON.stringify({ id: jobId }) });
-  if (res?.ok) {
-    toast(res.enabled ? _t('sys.cron_enabled') : _t('sys.cron_disabled'));
-  } else {
-    toast(_t('sys.error_msg', {msg: res?.error || 'unknown'}));
-  }
-  loadCrons();
-}
-
-async function toggleCronNotify(jobId) {
-  const res = await api('crons/toggle-notify', { method: 'POST', body: JSON.stringify({ id: jobId }) });
-  if (res?.ok) {
-    toast(res.muted ? _t('sys.notify_muted') : _t('sys.notify_active'));
-  } else {
-    toast(_t('sys.error_msg', {msg: res?.error || 'unknown'}));
-  }
-  loadCrons();
-}
-
-async function toggleCronFormat(jobId) {
-  const res = await api('crons/toggle-format', { method: 'POST', body: JSON.stringify({ id: jobId }) });
-  if (res?.ok) {
-    const fmtLabels = {text: 'Formato: texto', audio: 'Formato: audio', both: 'Formato: texto + audio'};
-    toast(fmtLabels[res.format] || 'Formato: ' + res.format);
-  } else {
-    toast(_t('sys.error_msg', {msg: res?.error || 'unknown'}));
-  }
-  loadCrons();
-}
 
 async function loadConfig() {
   const [data] = await Promise.all([api('config'), loadSettings()]);
@@ -1826,82 +1698,6 @@ async function loadStats() {
     </div>`).join('');
 }
 
-async function loadFlows() {
-  const data = await api('flows');
-  const box = document.getElementById('flows-grid');
-  if (!data || !data.flows || !data.flows.length) { box.innerHTML = '<p class="text-on-surface-variant">' + _t('sys.no_flows') + '</p>'; return; }
-  box.innerHTML = data.flows.map(f => {
-    const typeIcon = {routing:'alt_route', deploy:'rocket_launch', architecture:'hub', n8n:'account_tree'}[f.type] || 'account_tree';
-    const typeColor = {routing:'primary', deploy:'tertiary', architecture:'secondary', n8n:'error'}[f.type] || 'primary';
-    const isActive = f.active !== undefined ? f.active : true;
-
-    // Build nodes for expandable detail
-    let nodesHtml = '';
-    if (f.nodes_detail && f.nodes_detail.length) {
-      nodesHtml = f.nodes_detail.map((n, i) => {
-        const nIcon = (n.type || '').toLowerCase().includes('webhook') ? 'webhook' :
-                      (n.type || '').toLowerCase().includes('code') ? 'code' :
-                      (n.type || '').toLowerCase().includes('http') ? 'http' :
-                      (n.type || '').toLowerCase().includes('set') ? 'tune' :
-                      (n.type || '').toLowerCase().includes('if') ? 'call_split' :
-                      (n.type || '').toLowerCase().includes('respond') ? 'reply' : 'circle';
-        return `<div class="flex items-center gap-2 py-1">
-          ${i > 0 ? '<div class="w-px h-3 bg-outline-variant/30 ml-2.5 -mt-1 -mb-1"></div>' : ''}
-          <span class="material-symbols-outlined text-${typeColor} text-sm">${nIcon}</span>
-          <span class="text-xs font-medium text-on-surface">${escHtml(n.name || n.type)}</span>
-          <span class="text-[10px] text-on-surface-variant">${escHtml(n.type)}</span>
-        </div>`;
-      }).join('');
-    } else if (f.steps) {
-      nodesHtml = f.steps.map((s, i) => `<div class="flex items-center gap-2 py-1">
-        ${i > 0 ? '<div class="w-px h-3 bg-outline-variant/30 ml-2.5 -mt-1 -mb-1"></div>' : ''}
-        <span class="material-symbols-outlined text-${typeColor} text-sm">check_circle</span>
-        <span class="text-xs text-on-surface">${escHtml(s)}</span>
-      </div>`).join('');
-    } else if (f.allowed_assignees?.length || f.preferred_assignees?.length) {
-      const agents = [...new Set([...(f.preferred_assignees||[]), ...(f.allowed_assignees||[])])];
-      nodesHtml = `<div class="flex items-center gap-2 py-1">
-        <span class="material-symbols-outlined text-${typeColor} text-sm">smart_toy</span>
-        <span class="text-xs text-on-surface">Agentes: ${agents.join(', ')}</span>
-      </div>`;
-      if (f.alias_count) nodesHtml += `<div class="flex items-center gap-2 py-1">
-        <span class="material-symbols-outlined text-on-surface-variant text-sm">label</span>
-        <span class="text-xs text-on-surface-variant">${f.alias_count} aliases</span>
-      </div>`;
-    }
-
-    return `
-    <div class="bg-surface-container-high rounded-xl overflow-hidden hover:bg-surface-bright/50 transition-all">
-      <div class="p-5 cursor-pointer" onclick="this.parentElement.querySelector('.flow-detail').classList.toggle('hidden')">
-        <div class="flex justify-between items-start mb-3">
-          <div class="flex items-center gap-3">
-            <div class="w-9 h-9 rounded-lg bg-${typeColor}/10 flex items-center justify-center">
-              <span class="material-symbols-outlined text-${typeColor}">${typeIcon}</span>
-            </div>
-            <div>
-              <h4 class="font-headline font-bold text-on-surface text-sm">${escHtml(f.title||f.id)}</h4>
-              <p class="text-[11px] text-on-surface-variant mt-0.5">${escHtml(f.summary||'')}</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            ${f.node_count ? `<span class="text-[10px] bg-surface-dim px-2 py-0.5 rounded text-on-surface-variant">${_t('sys.nodos_count', {n: f.node_count})}</span>` : ''}
-            ${f.has_webhook ? '<span class="text-[10px] bg-primary/10 px-2 py-0.5 rounded text-primary">Webhook</span>' : ''}
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${isActive ? 'bg-tertiary/10 text-tertiary' : 'bg-outline-variant/20 text-on-surface-variant'}">${f.type}</span>
-            <span class="material-symbols-outlined text-on-surface-variant text-sm">expand_more</span>
-          </div>
-        </div>
-      </div>
-      <div class="flow-detail hidden border-t border-outline-variant/10 px-5 py-4 bg-surface-container-low/50">
-        ${nodesHtml ? `<div class="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold mb-2">${_t('sys.nodes')}</div>${nodesHtml}` : `<p class="text-xs text-on-surface-variant">${_t('sys.no_node_detail')}</p>`}
-        ${f.script ? `<div class="text-[10px] text-on-surface-variant mt-3 font-mono">Script: ${escHtml(f.script)}</div>` : ''}
-        ${f.doc_path ? `<div class="text-[10px] text-on-surface-variant mt-1 font-mono">Doc: ${escHtml(f.doc_path)}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-// loadSecurity() → moved to security-view.js
-// runSecurityScan() → moved to security-view.js
 
 // ======================== KPIs ========================
 async function loadKpis() {
@@ -1996,33 +1792,6 @@ function renderKpiLimitTable(data) {
     </table>`;
   }
 }
-
-// ======================== CALENDAR ========================
-let _calScope = 'all';
-let _calEvents = [];
-let _calMonth = new Date().getMonth();
-let _calYear = new Date().getFullYear();
-let _calViewMode = 'grid'; // 'grid' or 'list'
-
-const _acctColors = ['primary', 'secondary', 'tertiary', 'error'];
-let _acctColorMap = {};
-function _acctColor(account, opacity) {
-  if (!_acctColorMap[account]) {
-    const idx = Object.keys(_acctColorMap).length % _acctColors.length;
-    _acctColorMap[account] = _acctColors[idx];
-  }
-  const c = _acctColorMap[account];
-  return `bg-${c}/${opacity} text-${c}`;
-}
-function _acctLabel(account) { return account ? account.split('@')[0] : '?'; }
-
-function toggleCalView() {
-  _calViewMode = _calViewMode === 'grid' ? 'list' : 'grid';
-  document.getElementById('cal-view-icon').textContent = _calViewMode === 'grid' ? 'view_list' : 'calendar_month';
-  renderCalendar();
-}
-
-
 
 
 // ======================== TASK MODAL ========================
@@ -2413,7 +2182,7 @@ document.addEventListener('keydown', e => {
     case 'p': switchView('projects'); break;
     case 's': switchView('system'); break;
     case 'r': loadViewData(S.view); toast(_t('misc.refreshed')); break;
-    case 'Escape': closeSearchOverlay(); closeTaskModal(); closeConnectionModal(); break;
+    case 'Escape': closeSearchOverlay(); closeTaskModal(); break;
   }
 });
 
@@ -2618,6 +2387,163 @@ async function deleteNoteConfirm(noteId) {
   await api('notes/' + noteId, { method: 'DELETE' });
   toast(_t('notes.deleted'));
   await loadNotes();
+}
+
+// ======================== ROUTINES ========================
+async function loadRoutines() {
+  const data = await api('routines');
+  const box = document.getElementById('routines-list');
+  if (!data || !data.length) { box.innerHTML = '<p class="text-on-surface-variant">No hay rutinas configuradas.</p>'; return; }
+  box.innerHTML = data.map(r => {
+    const statusBadge = r.last_status === 'ok' ? '<span class="text-tertiary text-xs">OK</span>' :
+                        r.last_status === 'error' ? '<span class="text-error text-xs">Error</span>' :
+                        '<span class="text-on-surface-variant text-xs">\u2014</span>';
+    const lastRun = r.last_run_at ? new Date(r.last_run_at).toLocaleString() : 'Nunca';
+    return `<div class="bg-[rgb(var(--c-card))] rounded-xl p-4 flex items-center justify-between gap-4">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <span class="font-medium text-sm text-on-surface truncate">${escHtml(r.name)}</span>
+          ${statusBadge}
+        </div>
+        <div class="flex items-center gap-3 mt-1 text-[10px] text-on-surface-variant">
+          <span class="font-mono">${escHtml(r.schedule)}</span>
+          <span>${escHtml(r.action)}</span>
+          <span>Ultima: ${lastRun}</span>
+          ${r.last_error ? '<span class="text-error truncate max-w-[200px]" title="'+escHtml(r.last_error)+'">'+escHtml(r.last_error.substring(0,60))+'</span>' : ''}
+        </div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="runRoutine('${r.id}')" class="p-1.5 hover:bg-surface-bright rounded-lg text-on-surface-variant" title="Ejecutar ahora">
+          <span class="material-symbols-outlined text-sm">play_arrow</span>
+        </button>
+        <button onclick="openRoutineEditor('${r.id}')" class="p-1.5 hover:bg-surface-bright rounded-lg text-on-surface-variant" title="Editar">
+          <span class="material-symbols-outlined text-sm">edit</span>
+        </button>
+        <button onclick="toggleRoutine('${r.id}')" class="relative w-10 h-5 rounded-full transition-colors ${r.enabled ? 'bg-tertiary' : 'bg-outline-variant'}" title="${r.enabled ? 'Desactivar' : 'Activar'}">
+          <span class="absolute top-0.5 ${r.enabled ? 'left-5' : 'left-0.5'} w-4 h-4 bg-white rounded-full shadow transition-all"></span>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleRoutine(id) {
+  await api('routines/toggle', { method: 'POST', body: JSON.stringify({ id }) });
+  loadRoutines();
+}
+
+async function runRoutine(id) {
+  const res = await api('routines/run', { method: 'POST', body: JSON.stringify({ id }) });
+  if (res && res.ok) toast('Rutina ejecutada');
+  setTimeout(loadRoutines, 2000);
+}
+
+function openRoutineEditor(id) {
+  const modal = document.getElementById('routine-editor-modal');
+  modal.classList.remove('hidden');
+  document.getElementById('routine-editor-id').value = '';
+  document.getElementById('routine-editor-name').value = '';
+  document.getElementById('routine-editor-desc').value = '';
+  document.getElementById('routine-editor-schedule').value = '';
+  document.getElementById('routine-editor-tz').value = 'UTC';
+  document.getElementById('routine-editor-action').value = 'script';
+  document.getElementById('routine-editor-command').value = '';
+  document.getElementById('routine-editor-task-title').value = '';
+  document.getElementById('routine-editor-webhook-url').value = '';
+  document.getElementById('routine-editor-notify').value = 'none';
+  toggleRoutineActionFields();
+  if (id) {
+    api('routines/' + id).then(r => {
+      if (!r) return;
+      document.getElementById('routine-editor-id').value = r.id;
+      document.getElementById('routine-editor-name').value = r.name || '';
+      document.getElementById('routine-editor-desc').value = r.description || '';
+      document.getElementById('routine-editor-schedule').value = r.schedule || '';
+      document.getElementById('routine-editor-tz').value = r.tz || 'UTC';
+      document.getElementById('routine-editor-action').value = r.action || 'script';
+      const cfg = typeof r.action_config === 'string' ? JSON.parse(r.action_config || '{}') : (r.action_config || {});
+      document.getElementById('routine-editor-command').value = cfg.command || '';
+      document.getElementById('routine-editor-task-title').value = cfg.title || '';
+      document.getElementById('routine-editor-webhook-url').value = cfg.url || '';
+      document.getElementById('routine-editor-notify').value = r.notify_channel || 'none';
+      document.getElementById('routine-editor-title').textContent = 'Editar rutina';
+      toggleRoutineActionFields();
+    });
+  } else {
+    document.getElementById('routine-editor-title').textContent = 'Nueva rutina';
+  }
+}
+
+function closeRoutineEditor() {
+  document.getElementById('routine-editor-modal').classList.add('hidden');
+}
+
+function toggleRoutineActionFields() {
+  const action = document.getElementById('routine-editor-action').value;
+  document.getElementById('routine-action-script').classList.toggle('hidden', action !== 'script');
+  document.getElementById('routine-action-task').classList.toggle('hidden', action !== 'create_task');
+  document.getElementById('routine-action-webhook').classList.toggle('hidden', action !== 'webhook');
+}
+
+async function saveRoutine() {
+  const id = document.getElementById('routine-editor-id').value;
+  const action = document.getElementById('routine-editor-action').value;
+  let action_config = {};
+  if (action === 'script') action_config = { command: document.getElementById('routine-editor-command').value };
+  else if (action === 'create_task') action_config = { title: document.getElementById('routine-editor-task-title').value, area: 'sistema', priority: 'media' };
+  else if (action === 'webhook') action_config = { url: document.getElementById('routine-editor-webhook-url').value };
+  const payload = {
+    name: document.getElementById('routine-editor-name').value,
+    description: document.getElementById('routine-editor-desc').value,
+    schedule: document.getElementById('routine-editor-schedule').value,
+    tz: document.getElementById('routine-editor-tz').value,
+    action,
+    action_config,
+    notify_channel: document.getElementById('routine-editor-notify').value,
+  };
+  if (id) {
+    await api('routines/' + id, { method: 'PATCH', body: JSON.stringify(payload) });
+  } else {
+    await api('routines', { method: 'POST', body: JSON.stringify(payload) });
+  }
+  closeRoutineEditor();
+  loadRoutines();
+  toast(id ? 'Rutina actualizada' : 'Rutina creada');
+}
+
+async function deleteRoutine(id) {
+  if (!confirm('¿Eliminar esta rutina?')) return;
+  await api('routines/' + id, { method: 'DELETE' });
+  loadRoutines();
+  toast('Rutina eliminada');
+}
+
+// ======================== MI DIA ========================
+async function loadMyDay() {
+  const data = await api('my-day');
+  const dateEl = document.getElementById('dash-myday-date');
+  const summaryEl = document.getElementById('dash-myday-summary');
+  const tasksEl = document.getElementById('dash-myday-tasks');
+  const emptyEl = document.getElementById('dash-myday-empty');
+  if (!data) return;
+  if (dateEl) dateEl.textContent = data.day || '';
+  if (data.summary && summaryEl) {
+    summaryEl.textContent = data.summary;
+    summaryEl.classList.remove('hidden');
+  }
+  if (!data.tasks || !data.tasks.length) {
+    if (tasksEl) tasksEl.innerHTML = '';
+    if (emptyEl) emptyEl.classList.remove('hidden');
+    return;
+  }
+  if (emptyEl) emptyEl.classList.add('hidden');
+  if (tasksEl) tasksEl.innerHTML = data.tasks.map(t => `
+    <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-bright/50 cursor-pointer" onclick="openTaskById('${t.id}')">
+      <span class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-${t.status === 'hecha' ? 'tertiary' : t.status === 'en_progreso' ? 'primary' : 'outline'})"></span>
+      <span class="text-xs text-on-surface truncate flex-1">${escHtml(t.title)}</span>
+      <span class="text-[10px] text-on-surface-variant shrink-0">${t.priority}</span>
+    </div>
+  `).join('');
 }
 
 // ======================== INIT ========================

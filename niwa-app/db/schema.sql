@@ -114,6 +114,26 @@ CREATE TABLE IF NOT EXISTS notes (
   linked_decisions TEXT
 );
 
+-- ── Routines (cron-like scheduler) ──
+CREATE TABLE IF NOT EXISTS routines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    schedule TEXT NOT NULL,
+    tz TEXT NOT NULL DEFAULT 'UTC',
+    action TEXT NOT NULL CHECK (action IN ('create_task', 'script', 'webhook')),
+    action_config TEXT NOT NULL DEFAULT '{}',
+    notify_channel TEXT NOT NULL DEFAULT 'none',
+    notify_config TEXT NOT NULL DEFAULT '{}',
+    last_run_at TEXT,
+    last_status TEXT,
+    last_error TEXT,
+    consecutive_errors INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- ── Login attempts (auth rate limiting) ──
 CREATE TABLE IF NOT EXISTS login_attempts (
   key TEXT PRIMARY KEY,
