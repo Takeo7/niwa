@@ -814,6 +814,68 @@ def save_setting(key, value):
     return settings
 
 
+# ── Integrations config (Telegram, LLM, Executor, Webhook) ──
+# Env vars are the install-time defaults; settings table holds runtime overrides.
+_INTEGRATION_KEYS = {
+    'telegram_bot_token': 'NIWA_TELEGRAM_BOT_TOKEN',
+    'telegram_chat_id': 'NIWA_TELEGRAM_CHAT_ID',
+    'webhook_url': 'NIWA_WEBHOOK_URL',
+    'llm_provider': 'NIWA_LLM_PROVIDER',
+    'llm_command': 'NIWA_LLM_COMMAND',
+    'executor_enabled': 'NIWA_EXECUTOR_ENABLED',
+    'executor_poll_seconds': 'NIWA_EXECUTOR_POLL_SECONDS',
+    'executor_timeout_seconds': 'NIWA_EXECUTOR_TIMEOUT_SECONDS',
+}
+# Keys whose values should be masked in GET responses
+_SENSITIVE_KEYS = {'telegram_bot_token'}
+
+
+def fetch_integrations():
+    """Return current integration config: env defaults overlaid with settings."""
+    settings = fetch_settings()
+    result = {}
+    for key, env_var in _INTEGRATION_KEYS.items():
+        val = settings.get(f'int.{key}') or os.environ.get(env_var, '')
+        if key in _SENSITIVE_KEYS and val:
+            result[key] = val[:8] + '...' + val[-4:] if len(val) > 12 else '****'
+            result[f'{key}_set'] = True
+        else:
+            result[key] = val
+    return result
+
+
+def save_integrations(payload):
+    """Save integration settings to the settings store."""
+    saved = {}
+    for key in _INTEGRATION_KEYS:
+        if key in payload:
+            val = str(payload[key]).strip()
+            save_setting(f'int.{key}', val)
+            saved[key] = val
+    # Update notifier module's live values so changes take effect immediately
+    try:
+        if 'telegram_bot_token' in saved:
+            notifier.TELEGRAM_BOT_TOKEN = saved['telegram_bot_token']
+        if 'telegram_chat_id' in saved:
+            notifier.TELEGRAM_CHAT_ID = saved['telegram_chat_id']
+        if 'webhook_url' in saved:
+            notifier.GENERIC_WEBHOOK_URL = saved['webhook_url']
+    except Exception:
+        pass
+    return saved
+
+
+def test_telegram():
+    """Send a test message via Telegram using current config."""
+    settings = fetch_settings()
+    token = settings.get('int.telegram_bot_token') or os.environ.get('NIWA_TELEGRAM_BOT_TOKEN', '')
+    chat_id = settings.get('int.telegram_chat_id') or os.environ.get('NIWA_TELEGRAM_CHAT_ID', '')
+    if not token or not chat_id:
+        return {'ok': False, 'error': 'Telegram not configured (missing token or chat_id)'}
+    ok = notifier.send_telegram('Niwa test message', chat_id=chat_id, bot_token=token)
+    return {'ok': ok, 'error': '' if ok else 'Failed to send — check token and chat_id'}
+
+
 def search_tasks(q, limit=30):
     q = q.strip()
     if not q:
@@ -1273,6 +1335,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(fetch_config())
         if path == '/api/settings':
             return self._json(fetch_settings())
+        if path == '/api/settings/integrations':
+            return self._json(fetch_integrations())
         if path == '/api/tasks/history':
             from history import fetch_task_history
             params = {
@@ -1392,6 +1456,11 @@ class Handler(BaseHTTPRequestHandler):
             for k, v in payload.items():
                 save_setting(k, v)
             return self._json({'ok': True})
+        if path == '/api/settings/integrations':
+            saved = save_integrations(payload)
+            return self._json({'ok': True, 'saved': list(saved.keys())})
+        if path == '/api/settings/integrations/test-telegram':
+            return self._json(test_telegram())
         if path == '/api/security/scan':
             return self._json(fetch_security())
         if path == '/api/trigger/idle-review':

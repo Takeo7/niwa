@@ -1660,6 +1660,72 @@ def cmd_logs(args) -> None:
         pass
 
 
+_CONFIG_KEYS = {
+    "telegram_bot_token": "NIWA_TELEGRAM_BOT_TOKEN",
+    "telegram_chat_id": "NIWA_TELEGRAM_CHAT_ID",
+    "webhook_url": "NIWA_WEBHOOK_URL",
+    "llm_provider": "NIWA_LLM_PROVIDER",
+    "llm_command": "NIWA_LLM_COMMAND",
+    "executor_enabled": "NIWA_EXECUTOR_ENABLED",
+    "executor_poll_seconds": "NIWA_EXECUTOR_POLL_SECONDS",
+    "executor_timeout_seconds": "NIWA_EXECUTOR_TIMEOUT_SECONDS",
+}
+_SENSITIVE_CONFIG = {"telegram_bot_token"}
+
+
+def cmd_config(args) -> None:
+    """View or update Niwa configuration."""
+    install_dir = _find_install_dir(args.dir)
+    if not install_dir:
+        err("No niwa install found.")
+        sys.exit(1)
+    env_path = install_dir / "secrets" / "mcp.env"
+    env = _read_env_file(env_path)
+
+    # niwa config (no args) — show current values
+    if not args.key:
+        header("Niwa configuration")
+        for key, env_var in _CONFIG_KEYS.items():
+            val = env.get(env_var, "")
+            if key in _SENSITIVE_CONFIG and val:
+                display = val[:8] + "..." + val[-4:] if len(val) > 12 else "****"
+            else:
+                display = val or DIM + "(not set)" + RESET
+            print(f"  {BOLD}{key:30}{RESET} {display}")
+        print()
+        info(f"Config file: {env_path}")
+        info("Set a value: niwa config <key> <value>")
+        return
+
+    key = args.key
+    if key not in _CONFIG_KEYS:
+        err(f"Unknown key: {key}")
+        info(f"Available keys: {', '.join(_CONFIG_KEYS)}")
+        sys.exit(1)
+
+    # niwa config <key> (no value) — show single value
+    if args.value is None:
+        env_var = _CONFIG_KEYS[key]
+        val = env.get(env_var, "")
+        if key in _SENSITIVE_CONFIG and val:
+            print(val[:8] + "..." + val[-4:] if len(val) > 12 else "****")
+        else:
+            print(val or "(not set)")
+        return
+
+    # niwa config <key> <value> — update
+    env_var = _CONFIG_KEYS[key]
+    new_val = args.value
+    env[env_var] = new_val
+    write_env_file(env_path, env)
+    ok(f"{key} updated")
+    if key in _SENSITIVE_CONFIG:
+        info(f"Value: {new_val[:8]}...{new_val[-4:]}" if len(new_val) > 12 else f"Value: ****")
+    else:
+        info(f"Value: {new_val}")
+    warn("Restart containers for changes to take effect: niwa restart")
+
+
 def cmd_backup(args) -> None:
     """Backup the Niwa database with 7-day rotation."""
     install_dir = _find_install_dir(args.dir)
@@ -1716,6 +1782,11 @@ def main():
     p_backup = sub.add_parser("backup", help="Backup the Niwa database")
     p_backup.add_argument("--dir", help="Install location (auto-detect by default)")
 
+    p_config = sub.add_parser("config", help="View or update configuration")
+    p_config.add_argument("key", nargs="?", help="Config key (e.g. telegram_bot_token, llm_command)")
+    p_config.add_argument("value", nargs="?", help="New value (omit to show current)")
+    p_config.add_argument("--dir", help="Install location (auto-detect by default)")
+
     args = parser.parse_args()
     cmd = args.cmd or "install"
     if cmd == "install":
@@ -1730,6 +1801,8 @@ def main():
         cmd_logs(args)
     elif cmd == "backup":
         cmd_backup(args)
+    elif cmd == "config":
+        cmd_config(args)
 
 
 if __name__ == "__main__":

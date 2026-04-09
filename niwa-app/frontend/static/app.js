@@ -1540,14 +1540,112 @@ async function loadDocs() {
 
 
 async function loadConfig() {
-  const [data] = await Promise.all([api('config'), loadSettings()]);
+  const [data, integrations] = await Promise.all([api('config'), api('settings/integrations'), loadSettings()]);
   const box = document.getElementById('config-panels');
-  if (!data) { box.innerHTML = '<p class="text-on-surface-variant">' + _t('sys.no_config') + '</p>'; return; }
+  if (!data && !integrations) { box.innerHTML = '<p class="text-on-surface-variant">' + _t('sys.no_config') + '</p>'; return; }
 
   const idleMode = (S.settings && S.settings.idle_review_mode) || 'manual';
   const isAuto = idleMode === 'auto';
   const notifFormat = (S.settings && S.settings.notification_format) || 'text';
   const currentLang = I18N.locale;
+  const ig = integrations || {};
+
+  // Integrations panel
+  let integrationsHtml = `
+    <div class="bg-surface-container-high rounded-lg p-6 mb-4">
+      <div class="flex items-center gap-3 mb-6">
+        <span class="material-symbols-outlined text-secondary">integration_instructions</span>
+        <h3 class="text-sm font-semibold uppercase tracking-wider">Integraciones</h3>
+      </div>
+
+      <!-- Telegram -->
+      <div class="mb-6 pb-5 border-b border-outline-variant/10">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-primary text-base">send</span>
+          <span class="text-sm font-medium">Telegram</span>
+          ${ig.telegram_bot_token_set ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary font-bold">Configurado</span>' : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-outline-variant/20 text-on-surface-variant font-bold">No configurado</span>'}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bot Token</label>
+            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? ig.telegram_bot_token : 'No configurado'}" value="">
+          </div>
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat ID</label>
+            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_chat_id || 'No configurado'}" value="">
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="saveIntegration('telegram')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+          <button onclick="testTelegram()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Test</button>
+        </div>
+      </div>
+
+      <!-- Webhook -->
+      <div class="mb-6 pb-5 border-b border-outline-variant/10">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-secondary text-base">webhook</span>
+          <span class="text-sm font-medium">Webhook</span>
+        </div>
+        <div class="mb-3">
+          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">URL</label>
+          <input id="int-webhook-url" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.webhook_url || 'https://example.com/hook'}" value="${ig.webhook_url || ''}">
+        </div>
+        <button onclick="saveIntegration('webhook')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+      </div>
+
+      <!-- LLM Provider -->
+      <div class="mb-6 pb-5 border-b border-outline-variant/10">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-tertiary text-base">smart_toy</span>
+          <span class="text-sm font-medium">LLM Provider</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Provider</label>
+            <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface">
+              <option value="" ${!ig.llm_provider?'selected':''}>No configurado</option>
+              <option value="claude" ${ig.llm_provider==='claude'?'selected':''}>Claude (Anthropic)</option>
+              <option value="llm" ${ig.llm_provider==='llm'?'selected':''}>llm CLI (Simon Willison)</option>
+              <option value="gemini" ${ig.llm_provider==='gemini'?'selected':''}>Gemini (Google)</option>
+              <option value="custom" ${ig.llm_provider==='custom'?'selected':''}>Custom</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
+            <input id="int-llm-command" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --output-format text" value="${escHtml(ig.llm_command || '')}">
+          </div>
+        </div>
+        <button onclick="saveIntegration('llm')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+      </div>
+
+      <!-- Executor -->
+      <div>
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-primary text-base">play_circle</span>
+          <span class="text-sm font-medium">Task Executor</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Estado</label>
+            <select id="int-executor-enabled" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface">
+              <option value="1" ${ig.executor_enabled==='1'?'selected':''}>Activado</option>
+              <option value="0" ${ig.executor_enabled!=='1'?'selected':''}>Desactivado</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Poll (seg)</label>
+            <input id="int-executor-poll" type="number" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" value="${ig.executor_poll_seconds || '30'}" min="5" max="3600">
+          </div>
+          <div>
+            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Timeout (seg)</label>
+            <input id="int-executor-timeout" type="number" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" value="${ig.executor_timeout_seconds || '1800'}" min="60" max="7200">
+          </div>
+        </div>
+        <button onclick="saveIntegration('executor')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+      </div>
+    </div>`;
+
   let settingsHtml = `
     <div class="bg-surface-container-high rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
@@ -1565,42 +1663,17 @@ async function loadConfig() {
         </select>
       </div>
       ${_renderSettingToggle(_t('settings.idle_review'), isAuto ? _t('sys.auto_mode') : _t('sys.manual_mode'), isAuto, 'toggleIdleReviewMode()')}
-      <div class="flex items-center justify-between mb-5 pb-5 border-b border-outline-variant/10">
-        <div>
-          <div class="text-sm font-medium">${_t('settings.notification_format')}</div>
-          <div class="text-xs text-on-surface-variant mt-1">${_t('settings.notification_format_desc')}</div>
-        </div>
-        <select onchange="changeNotificationFormat(this.value)" class="bg-surface-container-low border border-outline-variant/20 rounded-lg px-3 py-1.5 text-sm text-on-surface">
-          <option value="text" ${notifFormat==='text'?'selected':''}>${_t('settings.notification_format_text')}</option>
-          <option value="audio" ${notifFormat==='audio'?'selected':''}>${_t('settings.notification_format_audio')}</option>
-          <option value="both" ${notifFormat==='both'?'selected':''}>${_t('settings.notification_format_both')}</option>
-        </select>
-      </div>
-      <div class="mb-6 pb-5 border-b border-outline-variant/10">
-        <div class="flex items-center gap-3 mb-4">
-          <span class="material-symbols-outlined text-primary">send</span>
-          <h3 class="text-sm font-semibold uppercase tracking-wider">Telegram</h3>
-        </div>
-        ${_renderNotifyToggle(S.settings, 'notify_telegram_muted', 'Telegram global', 'Desactiva todas las notificaciones por Telegram', true)}
-        <div id="telegram-subtoggle" class="${(S.settings && S.settings.notify_telegram_muted === '1') ? 'opacity-30 pointer-events-none' : ''}">
-          ${_renderNotifyToggle(S.settings, 'notify_task_completed_muted', 'Tareas completadas', 'Notificar cuando una tarea se marca como hecha')}
-          ${_renderNotifyToggle(S.settings, 'notify_task_error_muted', 'Errores', 'Notificar tareas bloqueadas o con errores de ejecución')}
-          ${_renderNotifyToggle(S.settings, 'notify_task_warning_muted', 'Warnings', 'Notificar errores transitorios y reintentos')}
-          ${_renderNotifyToggle(S.settings, 'notify_task_info_muted', 'Info', 'Notificar inicio de ejecución, deploys y splits de triage')}
-          ${_renderNotifyToggle(S.settings, 'notify_task_recovery_muted', 'Recuperación', 'Notificar tareas recuperadas de stuck o crash')}
-        </div>
-      </div>
     </div>`;
 
-  box.innerHTML = settingsHtml + Object.entries(data).map(([key, val]) => `
-    <div class="bg-surface-container-high rounded-lg p-6">
+  box.innerHTML = integrationsHtml + settingsHtml + (data ? Object.entries(data).map(([key, val]) => `
+    <div class="bg-surface-container-high rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
         <span class="material-symbols-outlined text-primary">settings</span>
         <h3 class="text-sm font-semibold uppercase tracking-wider">${key}</h3>
         <span class="text-[10px] text-on-surface-variant font-mono">${val.path || ''}</span>
       </div>
       <pre class="bg-black/20 p-4 rounded-lg text-[11px] font-mono text-on-surface/80 overflow-x-auto max-h-64 overflow-y-auto">${escHtml(JSON.stringify(val.data, null, 2))}</pre>
-    </div>`).join('');
+    </div>`).join('') : '');
 }
 
 function _renderSettingToggle(label, desc, isOn, onclickExpr, opts) {
@@ -1625,6 +1698,39 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
     className: isMaster ? 'mb-4 pb-4 border-b border-outline-variant/10' : 'mb-3 pl-2',
     dimLabel: !isMaster
   });
+}
+
+async function saveIntegration(group) {
+  const payload = {};
+  if (group === 'telegram') {
+    const token = document.getElementById('int-telegram-token').value.trim();
+    const chatId = document.getElementById('int-telegram-chatid').value.trim();
+    if (token) payload.telegram_bot_token = token;
+    if (chatId) payload.telegram_chat_id = chatId;
+  } else if (group === 'webhook') {
+    payload.webhook_url = document.getElementById('int-webhook-url').value.trim();
+  } else if (group === 'llm') {
+    payload.llm_provider = document.getElementById('int-llm-provider').value;
+    payload.llm_command = document.getElementById('int-llm-command').value.trim();
+  } else if (group === 'executor') {
+    payload.executor_enabled = document.getElementById('int-executor-enabled').value;
+    payload.executor_poll_seconds = document.getElementById('int-executor-poll').value;
+    payload.executor_timeout_seconds = document.getElementById('int-executor-timeout').value;
+  }
+  if (!Object.keys(payload).length) { toast('Nada que guardar'); return; }
+  const res = await api('settings/integrations', { method: 'POST', body: JSON.stringify(payload) });
+  if (res && res.ok) {
+    toast('Configuración guardada');
+    loadConfig();
+  } else {
+    toast('Error al guardar');
+  }
+}
+
+async function testTelegram() {
+  const res = await api('settings/integrations/test-telegram', { method: 'POST', body: '{}' });
+  if (res && res.ok) toast('Mensaje de test enviado');
+  else toast(res && res.error ? res.error : 'Error al enviar test');
 }
 
 async function toggleSetting(key) {
