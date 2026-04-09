@@ -2523,6 +2523,8 @@ const STYLE_COLORS = [
   { key: 'card', label: 'Tarjetas', light: '#ffffff', dark: '#0f1930' },
   { key: 'sidebar', label: 'Sidebar/Topbar', light: '#ffffff', dark: '#091328' },
   { key: 'on-surface', label: 'Texto', light: '#1a2234', dark: '#dee5ff' },
+  { key: 'on-surface-var', label: 'Texto secundario', light: '#6b7280', dark: '#a3aac4' },
+  { key: 'input-bg', label: 'Inputs/Selects', light: '#f0f2f7', dark: '#0f1930' },
   { key: 'btn-primary', label: 'Botón principal', light: '#3b6eb5', dark: '#85adff' },
   { key: 'btn-text', label: 'Texto botón', light: '#ffffff', dark: '#001a40' },
 ];
@@ -2658,6 +2660,8 @@ function _flushStyleOverrides() {
     } else if (key === 'bg') { vars += '--c-bg:' + val + '!important;';
     } else if (key === 'surface') { vars += '--c-surface:' + val + '!important;';
     } else if (key === 'on-surface') { vars += '--c-on-surface:' + val + '!important;--c-on-bg:' + val + '!important;';
+    } else if (key === 'on-surface-var') { vars += '--c-on-surface-var:' + val + '!important;--c-nav-text:' + val + '!important;';
+    } else if (key === 'input-bg') { vars += '--c-input-bg:' + val + '!important;';
     } else if (key === 'btn-primary') { vars += '--c-primary:' + val + '!important;--c-tint:' + val + '!important;';
     } else if (key === 'btn-text') { vars += '--c-on-primary:' + val + '!important;';
     } else { vars += '--c-' + key + ':' + val + '!important;'; }

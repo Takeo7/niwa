@@ -57,9 +57,10 @@ body{background:var(--c-bg)!important;color:var(--c-on-surface)!important}
 #sidebar{background:var(--c-sidebar)!important;border-color:transparent!important;box-shadow:1px 0 8px rgba(0,0,0,0.03)!important}
 .topbar{background:color-mix(in srgb,var(--c-topbar) 95%,transparent)!important;backdrop-filter:blur(20px)!important;border-color:transparent!important;box-shadow:0 1px 4px rgba(0,0,0,0.03)!important}
 .nav-link{color:var(--c-nav-text)!important}.nav-link:hover{color:var(--c-nav-hover)!important;background:var(--c-nav-hover-bg)!important}
-.nav-active{color:var(--c-primary)!important;background:rgba(var(--c-primary),.08)!important}
+.nav-active{color:var(--c-primary)!important;background:color-mix(in srgb,var(--c-primary) 10%,transparent)!important}
 .nav-active::before{background:var(--c-primary)!important}
-.nav-item{color:var(--c-nav-text)!important}.nav-item:hover{color:var(--c-nav-hover)!important;background:var(--c-nav-hover-bg)!important}
+.nav-item{color:var(--c-on-surface-var)!important}.nav-item:hover{color:var(--c-on-surface)!important;background:var(--c-nav-hover-bg)!important}
+.sys-tab-active{background:var(--c-card)!important;color:var(--c-on-surface)!important;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 *{transition:background-color .2s,color .2s,border-color .2s}
 </style>
 <script>
