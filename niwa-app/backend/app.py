@@ -708,6 +708,43 @@ def get_chat_messages(session_id):
                     msg['content'] = content
                     msg['status'] = 'done'
             result.append(msg)
+    
+    # Check for delegated tasks that completed (created by Haiku via MCP)
+    # Find tasks created during this chat session's timeframe
+    if result:
+        session_start = result[0].get('created_at', '')
+        delegated = c.execute(
+            "SELECT t.id, t.title, t.status, e.payload_json "
+            "FROM tasks t LEFT JOIN task_events e ON e.task_id=t.id AND e.type='comment' "
+            "WHERE t.source='mcp:tasks' AND t.status IN ('hecha','bloqueada') "
+            "AND t.created_at >= ? "
+            "AND t.id NOT IN (SELECT task_id FROM chat_messages WHERE session_id=? AND task_id IS NOT NULL) "
+            "ORDER BY t.completed_at DESC LIMIT 5",
+            (session_start, session_id),
+        ).fetchall()
+        for d in delegated:
+            d = dict(d)
+            # Extract output from task_events
+            output = ''
+            if d.get('payload_json'):
+                try:
+                    payload = json.loads(d['payload_json'])
+                    output = payload.get('output', '')[:1500]
+                except Exception:
+                    pass
+            output = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[\??[0-9;]*[a-zA-Z]|\x1b[<>][\w]', '', output).strip()
+            status_icon = '✅' if d['status'] == 'hecha' else '❌'
+            content = f"{status_icon} Tarea completada: **{d['title']}**\n\n{output}" if output else f"{status_icon} Tarea completada: **{d['title']}**"
+            # Insert as system message
+            msg_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+            c.execute(
+                "INSERT INTO chat_messages (id, session_id, role, content, task_id, status, created_at) VALUES (?,?,?,?,?,?,?)",
+                (msg_id, session_id, 'assistant', content, d['id'], 'done', now),
+            )
+            c.commit()
+            result.append({'id': msg_id, 'session_id': session_id, 'role': 'assistant', 'content': content, 'task_id': d['id'], 'status': 'done', 'created_at': now})
+    
     return result
 
 

@@ -3307,7 +3307,7 @@ function renderChatMessages(messages) {
     }
 
     const mlAuto = isUser ? 'margin-left:auto;' : 'margin-right:auto;';
-    return `<div style="display:flex;flex-direction:column;${isUser ? 'align-items:flex-end;' : 'align-items:flex-start;'}max-width:75%;width:fit-content;${mlAuto}">
+    return `<div style="display:inline-flex;flex-direction:column;${isUser ? 'align-items:flex-end;' : 'align-items:flex-start;'}max-width:70%;${mlAuto}">
       <div style="border-radius:1rem;padding:0.625rem 1rem;font-size:0.875rem;background:${bg};color:${color};white-space:pre-wrap;word-break:break-word;line-height:1.5;">
         ${content}
       </div>
