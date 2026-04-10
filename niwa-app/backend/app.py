@@ -2612,7 +2612,10 @@ _INDEX_HTML_CACHE = {'html': None, 'mtime': 0}
 
 
 def get_index_html():
-    index_path = BASE_DIR / 'frontend' / 'index.html'
+    # Try React build first, then legacy
+    index_path = BASE_DIR / 'frontend' / 'dist' / 'index.html'
+    if not index_path.is_file():
+        index_path = BASE_DIR / 'frontend' / 'index.html'
     try:
         mtime = index_path.stat().st_mtime
     except Exception:
@@ -2715,8 +2718,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=86400')
             self.end_headers()
             return self.wfile.write(body)
+        # Try React build first, then legacy static
+        dist_dir = BASE_DIR / 'frontend' / 'dist'
         static_dir = BASE_DIR / 'frontend' / 'static'
-        target = (static_dir / rel_path).resolve()
+        if (dist_dir / rel_path).is_file():
+            target = (dist_dir / rel_path).resolve()
+        else:
+            target = (static_dir / rel_path).resolve()
         frontend_dir = BASE_DIR / 'frontend'
         if not str(target).startswith(str(frontend_dir.resolve())):
             return self._json({'error': 'forbidden'}, 403)
@@ -2768,6 +2776,23 @@ class Handler(BaseHTTPRequestHandler):
             if self._require_auth():
                 return
             return self._html(get_index_html())
+        # Serve Vite build assets (JS, CSS)
+        if path.startswith('/assets/'):
+            rel = path[1:]  # 'assets/...' 
+            dist_dir = BASE_DIR / 'frontend' / 'dist'
+            target = (dist_dir / rel).resolve()
+            if not str(target).startswith(str(dist_dir.resolve())):
+                return self._json({'error': 'forbidden'}, 403)
+            if target.is_file():
+                ext = target.suffix.lower()
+                mime = self._MIME_MAP.get(ext, 'application/octet-stream')
+                body = target.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', mime)
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
+                self.end_headers()
+                return self.wfile.write(body)
         if path == '/auth/check':
             if is_authenticated(self):
                 return self._json({'ok': True})
@@ -3109,7 +3134,13 @@ class Handler(BaseHTTPRequestHandler):
         if re.match(r'^/api/services/[^/]+/status$', path):
             service_id = path.split('/')[3]
             return self._json(_get_service_status(service_id))
-        return self._json({'error': 'not_found'}, 404)
+        # API endpoints that don't match → 404
+        if path.startswith('/api/'):
+            return self._json({'error': 'not_found'}, 404)
+        # SPA fallback: non-API routes serve index.html (React Router handles client-side routing)
+        if self._require_auth():
+            return
+        return self._html(get_index_html())
 
     def do_POST(self):
         path = urlparse(self.path).path

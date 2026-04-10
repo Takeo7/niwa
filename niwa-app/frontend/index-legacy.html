@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="description" content="Niwa — Personal task management, notes, and MCP gateway.">
+<meta name="theme-color" content="#3b6eb5">
+<title>Niwa</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=DM+Serif+Display&family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<style id="theme-vars">
+:root {
+  --c-surface-highest:#e4e8f0;--c-surface-bright:#f2f4f8;--c-surface-dim:#dce0ea;
+  --c-surface:#eef1f6;--c-surface-high:#f0f2f7;--c-surface-low:#f4f6fa;
+  --c-surface-lowest:#fafbfd;--c-surface-cont:#ebeff5;--c-surface-var:#e4e8f0;
+  --c-on-surface:#1a2234;--c-on-surface-var:#6b7280;--c-on-bg:#1a2234;
+  --c-primary:#3b6eb5;--c-primary-dim:#5a8fd4;--c-primary-cont:#e3edf9;
+  --c-on-primary:#fff;--c-on-primary-cont:#1a4b8a;
+  --c-secondary:#7c5cc7;--c-secondary-dim:#6d4bb5;--c-secondary-cont:#f0ebfc;
+  --c-on-secondary:#fff;--c-on-secondary-cont:#4a2d8c;
+  --c-tertiary:#1a9a5c;--c-tertiary-dim:#28a06a;--c-tertiary-cont:#dcf7ea;
+  --c-on-tertiary:#fff;--c-on-tertiary-cont:#0d5c37;
+  --c-error:#d94444;--c-error-dim:#c03030;--c-error-cont:#fde8e8;
+  --c-on-error:#fff;--c-on-error-cont:#7a1a1a;
+  --c-warning:#f59e0b;--c-warning-dim:#d97706;--c-warning-cont:#fef3c7;
+  --c-agent-claude:#e67e22;--c-agent-claude-dim:#cc6a10;--c-agent-claude-cont:#fdf0e2;
+  --c-outline:#9ca3af;--c-outline-var:#dde1e9;
+  --c-bg:#e8edf5;--c-tint:#3b6eb5;
+  --c-card:#ffffff;--c-sidebar:#ffffff;--c-topbar:#ffffff;
+  --c-nav-text:#9ca3af;--c-nav-hover:#1a2234;--c-nav-hover-bg:#f4f6fa;
+  --c-input-bg:#f0f2f7;--c-modal-overlay:0,0,0,0.25;
+}
+html.dark {
+  --c-surface-highest:#192540;--c-surface-bright:#1f2b49;--c-surface-dim:#060e20;
+  --c-surface:#0a1122;--c-surface-high:#141f38;--c-surface-low:#091328;
+  --c-surface-lowest:#000;--c-surface-cont:#0f1930;--c-surface-var:#192540;
+  --c-on-surface:#dee5ff;--c-on-surface-var:#a3aac4;--c-on-bg:#dee5ff;
+  --c-primary:#85adff;--c-primary-dim:#699cff;--c-primary-cont:#1a3a6b;
+  --c-on-primary:#002c66;--c-on-primary-cont:#d0dfff;
+  --c-secondary:#ac8aff;--c-secondary-dim:#8455ef;--c-secondary-cont:#3a1a80;
+  --c-on-secondary:#280067;--c-on-secondary-cont:#d9c8ff;
+  --c-tertiary:#9bffce;--c-tertiary-dim:#58e7ab;--c-tertiary-cont:#0d4d30;
+  --c-on-tertiary:#006443;--c-on-tertiary-cont:#b0ffd8;
+  --c-error:#ff716c;--c-error-dim:#d7383b;--c-error-cont:#4a0d0d;
+  --c-on-error:#490006;--c-on-error-cont:#ffa8a3;
+  --c-warning:#fbbf24;--c-warning-dim:#f59e0b;--c-warning-cont:#422006;
+  --c-agent-claude:#ffb74d;--c-agent-claude-dim:#ff9800;--c-agent-claude-cont:#4a2800;
+  --c-outline:#6d758c;--c-outline-var:#40485d;
+  --c-bg:#060e20;--c-tint:#85adff;
+  --c-card:#0f1930;--c-sidebar:#091328;--c-topbar:#060e20;
+  --c-nav-text:#a3aac4;--c-nav-hover:#fff;--c-nav-hover-bg:rgba(255,255,255,0.05);
+  --c-input-bg:#0f1930;--c-modal-overlay:0,0,0,0.6;
+}
+body{background:var(--c-bg)!important;color:var(--c-on-surface)!important}
+#sidebar{background:var(--c-sidebar)!important;border-color:transparent!important;box-shadow:1px 0 8px rgba(0,0,0,0.03)!important}
+.topbar{background:color-mix(in srgb,var(--c-topbar) 95%,transparent)!important;backdrop-filter:blur(20px)!important;border-color:transparent!important;box-shadow:0 1px 4px rgba(0,0,0,0.03)!important}
+.nav-link{color:var(--c-nav-text)!important}.nav-link:hover{color:var(--c-nav-hover)!important;background:var(--c-nav-hover-bg)!important}
+.nav-active{color:var(--c-primary)!important;background:color-mix(in srgb,var(--c-primary) 10%,transparent)!important}
+.nav-active::before{background:var(--c-primary)!important}
+.nav-item{color:var(--c-on-surface-var)!important}.nav-item:hover{color:var(--c-on-surface)!important;background:var(--c-nav-hover-bg)!important}
+.sys-tab-active{background:var(--c-card)!important;color:var(--c-on-surface)!important;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+*{transition:background-color .2s,color .2s,border-color .2s}
+</style>
+<script>
+// Apply saved theme before Tailwind loads
+if (localStorage.getItem('niwa_theme') === 'dark') document.documentElement.classList.add('dark');
+
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        "surface-container-highest":"var(--c-surface-highest)","surface-bright":"var(--c-surface-bright)",
+        "surface-dim":"var(--c-surface-dim)","surface":"var(--c-surface)",
+        "surface-container-high":"var(--c-surface-high)","surface-container-low":"var(--c-surface-low)",
+        "surface-container-lowest":"var(--c-surface-lowest)","surface-container":"var(--c-surface-cont)",
+        "surface-variant":"var(--c-surface-var)",
+        "on-surface":"var(--c-on-surface)","on-surface-variant":"var(--c-on-surface-var)",
+        "on-background":"var(--c-on-bg)",
+        "primary":"var(--c-primary)","primary-dim":"var(--c-primary-dim)",
+        "primary-container":"var(--c-primary-cont)","primary-fixed":"var(--c-primary-cont)",
+        "primary-fixed-dim":"var(--c-primary-dim)",
+        "on-primary":"var(--c-on-primary)","on-primary-container":"var(--c-on-primary-cont)",
+        "on-primary-fixed":"var(--c-on-primary)","on-primary-fixed-variant":"var(--c-on-primary-cont)",
+        "secondary":"var(--c-secondary)","secondary-dim":"var(--c-secondary-dim)",
+        "secondary-container":"var(--c-secondary-cont)","secondary-fixed":"var(--c-secondary-cont)",
+        "secondary-fixed-dim":"var(--c-secondary-dim)",
+        "on-secondary":"var(--c-on-secondary)","on-secondary-container":"var(--c-on-secondary-cont)",
+        "on-secondary-fixed":"var(--c-on-secondary)","on-secondary-fixed-variant":"var(--c-on-secondary-cont)",
+        "tertiary":"var(--c-tertiary)","tertiary-dim":"var(--c-tertiary-dim)",
+        "tertiary-container":"var(--c-tertiary-cont)","tertiary-fixed":"var(--c-tertiary-cont)",
+        "tertiary-fixed-dim":"var(--c-tertiary-dim)",
+        "on-tertiary":"var(--c-on-tertiary)","on-tertiary-container":"var(--c-on-tertiary-cont)",
+        "on-tertiary-fixed":"var(--c-on-tertiary)","on-tertiary-fixed-variant":"var(--c-on-tertiary-cont)",
+        "error":"var(--c-error)","error-dim":"var(--c-error-dim)","error-container":"var(--c-error-cont)",
+        "on-error":"var(--c-on-error)","on-error-container":"var(--c-on-error-cont)",
+        "warning":"var(--c-warning)","warning-dim":"var(--c-warning-dim)","warning-container":"var(--c-warning-cont)",
+        "agent-claude":"var(--c-agent-claude)","agent-claude-dim":"var(--c-agent-claude-dim)","agent-claude-container":"var(--c-agent-claude-cont)",
+        "outline":"var(--c-outline)","outline-variant":"var(--c-outline-var)",
+        "background":"var(--c-bg)","surface-tint":"var(--c-tint)",
+        "inverse-surface":"var(--c-on-surface)","inverse-on-surface":"var(--c-surface)",
+        "inverse-primary":"var(--c-primary-dim)",
+      },
+      fontFamily: {"headline":["DM Serif Display","Manrope"],"body":["Inter"],"label":["Inter"]},
+      borderRadius: {"DEFAULT":"0.5rem","lg":"0.75rem","xl":"1.25rem","2xl":"1.5rem","full":"9999px"},
+    },
+  },
+}
+</script>
+<link rel="stylesheet" href="/static/theme.css?v=1775292039">
+</head>
+<body class="bg-surface-dim text-on-surface font-body selection:bg-primary/20 text-[13px]">
+
+<!-- SIDEBAR -->
+<aside id="sidebar" class="h-full w-16 fixed left-0 top-0 border-r flex flex-col py-4 z-50 items-center">
+  <div class="mb-8">
+    <div class="w-9 h-9 rounded-2xl bg-primary flex items-center justify-center">
+      <span class="material-symbols-outlined text-white text-xl">view_in_ar</span>
+    </div>
+  </div>
+  <nav class="flex-1 flex flex-col items-center gap-1" id="nav-links">
+    <a data-view="chat" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center transition-colors duration-200 cursor-pointer" title="Chat" aria-label="Chat">
+      <span class="material-symbols-outlined text-xl">chat_bubble</span>
+    </a>
+    <a data-view="dashboard" class="nav-link nav-active w-10 h-10 rounded-xl flex items-center justify-center transition-colors duration-200 cursor-pointer" title="Dashboard" aria-label="Dashboard">
+      <span class="material-symbols-outlined text-xl">dashboard</span>
+    </a>
+    <a data-view="kanban" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="Kanban" aria-label="Kanban">
+      <span class="material-symbols-outlined text-xl">view_kanban</span>
+    </a>
+    <a data-view="projects" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="Projects" aria-label="Projects">
+      <span class="material-symbols-outlined text-xl">folder_open</span>
+    </a>
+    <a data-view="notes" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="Notas" aria-label="Notas">
+      <span class="material-symbols-outlined text-xl">description</span>
+    </a>
+    <a data-view="history" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="Historial" aria-label="Historial">
+      <span class="material-symbols-outlined text-xl">history</span>
+    </a>
+    <a data-view="system" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="System" aria-label="System">
+      <span class="material-symbols-outlined text-xl">settings_input_component</span>
+    </a>
+  </nav>
+  <div class="mt-auto flex flex-col items-center gap-2">
+    <button onclick="openNewTaskModal()" class="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white hover:opacity-90 transition-all active:scale-95" title="New Task" aria-label="New Task">
+      <span class="material-symbols-outlined text-xl">add</span>
+    </button>
+    <a onclick="switchView('system');setTimeout(()=>switchSystemTab('config'),100)" class="w-10 h-10 rounded-xl flex items-center justify-center nav-item transition-colors duration-200 cursor-pointer" title="Settings" aria-label="Settings">
+      <span class="material-symbols-outlined text-xl">settings</span>
+    </a>
+  </div>
+</aside>
+<div id="sidebar-overlay" onclick="document.getElementById('sidebar').classList.remove('open')"></div>
+
+<!-- TOPBAR -->
+<header class="topbar fixed top-0 right-0 h-16 backdrop-blur-xl border-b flex justify-between items-center px-8 z-40" style="margin-left:4rem;width:calc(100% - 4rem)">
+  <div class="flex items-center gap-4">
+    <button class="lg:hidden p-2 text-on-surface-variant" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="Toggle navigation menu">
+      <span class="material-symbols-outlined">menu</span>
+    </button>
+    <div class="relative w-full max-w-md group">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+      <input id="topbar-search" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 pl-10 pr-4 text-sm text-on-surface placeholder:text-on-surface-variant focus:ring-1 focus:ring-primary/50" placeholder="Search tasks... ( / )" type="text" onfocus="openSearchOverlay()">
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <button onclick="toggleTheme()" class="p-2 text-on-surface-variant hover:bg-surface-bright rounded-lg transition-all" title="Cambiar tema" id="theme-toggle-btn">
+      <span class="material-symbols-outlined text-xl" id="theme-toggle-icon">dark_mode</span>
+    </button>
+    <div class="h-8 w-[1px] bg-outline-variant/20"></div>
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+        <span class="material-symbols-outlined text-primary text-sm">person</span>
+      </div>
+      <span class="text-sm font-medium text-on-surface hidden md:block" id="nav-username">Niwa</span>
+    </div>
+  </div>
+</header>
+
+<!-- MAIN CONTENT -->
+<main class="ml-16 pt-20 min-h-screen flex flex-col">
+<div class="px-10 pb-16 pt-4 flex-1 relative max-w-[1600px] mx-auto w-full">
+
+<!-- ============ DASHBOARD VIEW ============ -->
+<section id="view-dashboard" class="view-section active">
+  <!-- KPI Row -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Hoy</span>
+        <span class="material-symbols-outlined text-primary text-lg">today</span>
+      </div>
+      <div id="kpi-today" class="text-2xl font-headline font-bold">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-today-sub">pendientes</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm cursor-pointer" onclick="switchView('system');setTimeout(()=>switchSystemTab('routines'),100)">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Rutinas</span>
+        <span class="material-symbols-outlined text-secondary text-lg">schedule</span>
+      </div>
+      <div class="text-2xl font-headline font-bold" id="kpi-routines-count">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-routines-sub">activas</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Pendientes</span>
+        <span class="material-symbols-outlined text-warning text-lg">pending</span>
+      </div>
+      <div class="text-2xl font-headline font-bold" id="kpi-pending">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1">en cola</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Bloqueadas</span>
+        <span class="material-symbols-outlined text-error text-lg">block</span>
+      </div>
+      <div class="text-2xl font-headline font-bold" id="kpi-blocked">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1">tareas</p>
+    </div>
+  </div>
+
+  <!-- Main grid -->
+  <div class="grid grid-cols-12 gap-6">
+    <!-- Left column -->
+    <div class="col-span-12 xl:col-span-8 space-y-6">
+      <!-- Needs attention -->
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Necesita tu atención</h3>
+          <a class="text-[10px] text-primary hover:underline font-medium cursor-pointer" onclick="switchView('kanban')">Ver kanban</a>
+        </div>
+        <div id="dash-attention" class="space-y-2"></div>
+      </section>
+
+      <!-- Projects overview -->
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Proyectos</h3>
+          <a class="text-[10px] text-primary hover:underline font-medium cursor-pointer" onclick="switchView('projects')">Ver todos</a>
+        </div>
+        <div id="dash-projects" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+      </section>
+
+      <!-- Velocity -->
+      <section class="niwa-card rounded-2xl shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Velocidad (7d)</h3>
+            <p class="text-[10px] text-on-surface-variant mt-1" id="velocity-summary"></p>
+          </div>
+        </div>
+        <div id="velocity-chart" class="h-36 flex items-end gap-1"></div>
+      </section>
+
+      <!-- Pipeline / Bottlenecks -->
+      <section class="niwa-card rounded-2xl shadow-sm p-6" id="pipeline-card">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider" id="pipeline-title">Pipeline</h3>
+            <p class="text-[10px] text-on-surface-variant mt-1" id="pipeline-summary"></p>
+          </div>
+          <div class="flex items-center gap-2">
+            <select id="pipeline-days" class="bg-surface-container-high border-none rounded-lg py-1 px-2 text-[11px] text-on-surface" onchange="loadPipelineChart()">
+              <option value="7">7d</option>
+              <option value="30">30d</option>
+            </select>
+          </div>
+        </div>
+        <!-- KPIs row -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5" id="pipeline-kpis"></div>
+        <!-- Stacked bar chart -->
+        <div id="pipeline-chart" class="space-y-3"></div>
+        <!-- Legend -->
+        <div id="pipeline-legend" class="flex flex-wrap gap-4 mt-4 text-[10px] text-on-surface-variant"></div>
+      </section>
+    </div>
+
+    <!-- Right column -->
+    <div class="col-span-12 xl:col-span-4 space-y-6">
+      <!-- Activity feed -->
+      <div class="niwa-card rounded-2xl shadow-sm p-5 flex flex-col">
+        <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider mb-4">Actividad reciente</h3>
+        <div id="activity-feed" class="space-y-3 overflow-y-auto max-h-[400px]"></div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============ KANBAN VIEW ============ -->
+<section id="view-kanban" class="view-section">
+  <div class="kanban-header-wrap flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
+    <div>
+      <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight">Tareas</h2>
+      <p class="text-on-surface-variant mt-2 max-w-md text-sm">Orchestrate agent workflows and manual operations.</p>
+    </div>
+    <div class="kanban-filters flex flex-wrap items-center gap-3">
+      <select id="kanban-filter-project" class="bg-surface-container-high border-none rounded-lg py-2 px-3 text-sm text-on-surface" onchange="loadKanban()">
+        <option value="">All Projects</option>
+      </select>
+      <label class="flex items-center gap-2 text-xs text-on-surface-variant">
+        <input type="checkbox" id="kanban-show-done" class="rounded bg-surface-container-high border-none" onchange="loadKanban()" checked> Done
+      </label>
+      <button id="btn-run-review" onclick="triggerIdleReview()" class="flex items-center gap-2 bg-primary hover:bg-primary/80 text-on-primary rounded-lg py-2 px-4 text-sm font-medium transition-colors">
+        <svg id="review-icon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <span id="review-btn-text">Run Review</span>
+      </button>
+    </div>
+  </div>
+  <div id="kanban-board" class="flex flex-col lg:grid lg:grid-cols-5 gap-4 lg:gap-6 items-start px-1 lg:px-0"></div>
+</section>
+
+<!-- ============ PROJECTS VIEW ============ -->
+<section id="view-projects" class="view-section">
+  <div id="projects-list-view">
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight">Projects</h2>
+        <p class="text-on-surface-variant mt-2">Manage and monitor all active projects.</p>
+      </div>
+    </div>
+    <div id="projects-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+  </div>
+  <div id="project-detail-view" class="hidden">
+    <div class="flex items-center gap-4 mb-8">
+      <button onclick="showProjectsList()" class="p-2 hover:bg-surface-bright rounded-lg transition-all text-on-surface-variant">
+        <span class="material-symbols-outlined">arrow_back</span>
+      </button>
+      <div class="flex-1">
+        <div class="flex items-center gap-2 text-on-surface-variant text-xs font-medium tracking-widest uppercase mb-1">
+          <span class="material-symbols-outlined text-sm">terminal</span>
+          <span id="project-path"></span>
+        </div>
+        <h2 id="project-title" class="font-headline text-3xl font-extrabold text-on-surface tracking-tight"></h2>
+      </div>
+      <div id="project-status-badge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-tertiary/10"></div>
+      <div id="project-idle-toggle" class="flex items-center gap-2 ml-2"></div>
+    </div>
+    <div id="project-live-preview"></div>
+    <div class="grid grid-cols-12 gap-6">
+      <section class="col-span-12 lg:col-span-7 niwa-card rounded-2xl shadow-sm overflow-hidden flex flex-col">
+        <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
+          <h3 class="text-sm font-semibold flex items-center gap-2">
+            <span class="material-symbols-outlined text-on-surface-variant text-lg">list</span>Project Tasks
+          </h3>
+        </div>
+        <div class="p-4 overflow-auto max-h-[400px]">
+          <table class="w-full text-left min-w-[400px]">
+            <thead class="text-on-surface-variant text-[10px] uppercase tracking-wider">
+              <tr><th class="pb-4 font-medium px-2">Title</th><th class="pb-4 font-medium px-2">Status</th><th class="pb-4 font-medium px-2">Modified</th></tr>
+            </thead>
+            <tbody id="project-tasks-table" class="text-sm"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="col-span-12 lg:col-span-5 flex flex-col gap-6">
+        <div class="niwa-card rounded-2xl shadow-sm p-6 flex-1">
+          <div class="flex justify-between items-center mb-5">
+            <h3 class="text-sm font-semibold flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary text-lg">insights</span>Task Breakdown
+            </h3>
+            <span id="project-stat-total" class="text-[10px] text-on-surface-variant font-bold uppercase">0 tasks</span>
+          </div>
+          <div class="flex items-center gap-6 mb-5">
+            <div id="project-type-donut" class="relative flex-shrink-0" style="width:120px;height:120px"></div>
+            <div id="project-type-legend" class="flex-1 space-y-2"></div>
+          </div>
+          <div id="project-task-type-chart" class="space-y-2.5"></div>
+          <div id="project-kanban-tasks" class="space-y-2 mt-5 pt-5 border-t border-outline-variant/10"></div>
+        </div>
+      </section>
+      <!-- Project Files -->
+      <section class="col-span-12 niwa-card rounded-2xl shadow-sm overflow-hidden">
+        <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
+          <h3 class="text-sm font-semibold flex items-center gap-2">
+            <span class="material-symbols-outlined text-on-surface-variant text-lg">folder_open</span>Archivos
+          </h3>
+          <div class="flex items-center gap-3">
+            <span id="project-files-count" class="text-[10px] text-on-surface-variant font-mono"></span>
+            <label class="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs font-bold cursor-pointer hover:bg-primary/20 transition-colors">
+              <span class="material-symbols-outlined text-sm">upload_file</span>
+              Subir
+              <input type="file" multiple class="hidden" onchange="uploadProjectFiles(this.files)">
+            </label>
+          </div>
+        </div>
+        <div id="upload-progress" class="hidden px-6 py-2">
+          <div class="flex items-center gap-3">
+            <div class="flex-1 bg-outline-variant/20 rounded-full h-2 overflow-hidden">
+              <div id="upload-progress-fill" class="h-full bg-primary rounded-full transition-all duration-200" style="width:0%"></div>
+            </div>
+            <span id="upload-progress-text" class="text-[10px] text-on-surface-variant whitespace-nowrap"></span>
+          </div>
+        </div>
+        <div id="project-files-tree" class="p-4 overflow-y-auto max-h-[300px] font-mono text-sm">
+          <p class="text-on-surface-variant text-sm">Cargando...</p>
+        </div>
+        <div class="border-t border-outline-variant/10 px-6 py-3">
+          <h4 class="text-[10px] text-on-surface-variant uppercase font-bold tracking-wider mb-2">Archivos subidos</h4>
+          <div id="project-uploads-list" class="max-h-[150px] overflow-y-auto"></div>
+        </div>
+      </section>
+      <!-- Live Preview -->
+      <section id="project-preview-section" class="col-span-12 niwa-card rounded-2xl shadow-sm overflow-hidden hidden">
+        <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/20">
+          <h3 class="text-sm font-semibold flex items-center gap-2">
+            <span class="material-symbols-outlined text-tertiary text-lg">play_circle</span>Live Preview
+          </h3>
+          <div class="flex gap-2 items-center">
+            <div id="preview-device-toggle" class="flex bg-surface-container-highest/30 rounded-lg p-0.5 gap-0.5">
+              <button onclick="setPreviewDevice('desktop')" id="preview-btn-desktop" class="preview-device-btn preview-device-active p-1.5 rounded-md text-on-surface-variant transition-all" title="Desktop (16:9)">
+                <span class="material-symbols-outlined text-sm">desktop_windows</span>
+              </button>
+              <button onclick="setPreviewDevice('mobile')" id="preview-btn-mobile" class="preview-device-btn p-1.5 rounded-md text-on-surface-variant transition-all" title="Mobile">
+                <span class="material-symbols-outlined text-sm">smartphone</span>
+              </button>
+            </div>
+            <button onclick="togglePreviewSize()" class="p-1.5 rounded-lg hover:bg-surface-bright text-on-surface-variant transition-all" title="Toggle size">
+              <span class="material-symbols-outlined text-sm" id="preview-size-icon">fullscreen</span>
+            </button>
+            <button onclick="openPreviewExternal()" class="p-1.5 rounded-lg hover:bg-surface-bright text-on-surface-variant transition-all" title="Open in new tab">
+              <span class="material-symbols-outlined text-sm">open_in_new</span>
+            </button>
+          </div>
+        </div>
+        <div id="project-preview-container" class="relative preview-desktop bg-surface-container-high/30">
+          <div id="preview-loader" class="absolute inset-0 flex items-center justify-center bg-surface-container-high z-10">
+            <div class="flex flex-col items-center gap-3">
+              <div class="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+              <span class="text-on-surface-variant text-xs">Loading preview...</span>
+            </div>
+          </div>
+          <iframe id="project-preview-iframe" class="w-full h-full border-0" sandbox="allow-scripts allow-same-origin allow-popups" onload="document.getElementById('preview-loader').style.display='none'"></iframe>
+        </div>
+      </section>
+      <section class="col-span-12 niwa-card rounded-2xl shadow-sm p-8">
+        <div class="flex items-center justify-between mb-6">
+          <h3 class="text-lg font-headline font-bold flex items-center gap-3">
+            <span class="material-symbols-outlined text-primary">analytics</span>Project Activity Stream
+          </h3>
+        </div>
+        <div id="project-activity" class="space-y-4 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[1px] before:bg-outline-variant/20"></div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============ HISTORY VIEW ============ -->
+<section id="view-history" class="view-section hidden p-6">
+  <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-8">
+    <div>
+      <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight">Historial de Ejecuciones</h2>
+      <p class="text-on-surface-variant mt-2 max-w-lg">Registro completo de tareas ejecutadas por agentes.</p>
+    </div>
+  </div>
+
+  <!-- Stats Cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Total</span>
+        <span class="material-symbols-outlined text-primary text-lg">functions</span>
+      </div>
+      <p class="text-2xl font-headline font-bold text-on-surface" id="history-stat-total">0</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Exitosas</span>
+        <span class="material-symbols-outlined text-tertiary text-lg">check_circle</span>
+      </div>
+      <p class="text-2xl font-headline font-bold text-tertiary" id="history-stat-success">0</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Fallidas</span>
+        <span class="material-symbols-outlined text-error text-lg">error</span>
+      </div>
+      <p class="text-2xl font-headline font-bold text-error" id="history-stat-failed">0</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Duración Prom.</span>
+        <span class="material-symbols-outlined text-secondary text-lg">timer</span>
+      </div>
+      <p class="text-2xl font-headline font-bold text-secondary" id="history-stat-avg-duration">—</p>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="niwa-card rounded-2xl shadow-sm p-4 mb-6">
+    <div class="flex flex-wrap items-center gap-3">
+      <select id="history-filter-project" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface min-w-[160px]">
+        <option value="" selected>Todos los proyectos</option>
+      </select>
+      <input type="date" id="history-filter-from" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface" placeholder="Desde">
+      <input type="date" id="history-filter-to" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface" placeholder="Hasta">
+      <select id="history-filter-source" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface">
+        <option value="">Todas las fuentes</option>
+        <option value="manual">Manual</option>
+        <option value="routine">Routine</option>
+        <option value="webhook">Webhook</option>
+        <option value="agent">Agente</option>
+      </select>
+      <select id="history-filter-result" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg px-3 py-2 text-sm text-on-surface">
+        <option value="">Todos los resultados</option>
+        <option value="success">Exitosa</option>
+        <option value="error">Error</option>
+        <option value="timeout">Timeout</option>
+        <option value="cancelled">Cancelada</option>
+      </select>
+      <div class="relative flex-1 min-w-[200px]">
+        <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+        <input type="text" id="history-filter-search" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 pl-10 pr-4 text-sm text-on-surface placeholder:text-on-surface-variant" placeholder="Buscar por título, agente, ID...">
+      </div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="niwa-card rounded-2xl shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm" id="history-table">
+        <thead>
+          <tr class="border-b border-outline-variant/20 text-left">
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="id">ID <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="task">Tarea <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="project">Proyecto <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="agent">Agente <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="source">Fuente <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="started">Inicio <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="duration">Duración <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+            <th class="px-4 py-3 text-[10px] font-label uppercase tracking-wider text-on-surface-variant cursor-pointer hover:text-on-surface" data-sort="result">Resultado <span class="material-symbols-outlined text-[12px] align-middle">unfold_more</span></th>
+          </tr>
+        </thead>
+        <tbody id="history-table-body" class="divide-y divide-outline-variant/10">
+          <tr><td colspan="8" class="px-4 py-12 text-center text-on-surface-variant">Sin datos de historial</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div id="history-pagination" class="flex items-center justify-between mt-4 text-sm text-on-surface-variant">
+    <span id="history-page-info">Mostrando 0 de 0</span>
+    <div class="flex gap-2">
+      <button id="history-prev" class="px-3 py-1.5 rounded-lg niwa-card border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
+        <span class="material-symbols-outlined text-sm">chevron_left</span>
+      </button>
+      <button id="history-next" class="px-3 py-1.5 rounded-lg niwa-card border border-outline-variant/30 hover:bg-surface-bright transition-colors disabled:opacity-40" disabled>
+        <span class="material-symbols-outlined text-sm">chevron_right</span>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SYSTEM VIEW ============ -->
+<section id="view-system" class="view-section">
+  <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-8">
+    <div>
+      <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight">System Panel</h2>
+      <p class="text-on-surface-variant mt-2 max-w-lg">Core infrastructure monitoring and configuration.</p>
+    </div>
+    <div></div>
+  </div>
+  <!-- System sub-tabs -->
+  <div class="flex gap-2 mb-8 overflow-x-auto pb-1 -webkit-overflow-scrolling-touch scrollbar-none" style="-webkit-overflow-scrolling:touch">
+    <button data-systab="overview" onclick="switchSystemTab('overview')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Overview</button>
+    <button data-systab="routines" onclick="switchSystemTab('routines')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Routines</button>
+    <button data-systab="logs" onclick="switchSystemTab('logs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Logs</button>
+    <button data-systab="services" onclick="switchSystemTab('services')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Servicios</button>
+    <button data-systab="config" onclick="switchSystemTab('config')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Config</button>
+    <button data-systab="stats" onclick="switchSystemTab('stats')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Stats</button>
+    <button data-systab="kpis" onclick="switchSystemTab('kpis')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">KPIs</button>
+    <button data-systab="docs" onclick="switchSystemTab('docs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Docs</button>
+    <button data-systab="styles" onclick="switchSystemTab('styles')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Styles</button>
+  </div>
+
+  <!-- Overview Tab -->
+  <div id="sys-overview" class="sys-panel">
+    <div class="grid grid-cols-12 gap-6">
+      <div class="col-span-12 lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <div class="niwa-card p-6 rounded-lg">
+          <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-primary">memory</span></div>
+          <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Total Tasks</h3>
+          <div id="sys-total" class="text-4xl font-headline font-bold text-on-surface">--</div>
+        </div>
+        <div class="niwa-card p-6 rounded-lg">
+          <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-secondary">layers</span></div>
+          <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Open Tasks</h3>
+          <div id="sys-open" class="text-4xl font-headline font-bold text-on-surface">--</div>
+        </div>
+        <div class="niwa-card p-6 rounded-lg">
+          <div class="flex justify-between items-start mb-4"><span class="material-symbols-outlined text-tertiary">database</span></div>
+          <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-wider mb-2">Done Today</h3>
+          <div id="sys-done-today" class="text-4xl font-headline font-bold text-on-surface">--</div>
+        </div>
+      </div>
+      <div class="col-span-12 lg:col-span-4">
+        <div class="bg-gradient-to-br from-primary-container to-surface-container-highest p-6 rounded-lg relative overflow-hidden group h-full flex flex-col justify-between">
+          <h3 class="text-xs font-label text-primary uppercase tracking-[0.2em] mb-4">Scheduler</h3>
+          <div class="flex items-center gap-4">
+            <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+              <span class="material-symbols-outlined text-primary">schedule</span>
+            </div>
+            <div>
+              <p class="text-xl font-headline font-bold text-on-surface" id="sys-scheduler-status">--</p>
+              <p class="text-[10px] text-on-surface-variant uppercase tracking-widest" id="sys-scheduler-sub">routines</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Stats by status -->
+      <div class="col-span-12">
+        <div class="niwa-card rounded-2xl shadow-sm p-6">
+          <h3 class="text-sm font-semibold mb-4">Tasks by Status</h3>
+          <div id="sys-by-status" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"></div>
+        </div>
+      </div>
+      <!-- Update button -->
+      <div class="col-span-12">
+        <div class="niwa-card rounded-2xl shadow-sm p-6 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-semibold">Actualizar Niwa</h3>
+            <p class="text-xs text-on-surface-variant mt-1">Descarga la \u00faltima versi\u00f3n y reinicia los servicios. Config y datos se preservan.</p>
+          </div>
+          <button id="btn-niwa-update" onclick="niwaUpdate()"
+            class="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+            style="background: var(--c-primary); color: var(--c-on-primary);">
+            Actualizar Niwa
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logs Tab -->
+  <div id="sys-logs" class="sys-panel hidden">
+    <div class="bg-surface-container-high rounded-lg overflow-hidden">
+      <div class="px-6 py-4 flex justify-between items-center bg-surface-container-highest/30">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-sm text-on-surface-variant">terminal</span>
+          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Logs</h3>
+        </div>
+        <div class="flex gap-4 items-center">
+          <select id="log-source" class="bg-surface-dim border-none rounded text-xs py-1 px-2 text-on-surface" onchange="loadLogs()">
+            <option value="all">All Sources</option>
+            <option value="gateway">Gateway</option>
+            <option value="executor">Executor</option>
+          </select>
+        </div>
+      </div>
+      <div id="logs-container" class="p-6 font-mono text-[11px] h-96 overflow-y-auto space-y-1 bg-black/20"></div>
+    </div>
+  </div>
+
+  <!-- Routines Tab -->
+  <div id="sys-routines" class="sys-panel hidden">
+    <div class="niwa-card p-6 rounded-lg">
+      <div class="flex justify-between items-center mb-6">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-secondary">schedule</span>
+          <h3 class="text-xs font-label text-on-surface uppercase tracking-widest">Scheduled Routines</h3>
+        </div>
+        <button onclick="openRoutineEditor()" class="px-3 py-2 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90 transition-all flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm">add</span> Nueva
+        </button>
+      </div>
+      <div id="routines-list" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- Services Tab -->
+  <div id="sys-services" class="sys-panel hidden">
+    <div id="services-container" class="space-y-4"></div>
+  </div>
+
+  <!-- Config Tab -->
+  <div id="sys-config" class="sys-panel hidden">
+    <div id="config-panels" class="space-y-6"></div>
+  </div>
+
+  <!-- Stats Tab -->
+  <div id="sys-stats" class="sys-panel hidden">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8" id="stats-cards"></div>
+    <div class="niwa-card rounded-2xl shadow-sm p-6">
+      <h3 class="text-sm font-semibold mb-4">By Priority</h3>
+      <div id="stats-priority" class="grid grid-cols-2 md:grid-cols-5 gap-4"></div>
+    </div>
+  </div>
+
+  <!-- KPIs Tab -->
+  <div id="sys-kpis" class="sys-panel hidden">
+    <h3 class="text-xl sm:text-2xl font-headline font-bold mb-6">Pipeline KPIs</h3>
+    <!-- Overall summary -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
+        <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Completed Today</p>
+        <p id="kpi-completed-today" class="text-3xl font-headline font-bold text-green-500">--</p>
+      </div>
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
+        <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Blocked Today</p>
+        <p id="kpi-blocked-today" class="text-3xl font-headline font-bold text-error">--</p>
+      </div>
+      <div class="niwa-card rounded-2xl shadow-sm p-6 text-center">
+        <p class="text-[10px] text-on-surface-variant uppercase font-bold mb-1">Avg Pipeline Duration</p>
+        <p id="kpi-avg-pipeline" class="text-3xl font-headline font-bold text-primary">--</p>
+      </div>
+    </div>
+    <!-- Per-phase cards -->
+    <div id="kpi-phase-cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8"></div>
+    <!-- Bar chart -->
+    <div class="niwa-card rounded-2xl shadow-sm p-6 mb-8">
+      <h4 class="text-sm font-headline font-bold mb-4 text-on-surface-variant uppercase">Completions vs Blocks (14 days)</h4>
+      <div id="kpi-bar-chart" class="flex items-end gap-1 h-40 overflow-x-auto"></div>
+      <div id="kpi-bar-labels" class="flex gap-1 mt-1 text-[9px] text-on-surface-variant overflow-x-auto"></div>
+      <div class="flex gap-6 mt-3 text-xs text-on-surface-variant">
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-green-500 inline-block"></span> Completed</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-red-500 inline-block"></span> Blocked</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-amber-500 inline-block"></span> Limit Hits</span>
+      </div>
+    </div>
+    <!-- Limit-hit events table -->
+    <div class="niwa-card rounded-2xl shadow-sm p-6">
+      <h4 class="text-sm font-headline font-bold mb-4 text-on-surface-variant uppercase">Recent Limit-Hit Events</h4>
+      <div id="kpi-limit-table" class="overflow-x-auto"></div>
+    </div>
+  </div>
+
+  <!-- Docs Tab -->
+  <div id="sys-docs" class="sys-panel hidden">
+    <div id="docs-content"></div>
+  </div>
+
+  <!-- Styles Tab -->
+  <div id="sys-styles" class="sys-panel hidden">
+    <div class="grid grid-cols-12 gap-6">
+      <div class="col-span-12 lg:col-span-8">
+        <div class="niwa-card rounded-lg p-6 mb-6">
+          <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-secondary">palette</span>
+              <h3 class="text-sm font-semibold uppercase tracking-wider">Colores</h3>
+            </div>
+            <div class="flex items-center gap-3">
+              <span id="style-mode-label" class="text-xs text-on-surface-variant flex items-center gap-1"></span>
+              <button onclick="toggleTheme()" class="flex items-center gap-2 px-3 py-1.5 bg-surface-dim/50 hover:bg-surface-bright rounded-lg text-xs text-on-surface-variant transition-all">
+                <span class="material-symbols-outlined text-sm">swap_horiz</span> Cambiar a modo <span id="style-mode-switch-label"></span>
+              </button>
+            </div>
+          </div>
+          <p class="text-[10px] text-on-surface-variant mb-4">Los colores se guardan por separado para modo claro y oscuro. Cambia de modo para editar el otro.</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" id="style-colors"></div>
+        </div>
+        <div class="niwa-card rounded-lg p-6 mb-6">
+          <div class="flex items-center gap-3 mb-6">
+            <span class="material-symbols-outlined text-primary">text_fields</span>
+            <h3 class="text-sm font-semibold uppercase tracking-wider">Tipografía</h3>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Fuente principal</label>
+              <select id="style-font-body" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="Inter">Inter (default)</option>
+                <option value="system-ui">System UI</option>
+                <option value="Manrope">Manrope</option>
+                <option value="JetBrains Mono">JetBrains Mono</option>
+                <option value="Fira Code">Fira Code</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Fuente títulos</label>
+              <select id="style-font-headline" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="DM Serif Display">DM Serif Display (default)</option>
+                <option value="Manrope">Manrope</option>
+                <option value="Inter">Inter</option>
+                <option value="system-ui">System UI</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Tamaño base</label>
+              <select id="style-font-size" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="12px">Compacto</option>
+                <option value="13px" selected>Normal</option>
+                <option value="14px">Grande</option>
+                <option value="15px">Extra grande</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="niwa-card rounded-lg p-6 mb-6">
+          <div class="flex items-center gap-3 mb-6">
+            <span class="material-symbols-outlined text-tertiary">rounded_corner</span>
+            <h3 class="text-sm font-semibold uppercase tracking-wider">Forma</h3>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bordes</label>
+              <select id="style-radius" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="applyStyleChange()">
+                <option value="0px">Cuadrado</option>
+                <option value="4px">Sutil</option>
+                <option value="8px" selected>Normal</option>
+                <option value="12px">Redondeado</option>
+                <option value="20px">Muy redondeado</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <button onclick="saveStyles()" class="px-4 py-2 bg-primary text-on-primary text-sm font-bold rounded-lg hover:opacity-90">Guardar estilos</button>
+          <button onclick="saveAsCustomPreset()" class="px-4 py-2 bg-secondary text-on-secondary text-sm font-bold rounded-lg hover:opacity-90">Guardar como Custom</button>
+          <button onclick="resetStyles()" class="px-4 py-2 bg-surface-bright text-on-surface-variant text-sm font-medium rounded-lg hover:bg-surface-container-high">Restaurar defaults</button>
+        </div>
+      </div>
+      <div class="col-span-12 lg:col-span-4">
+        <div class="niwa-card rounded-lg p-6">
+          <h4 class="text-sm font-semibold mb-4">Presets</h4>
+          <div id="style-presets" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ============ NOTES VIEW ============ -->
+<section id="view-notes" class="view-section hidden">
+  <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-8">
+    <div>
+      <h2 class="text-2xl md:text-4xl font-headline font-extrabold text-on-background tracking-tight" data-i18n="notes.title">Notas</h2>
+      <p class="text-on-surface-variant mt-2" data-i18n="notes.subtitle">Base de conocimiento y notas del proyecto.</p>
+    </div>
+    <button onclick="openNoteEditor()" class="px-4 py-2 bg-gradient-to-br from-primary to-primary-container text-on-primary-container font-semibold rounded-lg flex items-center gap-2 hover:opacity-90 transition-all text-sm shrink-0 self-start sm:self-auto">
+      <span class="material-symbols-outlined text-sm">add</span><span data-i18n="notes.new_note">Nueva nota</span>
+    </button>
+  </div>
+  <!-- Filters -->
+  <div class="flex flex-wrap gap-3 mb-6">
+    <div class="relative flex-1 min-w-[200px] max-w-md">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm">search</span>
+      <input id="notes-search" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 pl-10 pr-4 text-sm text-on-surface placeholder:text-on-surface-variant focus:ring-1 focus:ring-primary/50" placeholder="Buscar notas..." type="text" oninput="filterNotes()">
+    </div>
+    <select id="notes-project-filter" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" onchange="filterNotes()">
+      <option value="">Todos los proyectos</option>
+    </select>
+  </div>
+  <!-- Notes grid -->
+  <div id="notes-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+</section>
+
+<!-- Note Editor Modal -->
+<div id="note-editor-modal" class="fixed inset-0 z-[200] hidden">
+  <div class="absolute inset-0 bg-[rgba(var(--c-modal-overlay))]" onclick="closeNoteEditor()"></div>
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl niwa-card rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-headline font-bold" id="note-editor-title">Nueva nota</h3>
+      <button onclick="closeNoteEditor()" class="p-1 hover:bg-surface-bright rounded-lg">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <input type="hidden" id="note-editor-id">
+    <div class="flex flex-col gap-4">
+      <input id="note-editor-name" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Título de la nota">
+      <select id="note-editor-project" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface">
+        <option value="">Sin proyecto</option>
+      </select>
+      <input id="note-editor-tags" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Tags (separados por coma)">
+      <textarea id="note-editor-content" rows="12" class="bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface font-mono resize-y" placeholder="Contenido de la nota..."></textarea>
+      <div class="flex justify-end gap-3">
+        <button onclick="closeNoteEditor()" class="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-bright rounded-lg transition-all">Cancelar</button>
+        <button onclick="saveNote()" class="px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:opacity-90 transition-all">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CHAT REMOVED -->
+
+<!-- Routine Editor Modal -->
+<div id="routine-editor-modal" class="fixed inset-0 z-[200] hidden">
+  <div class="absolute inset-0 bg-[rgba(var(--c-modal-overlay))]" onclick="closeRoutineEditor()"></div>
+  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg niwa-card rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-headline font-bold" id="routine-editor-title">Nueva rutina</h3>
+      <button onclick="closeRoutineEditor()" class="p-1 hover:bg-surface-bright rounded-lg">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <input type="hidden" id="routine-editor-id">
+    <div class="flex flex-col gap-4">
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Nombre</label>
+        <input id="routine-editor-name" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Backup diario">
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Descripción</label>
+        <input id="routine-editor-desc" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Opcional">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Cron (5 campos)</label>
+          <input id="routine-editor-schedule" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface font-mono" placeholder="0 3 * * *">
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Timezone</label>
+          <input id="routine-editor-tz" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="UTC" value="UTC">
+        </div>
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Acción</label>
+        <select id="routine-editor-action" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" onchange="toggleRoutineActionFields()">
+          <option value="script">Script / Comando</option>
+          <option value="create_task">Crear tarea</option>
+          <option value="webhook">Webhook</option>
+        </select>
+      </div>
+      <div id="routine-action-script">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Comando</label>
+        <textarea id="routine-editor-command" rows="3" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface font-mono resize-y" placeholder="python3 -c 'print(42)'"></textarea>
+      </div>
+      <div id="routine-action-task" class="hidden">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Título de la tarea</label>
+        <input id="routine-editor-task-title" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="Review idle projects">
+      </div>
+      <div id="routine-action-webhook" class="hidden">
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">URL del webhook</label>
+        <input id="routine-editor-webhook-url" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface" placeholder="https://example.com/hook">
+      </div>
+      <div>
+        <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Notificación</label>
+        <select id="routine-editor-notify" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-4 text-sm text-on-surface">
+          <option value="none">Sin notificación</option>
+          <option value="telegram">Telegram</option>
+          <option value="webhook">Webhook</option>
+        </select>
+      </div>
+      <div class="flex justify-end gap-3">
+        <button onclick="closeRoutineEditor()" class="px-4 py-2 text-sm text-on-surface-variant hover:bg-surface-bright rounded-lg transition-all">Cancelar</button>
+        <button onclick="saveRoutine()" class="px-4 py-2 bg-primary text-on-primary text-sm font-semibold rounded-lg hover:opacity-90 transition-all">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<section id="view-chat" class="view-section">
+    <div class="flex" style="position: fixed; top: 64px; left: 64px; right: 0; bottom: 0; overflow: hidden;">
+        <!-- Sessions panel -->
+        <div id="chat-sessions-panel" class="w-64 border-r flex flex-col" style="border-color: var(--c-border);">
+            <div class="p-3 flex items-center justify-between" style="border-bottom: 1px solid var(--c-border);">
+                <span class="font-semibold text-sm" style="color: var(--c-on-surface);">Conversaciones</span>
+                <button onclick="createChatSession()" class="w-7 h-7 rounded-lg flex items-center justify-center hover:opacity-80 transition-all" style="background: var(--c-primary); color: white;">
+                    <span class="material-symbols-outlined text-sm">add</span>
+                </button>
+            </div>
+            <div id="chat-sessions-list" class="flex-1 overflow-y-auto p-2 flex flex-col gap-1"></div>
+        </div>
+        <!-- Chat panel -->
+        <div class="flex-1 flex flex-col">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 flex flex-col gap-3"></div>
+            <div class="p-3 flex gap-2" style="border-top: 1px solid var(--c-border);">
+                <textarea id="chat-input" rows="1" placeholder="Escribe un mensaje..."
+                    class="flex-1 rounded-xl px-4 py-2 text-sm resize-none"
+                    style="background: var(--c-surface-container); color: var(--c-on-surface); border: 1px solid var(--c-border); max-height: 120px;"
+                    onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChatMessage();}"></textarea>
+                <button onclick="sendChatMessage()" id="chat-send-btn"
+                    class="w-10 h-10 rounded-xl flex items-center justify-center transition-all hover:opacity-80"
+                    style="background: var(--c-primary); color: white;">
+                    <span class="material-symbols-outlined text-xl">send</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<!-- ============ TASK EDIT MODAL ============ -->
+<div id="task-modal" class="fixed inset-0 z-[100] hidden">
+  <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" onclick="closeTaskModal()"></div>
+  <div class="absolute right-0 top-0 h-full w-full max-w-xl niwa-card overflow-y-auto shadow-2xl">
+    <div class="p-4 sm:p-8">
+      <div class="flex justify-between items-center mb-8">
+        <h3 id="task-modal-title" class="text-xl font-headline font-bold">New Task</h3>
+        <div class="flex gap-2">
+          <button id="task-reject-btn" class="p-2 text-warning hover:bg-warning/10 rounded-lg transition-all hidden" onclick="rejectTask()">
+            <span class="material-symbols-outlined">undo</span>
+          </button>
+          <button id="task-delete-btn" class="p-2 text-error hover:bg-error/10 rounded-lg transition-all hidden" onclick="deleteTask()">
+            <span class="material-symbols-outlined">delete</span>
+          </button>
+          <button class="p-2 text-on-surface-variant hover:bg-surface-bright rounded-lg transition-all" onclick="closeTaskModal()">
+            <span class="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      </div>
+      <form id="task-form" class="space-y-5" onsubmit="saveTask(event)">
+        <input type="hidden" id="task-id" value="">
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.title">Título</label>
+          <input id="task-title" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50" required>
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.description">Descripción</label>
+          <textarea id="task-desc" rows="3" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50 resize-none"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.status">Estado</label>
+            <select id="task-status" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface">
+              <option value="inbox" data-i18n="status.inbox">Inbox</option>
+              <option value="pendiente" data-i18n="status.pendiente">Pendiente</option>
+              <option value="en_progreso" data-i18n="status.en_progreso">En progreso</option>
+              <option value="revision" data-i18n="status.revision">Revisión</option>
+              <option value="bloqueada" data-i18n="status.bloqueada">Bloqueada</option>
+              <option value="hecha" data-i18n="status.hecha">Hecha</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.priority">Prioridad</label>
+            <select id="task-priority" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface">
+              <option value="media" data-i18n="priority.media">Media</option>
+              <option value="baja" data-i18n="priority.baja">Baja</option>
+              <option value="alta" data-i18n="priority.alta">Alta</option>
+              <option value="critica" data-i18n="priority.critica">Crítica</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.category">Área / Proyecto</label>
+          <select id="task-category" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface">
+            <option value="personal" data-i18n="area.personal">Personal</option>
+            <option value="empresa" data-i18n="area.empresa">Empresa</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.due_date">Fecha límite</label>
+            <input id="task-due" type="date" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50">
+          </div>
+          <div>
+            <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.start_date">Fecha inicio</label>
+            <input id="task-start" type="date" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50">
+          </div>
+        </div>
+        <div class="flex gap-6">
+          <label class="flex items-center gap-2 text-sm text-on-surface-variant cursor-pointer">
+            <input type="checkbox" id="task-urgent" class="rounded bg-surface-dim border-none text-error focus:ring-error/50"> <span data-i18n="task.urgent">Urgente</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm text-on-surface-variant cursor-pointer">
+            <input type="checkbox" id="task-yume" class="rounded bg-surface-dim border-none text-primary focus:ring-primary/50"> <span data-i18n="task.auto_execute">Auto-ejecutar</span>
+          </label>
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.labels">Etiquetas</label>
+          <div id="task-labels" class="flex flex-wrap gap-2 mb-2"></div>
+          <div class="flex gap-2">
+            <input id="task-label-input" class="flex-1 bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-2 px-3 text-sm text-on-surface" data-i18n-placeholder="task.add_label" placeholder="Añadir etiqueta...">
+            <button type="button" onclick="addLabel()" class="px-3 py-2 bg-surface-bright rounded-lg text-xs font-medium text-on-surface-variant hover:text-on-surface" data-i18n="misc.save">Añadir</button>
+          </div>
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.attachments">Adjuntos</label>
+          <div id="task-attachments" class="flex flex-wrap gap-2 mb-2"></div>
+          <label class="flex items-center gap-2 px-4 py-2 bg-surface-dim rounded-lg cursor-pointer hover:bg-surface-bright transition-all text-sm text-on-surface-variant">
+            <span class="material-symbols-outlined text-base">attach_file</span>
+            <span data-i18n="task.add_files">Añadir archivos...</span>
+            <input type="file" id="task-attachment-input" multiple accept="image/*,.pdf,.txt,.csv" class="hidden" onchange="uploadTaskAttachments(this.files)">
+          </label>
+        </div>
+        <div id="task-pipeline-container" class="hidden">
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block">Pipeline</label>
+          <div id="task-pipeline" class="space-y-1"></div>
+        </div>
+        <div>
+          <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest mb-2 block" data-i18n="task.notes">Notas</label>
+          <textarea id="task-notes" rows="3" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 px-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50 resize-none"></textarea>
+        </div>
+        <button type="submit" class="w-full py-3 bg-gradient-to-br from-primary to-primary-container text-on-primary-container font-bold rounded-lg hover:opacity-90 transition-all" data-i18n="task.save">Guardar tarea</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CONNECTION MODAL ============ -->
+<div id="search-overlay" class="fixed inset-0 z-[110] hidden">
+  <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeSearchOverlay()"></div>
+  <div class="absolute top-20 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-full max-w-2xl niwa-card rounded-2xl shadow-sm p-4 sm:p-6">
+    <div class="relative mb-4">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+      <input id="search-input" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-xl py-3 pl-10 pr-4 text-sm text-on-surface focus:ring-1 focus:ring-primary/50" data-i18n-placeholder="search.placeholder" placeholder="Buscar tareas, proyectos..." autofocus oninput="performSearch(this.value)">
+    </div>
+    <div id="search-results" class="max-h-96 overflow-y-auto space-y-2"></div>
+    <div class="mt-4 flex gap-4 text-[10px] text-on-surface-variant uppercase tracking-wider">
+      <span>ESC to close</span><span>ENTER to select</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TOAST CONTAINER ============ -->
+<div id="toast-container" class="fixed bottom-6 left-4 right-4 sm:left-auto sm:right-6 z-[120] space-y-3"></div>
+
+<!-- ============ ATMOSPHERIC BACKGROUNDS ============ -->
+<div class="fixed top-0 right-0 w-[400px] h-[400px] bg-primary/5 rounded-full blur-[120px] -z-10 pointer-events-none"></div>
+<div class="fixed bottom-0 left-16 w-[300px] h-[300px] bg-primary/5 rounded-full blur-[100px] -z-10 pointer-events-none"></div>
+
+<script src="/static/i18n.js?v=1775292039"></script>
+<script src="/static/task-card-utils.js?v=1775292039"></script>
+<script src="/static/pipeline-view.js?v=1775292039"></script>
+<script>document.write('<scr'+'ipt src="/static/app.js?v='+Date.now()+'"><\/scr'+'ipt>')</script>
+</body>
+</html>
