@@ -2982,6 +2982,22 @@ class Handler(BaseHTTPRequestHandler):
                     uploads.append({'name': f, 'size': size})
             return self._json(uploads)
 
+        # ── Single project by slug or id (must come AFTER sub-endpoints, BEFORE /api/projects list) ──
+        _m_proj_detail = re.match(r'^/api/projects/([^/]+)$', path)
+        if _m_proj_detail and path != '/api/projects':
+            slug = _m_proj_detail.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+                if not proj:
+                    proj = conn.execute('SELECT * FROM projects WHERE id=?', (slug,)).fetchone()
+            if not proj:
+                return self._json({'error': 'not_found'}, 404)
+            result = dict(proj)
+            with db_conn() as conn:
+                result['task_count'] = conn.execute('SELECT count(*) FROM tasks WHERE project_id=?', (proj['id'],)).fetchone()[0]
+                result['done_count'] = conn.execute("SELECT count(*) FROM tasks WHERE project_id=? AND status='hecha'", (proj['id'],)).fetchone()[0]
+            return self._json(result)
+
         if path == '/api/projects':
             return self._json(fetch_projects())
         if path == '/api/kanban-columns':
@@ -3049,6 +3065,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(check_llm_status())
         if path == '/api/tasks/history':
             from history import fetch_task_history
+            # Accept both 'limit' and 'per_page' (frontend sends per_page)
+            limit_val = int((qs.get('per_page') or qs.get('limit') or ['50'])[0])
             params = {
                 'project_id': (qs.get('project_id') or [None])[0],
                 'from': (qs.get('from') or [None])[0],
@@ -3056,11 +3074,15 @@ class Handler(BaseHTTPRequestHandler):
                 'source': (qs.get('source') or [None])[0],
                 'search': (qs.get('search') or [None])[0],
                 'page': int((qs.get('page') or ['1'])[0]),
-                'limit': int((qs.get('limit') or ['50'])[0]),
+                'limit': limit_val,
                 'sort': (qs.get('sort') or ['completed_at'])[0],
                 'order': (qs.get('order') or ['desc'])[0],
             }
-            return self._json(fetch_task_history(params, db_conn))
+            result = fetch_task_history(params, db_conn)
+            # Add per_page and pages fields for frontend compatibility
+            result['per_page'] = limit_val
+            result['pages'] = (result.get('total', 0) + limit_val - 1) // limit_val if limit_val else 1
+            return self._json(result)
         if path == '/api/search':
             q = (qs.get('q') or [''])[0]
             return self._json(search_tasks(q))
@@ -3256,6 +3278,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'JSON inválido'}, 400)
             except Exception as e:
                 return self._json({'error': f'Error importando tokens: {e}'}, 500)
+        if path == '/api/projects':
+            name = (payload.get('name') or '').strip()
+            if not name:
+                return self._json({'error': 'name required'}, 400)
+            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+            if not slug:
+                slug = str(uuid.uuid4())[:8]
+            proj_id = str(uuid.uuid4())
+            ts = now_iso()
+            with db_conn() as conn:
+                # Ensure slug uniqueness
+                existing = conn.execute('SELECT id FROM projects WHERE slug=?', (slug,)).fetchone()
+                if existing:
+                    slug = f'{slug}-{uuid.uuid4().hex[:6]}'
+                conn.execute(
+                    'INSERT INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory, url) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    (proj_id, slug, name, payload.get('area', 'proyecto'), payload.get('description', ''), 1, ts, ts, payload.get('directory', ''), payload.get('url', '')),
+                )
+                conn.commit()
+            return self._json({'ok': True, 'id': proj_id, 'slug': slug}, 201)
         if path == '/api/tasks':
             task_id = create_task(payload)
             return self._json({'ok': True, 'id': task_id}, 201)
@@ -3397,6 +3439,28 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({'error': 'task_not_found'}, 404)
                 raise
             return self._json({'ok': True})
+        _m_proj_patch = re.match(r'^/api/projects/([^/]+)$', path)
+        if _m_proj_patch:
+            slug = _m_proj_patch.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+                if not proj:
+                    proj = conn.execute('SELECT * FROM projects WHERE id=?', (slug,)).fetchone()
+                if not proj:
+                    return self._json({'error': 'not_found'}, 404)
+                allowed = {'name', 'description', 'area', 'active', 'directory', 'url'}
+                sets, params = [], []
+                for k, v in payload.items():
+                    if k in allowed:
+                        sets.append(f'{k}=?')
+                        params.append(v)
+                if sets:
+                    sets.append('updated_at=?')
+                    params.append(now_iso())
+                    params.append(proj['id'])
+                    conn.execute(f'UPDATE projects SET {", ".join(sets)} WHERE id=?', params)
+                    conn.commit()
+            return self._json({'ok': True})
         if path.startswith('/api/notes/') and path.count('/') == 3:
             note_id = path.split('/')[3]
             try:
@@ -3429,6 +3493,18 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/tasks/') and path.count('/') == 3:
             task_id = path.split('/')[3]
             delete_task(task_id)
+            return self._json({'ok': True})
+        _m_proj_del = re.match(r'^/api/projects/([^/]+)$', path)
+        if _m_proj_del:
+            slug = _m_proj_del.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+                if not proj:
+                    proj = conn.execute('SELECT * FROM projects WHERE id=?', (slug,)).fetchone()
+                if not proj:
+                    return self._json({'error': 'not_found'}, 404)
+                conn.execute('UPDATE projects SET active=0, updated_at=? WHERE id=?', (now_iso(), proj['id']))
+                conn.commit()
             return self._json({'ok': True})
         if path.startswith('/api/notes/') and path.count('/') == 3:
             note_id = path.split('/')[3]

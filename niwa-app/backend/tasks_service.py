@@ -47,7 +47,7 @@ def fetch_tasks(area=None, status=None, today_only=False, include_done=False, pr
     if today_only:
         query += ' AND (t.urgent=1 OR t.scheduled_for=? OR (t.due_at IS NOT NULL AND date(t.due_at)<=date(?)))'
         params.extend([date.today().isoformat(), date.today().isoformat()])
-    query += ' ORDER BY t.urgent DESC, CASE t.priority WHEN "critica" THEN 4 WHEN "alta" THEN 3 WHEN "media" THEN 2 ELSE 1 END DESC, COALESCE(t.due_at, t.scheduled_for, t.created_at) ASC'
+    query += ' ORDER BY t.urgent DESC, CASE t.priority WHEN "critica" THEN 4 WHEN "alta" THEN 3 WHEN "media" THEN 2 ELSE 1 END DESC, COALESCE(t.due_at, t.scheduled_for, t.created_at) ASC LIMIT 500'
     with _db_conn() as conn:
         tasks = [dict(r) for r in conn.execute(query, params).fetchall()]
     return enrich_tasks_with_agent_info(tasks)
