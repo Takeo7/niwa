@@ -446,12 +446,21 @@ _active_proc: Optional[subprocess.Popen] = None
 
 
 def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
+    """Run LLM command with PTY so Claude Code output is captured.
+
+    Claude Code writes to /dev/tty, bypassing stdout/stderr when piped.
+    Using pty.openpty() gives it a real terminal to write to, and we
+    read the master side to capture the output.
+    """
     global _active_proc
     if not LLM_COMMAND:
         return False, "NIWA_LLM_COMMAND is not configured"
+    import pty, select
     cmd = shlex.split(LLM_COMMAND) + [prompt]
     log.info("exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
     run_env = os.environ.copy()
+    run_env["TERM"] = "dumb"
+    run_env["NO_COLOR"] = "1"
     if LLM_API_KEY:
         run_env["ANTHROPIC_API_KEY"] = LLM_API_KEY
         run_env["OPENAI_API_KEY"] = LLM_API_KEY
@@ -459,18 +468,53 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     if LLM_SETUP_TOKEN:
         run_env["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
     try:
+        master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=run_env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            close_fds=True,
         )
+        os.close(slave_fd)
         _active_proc = proc
-        try:
-            stdout, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            return False, f"[timeout after {TIMEOUT_SECONDS}s]"
-        output = (stdout or "") + ("\n" + stderr if stderr else "")
+        # Read output from master until process exits or timeout
+        chunks: list[bytes] = []
+        import time as _t
+        deadline = _t.time() + TIMEOUT_SECONDS
+        while True:
+            if _t.time() > deadline:
+                proc.kill()
+                proc.wait()
+                os.close(master_fd)
+                return False, f"[timeout after {TIMEOUT_SECONDS}s]"
+            ready, _, _ = select.select([master_fd], [], [], 1.0)
+            if ready:
+                try:
+                    data = os.read(master_fd, 65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                except OSError:
+                    break
+            if proc.poll() is not None:
+                # Process exited — drain remaining output
+                while True:
+                    ready, _, _ = select.select([master_fd], [], [], 0.1)
+                    if not ready:
+                        break
+                    try:
+                        data = os.read(master_fd, 65536)
+                        if not data:
+                            break
+                        chunks.append(data)
+                    except OSError:
+                        break
+                break
+        os.close(master_fd)
+        proc.wait()
+        raw = b"".join(chunks).decode("utf-8", errors="replace")
+        # Strip ANSI escape codes
+        import re
+        output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[[\?]?[0-9;]*[a-zA-Z]", "", raw).strip()
         if proc.returncode == 0:
             return True, output
         return False, f"[exit {proc.returncode}]\n{output}"
