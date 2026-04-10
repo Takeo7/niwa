@@ -90,6 +90,10 @@ def _cfg(key: str, env_key: str, default: str = "") -> str:
 DB_PATH = ENV.get("NIWA_DB_PATH") or str(INSTALL_DIR / "data" / "niwa.sqlite3")
 LLM_COMMAND = _cfg("llm_command", "NIWA_LLM_COMMAND")
 LLM_COMMAND_CHAT = _cfg("llm_command_chat", "NIWA_LLM_COMMAND_CHAT") or ""
+LLM_COMMAND_PLANNER = _cfg("llm_command_planner", "NIWA_LLM_COMMAND_PLANNER") or ""
+LLM_COMMAND_EXECUTOR = _cfg("llm_command_executor", "NIWA_LLM_COMMAND_EXECUTOR") or ""
+PLANNER_TIMEOUT = int(ENV.get("NIWA_EXECUTOR_PLANNER_TIMEOUT_SECONDS", "300"))
+PLANNER_MAX_TURNS = int(ENV.get("NIWA_EXECUTOR_PLANNER_MAX_TURNS", "10"))
 LLM_API_KEY = _cfg("llm_api_key", "NIWA_LLM_API_KEY")
 LLM_SETUP_TOKEN = _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
 POLL_SECONDS = int(_cfg("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
@@ -611,36 +615,152 @@ def _build_retry_prompt(task, project_dir, previous_error: str) -> str:
     return base + retry_section
 
 
-def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
-    """Run a single task through the LLM. Returns (success, output)."""
-    is_chat = dict(task).get("source") == "chat"
-    project_dir = _resolve_project_dir(task["project_id"])
-    if not project_dir and task["project_id"]:
-        log.warning("Project dir not found for %s, using $HOME", task["project_id"])
-    cwd = project_dir or Path.home()
+def _build_planner_prompt(task: sqlite3.Row, project_dir) -> str:
+    """Build a prompt for the planner model to analyze and optionally split a task."""
+    ctx = _load_project_context(task["project_id"], task["id"])
+    memories = _load_memories(task["project_id"])
 
-    if retry_prompt:
-        prompt = retry_prompt
-    else:
-        prompt = _build_prompt(task, project_dir)
-    log.debug("prompt: %d chars, chat=%s", len(prompt), is_chat)
+    parts = []
 
-    # Choose command and timeout based on task type
-    if is_chat and LLM_COMMAND_CHAT:
-        llm_cmd = LLM_COMMAND_CHAT
-        timeout = CHAT_TIMEOUT_SECONDS
-        log.info("chat task %s (fast path)", task["id"])
-    else:
-        llm_cmd = LLM_COMMAND
-        timeout = TIMEOUT_SECONDS
+    # Project context (condensed)
+    if ctx["project"]:
+        p = ctx["project"]
+        parts.append(f"PROJECT: {p.get('name', '')} [{p.get('area', '')}]")
+        if p.get("description"):
+            parts.append(f"DESCRIPTION: {p['description']}")
+    if project_dir:
+        parts.append(f"DIRECTORY: {project_dir}")
 
-    heartbeat = HeartbeatThread(task["id"])
+    # Current task
+    parts.append("")
+    parts.append(f"TASK TO ANALYZE: {task['title']}")
+    if task["description"]:
+        parts.append(f"DESCRIPTION: {task['description']}")
+    if task["notes"]:
+        parts.append(f"NOTES: {task['notes'][:300]}")
+
+    # Related active tasks
+    active = [t for t in ctx["tasks"] if t["status"] in ("pendiente", "en_progreso")]
+    if active:
+        parts.append("")
+        parts.append("OTHER ACTIVE TASKS:")
+        for t in active[:5]:
+            parts.append(f"  - [{t['priority']}] {t['title']}")
+
+    # Memories
+    if memories:
+        parts.append("")
+        parts.append("RELEVANT MEMORIES:")
+        for m in memories[:5]:
+            parts.append(f"  {m['key']}: {m['value']}")
+
+    # Planner instructions
+    parts.append("")
+    parts.append("=" * 60)
+    parts.append("ROLE: You are the PLANNER. You analyze tasks and decide execution strategy.")
+    parts.append("")
+    parts.append("ANALYZE this task and choose ONE of these actions:")
+    parts.append("")
+    parts.append("OPTION A — SIMPLE TASK (can be done in one step):")
+    parts.append("  Reply with exactly: EXECUTE_DIRECTLY")
+    parts.append("  Use this for: simple code changes, single file creation, quick fixes, questions.")
+    parts.append("")
+    parts.append("OPTION B — COMPLEX TASK (needs splitting):")
+    parts.append("  Use task_create MCP tool to create 2-5 subtasks, each with:")
+    parts.append("    - Clear, specific title")
+    parts.append("    - Detailed description of what to do")
+    parts.append("    - assigned_to_claude=true")
+    parts.append("    - Same project_id as the parent task")
+    parts.append("    - status=pendiente")
+    parts.append("  Then reply with: SPLIT_INTO_SUBTASKS")
+    parts.append("  Use this for: multi-file changes, projects with multiple components,")
+    parts.append("  tasks requiring research + implementation, anything taking >10 min.")
+    parts.append("")
+    parts.append("IMPORTANT:")
+    parts.append("- Do NOT implement anything yourself. Only analyze and split.")
+    parts.append("- Each subtask must be independently executable.")
+    parts.append("- Keep subtasks ordered (first things first).")
+    parts.append("- If splitting, use task_log to explain your reasoning.")
+
+    return "\n".join(parts)
+
+
+def _run_with_heartbeat(task_id: str, prompt: str, cwd: Path, llm_cmd: str, timeout: int) -> tuple[bool, str]:
+    """Run LLM with heartbeat thread. Returns (success, output)."""
+    heartbeat = HeartbeatThread(task_id)
     heartbeat.start()
     try:
         return _run_llm(prompt, cwd, llm_command=llm_cmd, timeout=timeout)
     finally:
         heartbeat.stop()
         heartbeat.join(timeout=2)
+
+
+def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
+    """Run a task through the appropriate LLM tier.
+
+    Tier 1 (Chat): Haiku — fast responses, creates tasks
+    Tier 2 (Planner): Opus — analyzes complex tasks, splits into subtasks
+    Tier 3 (Executor): Sonnet — implements, codes, writes files
+    """
+    is_chat = dict(task).get("source") == "chat"
+    project_dir = _resolve_project_dir(task["project_id"])
+    if not project_dir and task["project_id"]:
+        log.warning("Project dir not found for %s, using $HOME", task["project_id"])
+    cwd = project_dir or Path.home()
+
+    # Tier 1: Chat → Haiku (fast path)
+    if is_chat and LLM_COMMAND_CHAT:
+        if retry_prompt:
+            prompt = retry_prompt
+        else:
+            prompt = _build_prompt(task, project_dir)
+        log.info("chat task %s (tier-1 haiku)", task["id"])
+        return _run_with_heartbeat(task["id"], prompt, cwd, LLM_COMMAND_CHAT, CHAT_TIMEOUT_SECONDS)
+
+    # Tier 2: Planner → Opus (analyze + split if needed)
+    # Only run planner for non-retry, non-chat tasks when planner is configured
+    if LLM_COMMAND_PLANNER and not retry_prompt:
+        log.info("task %s planning phase (tier-2 planner)", task["id"])
+        _record_event(task["id"], "comment", {
+            "author": "executor", "kind": "progress",
+            "message": "Planning phase: analyzing task complexity..."
+        })
+        planner_prompt = _build_planner_prompt(task, project_dir)
+        success, planner_output = _run_with_heartbeat(
+            task["id"], planner_prompt, cwd, LLM_COMMAND_PLANNER, PLANNER_TIMEOUT
+        )
+
+        if success and "SPLIT_INTO_SUBTASKS" in planner_output:
+            # Planner decided to split — the subtasks were created via MCP
+            log.info("task %s split into subtasks by planner", task["id"])
+            _record_event(task["id"], "comment", {
+                "author": "executor", "kind": "decision",
+                "message": f"Planner split task into subtasks. Planning output:\n{planner_output[:1000]}"
+            })
+            # Mark parent task as done — subtasks will execute independently
+            return True, f"[planner] Task split into subtasks.\n{planner_output}"
+
+        if success and "EXECUTE_DIRECTLY" in planner_output:
+            log.info("task %s marked as simple by planner, proceeding to executor", task["id"])
+            _record_event(task["id"], "comment", {
+                "author": "executor", "kind": "progress",
+                "message": "Planner: task is simple, executing directly."
+            })
+            # Fall through to executor tier
+        elif not success:
+            log.warning("task %s planner failed, falling back to direct execution", task["id"])
+            # Fall through to executor tier
+
+    # Tier 3: Executor → Sonnet (or default LLM_COMMAND)
+    if retry_prompt:
+        prompt = retry_prompt
+    else:
+        prompt = _build_prompt(task, project_dir)
+
+    executor_cmd = LLM_COMMAND_EXECUTOR or LLM_COMMAND
+    log.info("task %s executing (tier-3 executor)", task["id"])
+    return _run_with_heartbeat(task["id"], prompt, cwd, executor_cmd, TIMEOUT_SECONDS)
 
 
 def _handle_task_result(task_id: str, success: bool, output: str, was_retry: bool, task_row) -> tuple[bool, int]:
@@ -687,8 +807,10 @@ def main() -> None:
             "NIWA_LLM_COMMAND not set in %s — executor will idle",
             INSTALL_DIR / "secrets" / "mcp.env",
         )
-    log.info("LLM command (tasks): %s", LLM_COMMAND or "(none)")
-    log.info("LLM command (chat):  %s", LLM_COMMAND_CHAT or "(same as tasks)")
+    log.info("LLM command (tasks):    %s", LLM_COMMAND or "(none)")
+    log.info("LLM command (chat):     %s", LLM_COMMAND_CHAT or "(same as tasks)")
+    log.info("LLM command (planner):  %s", LLM_COMMAND_PLANNER or "(not set)")
+    log.info("LLM command (executor): %s", LLM_COMMAND_EXECUTOR or "(same as tasks)")
     if PUBLIC_URL:
         log.info("Public URL: %s", PUBLIC_URL)
 

@@ -1731,16 +1731,24 @@ async function loadConfig() {
         <span class="material-symbols-outlined text-secondary">model_training</span>
         <h3 class="text-sm font-semibold uppercase tracking-wider">Modelos LLM</h3>
       </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat (respuestas rápidas)</label>
-          <input id="model-chat" type="text" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono"
-                 placeholder="claude -p --max-turns 10 --model claude-haiku-4-5">
+          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Chat (Haiku — rápido)</label>
+          <input id="model-chat" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
+                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
+                 placeholder="claude -p --model claude-haiku-4-5 --max-turns 10">
         </div>
         <div>
-          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Tareas (modelo principal)</label>
-          <input id="model-tasks" type="text" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono"
-                 placeholder="claude -p --max-turns 50">
+          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Planner (Opus — analiza y divide)</label>
+          <input id="model-planner" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
+                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
+                 placeholder="claude -p --model claude-opus-4-6 --max-turns 10">
+        </div>
+        <div>
+          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Executor (Sonnet — implementa)</label>
+          <input id="model-executor" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
+                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
+                 placeholder="claude -p --model claude-sonnet-4-6 --max-turns 50">
         </div>
       </div>
       <div class="flex items-center gap-3 mt-3">
@@ -1792,27 +1800,26 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
 
 async function loadModels() {
   try {
-    const settings = await api('settings');
-    const chatInput = document.getElementById('model-chat');
-    const taskInput = document.getElementById('model-tasks');
-    if (chatInput) chatInput.value = (settings && settings['int.llm_command_chat']) || '';
-    if (taskInput) taskInput.value = (settings && settings['int.llm_command']) || '';
+    const s = await api('settings');
+    const chat = document.getElementById('model-chat');
+    const planner = document.getElementById('model-planner');
+    const executor = document.getElementById('model-executor');
+    if (chat) chat.value = s['int.llm_command_chat'] || '';
+    if (planner) planner.value = s['int.llm_command_planner'] || '';
+    if (executor) executor.value = s['int.llm_command_executor'] || s['int.llm_command'] || '';
   } catch(e) {}
 }
 
 async function saveModels() {
-  const chatEl = document.getElementById('model-chat');
-  const taskEl = document.getElementById('model-tasks');
+  const chat = document.getElementById('model-chat')?.value.trim();
+  const planner = document.getElementById('model-planner')?.value.trim();
+  const executor = document.getElementById('model-executor')?.value.trim();
   const status = document.getElementById('model-save-status');
-  const chat = chatEl ? chatEl.value.trim() : '';
-  const tasks = taskEl ? taskEl.value.trim() : '';
   try {
-    if (chat) await saveSetting('int.llm_command_chat', chat);
-    if (tasks) await saveSetting('int.llm_command', tasks);
-    if (status) {
-      status.textContent = '\u2713 Guardado. Reinicia el executor para aplicar.';
-      setTimeout(() => { status.textContent = ''; }, 5000);
-    }
+    if (chat !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_chat', value: chat }) });
+    if (planner !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_planner', value: planner }) });
+    if (executor !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_executor', value: executor }) });
+    if (status) { status.textContent = '\u2713 Guardado. Reinicia el executor para aplicar.'; setTimeout(() => status.textContent = '', 5000); }
   } catch(e) {
     if (status) status.textContent = '\u2717 Error: ' + e.message;
   }
