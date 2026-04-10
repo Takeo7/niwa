@@ -3282,7 +3282,8 @@ function renderChatMessages(messages) {
     const align = isUser ? 'items-end' : 'items-start';
     const bg = isUser ? 'var(--c-primary-container)' : 'var(--c-surface-container)';
     const color = isUser ? 'var(--c-on-primary-container)' : 'var(--c-on-surface)';
-    let content = escHtml(m.content || '');
+    let content = (m.content || '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\[>[0-9]*m/g, '').replace(/\[<[a-z]/g, '').trim();
+    content = escHtml(content);
     // Simple markdown: bold, code blocks, line breaks
     content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     content = content.replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded text-xs" style="background:var(--c-surface-variant)">$1</code>');
