@@ -788,6 +788,67 @@ def _auto_install_claude() -> bool:
     return False
 
 
+def _auto_install_openclaw() -> bool:
+    """Try to install OpenClaw via npm. Returns True if successful."""
+    if which("openclaw"):
+        return True
+    if not which("npm"):
+        warn("npm not found — cannot install OpenClaw automatically")
+        return False
+    info("Installing OpenClaw...")
+    try:
+        env = os.environ.copy()
+        env["SHARP_IGNORE_GLOBAL_LIBVIPS"] = "1"  # Avoid libvips build issues
+        r = subprocess.run(["npm", "install", "-g", "openclaw@latest"],
+                           capture_output=True, text=True, timeout=180, env=env)
+        if r.returncode == 0 and which("openclaw"):
+            version = subprocess.run(["openclaw", "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
+            ok(f"Installed OpenClaw {version}")
+            return True
+        warn(f"npm install failed: {r.stderr[:200]}")
+    except Exception as e:
+        warn(f"Auto-install failed: {e}")
+    return False
+
+
+def _configure_openclaw_mcp(cfg) -> None:
+    """Configure OpenClaw to use Niwa's MCP gateway."""
+    if not which("openclaw"):
+        return
+    gateway_port = getattr(cfg, 'gateway_sse_port', 28812)
+    gateway_token = getattr(cfg, 'mcp_gateway_token', '')
+    bind_host = getattr(cfg, 'bind_host', '127.0.0.1')
+    gateway_url = f"http://{bind_host}:{gateway_port}/sse"
+    
+    mcp_config = json.dumps({
+        "url": gateway_url,
+        "transport": "sse",
+        "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
+    })
+    
+    info(f"Registering Niwa MCP server in OpenClaw...")
+    try:
+        r = subprocess.run(
+            ["openclaw", "mcp", "set", "niwa-core", mcp_config],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            ok("OpenClaw configured to use Niwa MCP gateway")
+            # Also save the config in Niwa's DB-compatible settings
+            info(f"Gateway URL: {gateway_url}")
+            return
+        warn(f"openclaw mcp set failed: {r.stderr[:200]}")
+    except Exception as e:
+        warn(f"OpenClaw MCP config failed: {e}")
+    
+    # Fallback: print manual instructions
+    print()
+    info("To connect OpenClaw manually, run:")
+    print(f"  openclaw mcp set niwa-core '{mcp_config}'")
+    print(f"  openclaw gateway restart")
+    print()
+
+
 def step_executor(cfg: WizardConfig) -> None:
     header("Step 8 — Autonomous task execution")
     print("The executor is a background worker that picks up tasks marked 'pendiente',")
@@ -948,8 +1009,15 @@ def _check_cloudflared_authenticated() -> Optional[str]:
 
 def step_clients(cfg: WizardConfig) -> None:
     header("Step 12 — Auto-register MCP clients")
+    
+    # --- Claude CLI ---
+    if not cfg.detected["claude"]:
+        if _platform_key() == "linux" and which("npm"):
+            if prompt_bool("Claude CLI no detectado. ¿Instalar automáticamente?", default=True):
+                _auto_install_nodejs_linux()
+                if _auto_install_claude():
+                    cfg.detected["claude"] = True
     if cfg.detected["claude"]:
-        # Verify claude is configured
         claude_problem = _check_claude_authenticated()
         if claude_problem:
             warn(claude_problem)
@@ -960,10 +1028,26 @@ def step_clients(cfg: WizardConfig) -> None:
             cfg.register_claude = prompt_bool(
                 "Register Niwa with Claude Code (user scope, claude mcp add)?", default=True
             )
+    
+    # --- OpenClaw ---
+    if not cfg.detected["openclaw"]:
+        print()
+        info("OpenClaw es un orquestador multi-canal y multi-modelo.")
+        info("Con OpenClaw, puedes usar Niwa desde Telegram, WhatsApp, Slack, Discord y terminal.")
+        info("OpenClaw actúa como cerebro y usa las tools de Niwa via MCP.")
+        if prompt_bool("¿Instalar OpenClaw? (opcional, recomendado)", default=True):
+            _auto_install_nodejs_linux() if _platform_key() == "linux" else None
+            if _auto_install_openclaw():
+                cfg.detected["openclaw"] = True
+                info("OpenClaw instalado. Se configurará automáticamente para usar Niwa.")
+            else:
+                warn("No se pudo instalar OpenClaw. Puedes instalarlo manualmente después:")
+                info("  curl -fsSL https://openclaw.ai/install.sh | bash")
     if cfg.detected["openclaw"]:
         cfg.register_openclaw = prompt_bool(
             "Register Niwa with OpenClaw (openclaw mcp set)?", default=True
         )
+    
     if not cfg.detected["claude"] and not cfg.detected["openclaw"]:
         info("No MCP clients detected to register. You can wire any client manually using:")
         info(f"  Streaming HTTP: http://localhost:{cfg.gateway_streaming_port}/mcp")
@@ -1257,17 +1341,7 @@ def execute_install(cfg: WizardConfig) -> None:
             warn(f"Claude Code registration failed: {result.stderr}")
 
     if cfg.register_openclaw:
-        info("Registering with OpenClaw...")
-        sse_url = f"http://localhost:{cfg.gateway_sse_port}/sse"
-        result = subprocess.run(
-            ["openclaw", "mcp", "set", cfg.server_names["tasks"],
-             json.dumps({"type": "sse", "url": sse_url})],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            ok(f"Registered '{cfg.server_names['tasks']}' with OpenClaw (SSE)")
-        else:
-            warn(f"OpenClaw registration failed: {result.stderr}")
+        _configure_openclaw_mcp(cfg)
 
     print_summary(cfg)
 
