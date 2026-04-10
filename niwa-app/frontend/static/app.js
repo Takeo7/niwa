@@ -3349,17 +3349,29 @@ async function sendChatMessage() {
 
 function startChatPolling() {
   stopChatPolling();
+  chatState._lastMsgCount = 0;
+  chatState._idleTicks = 0;
   chatState.polling = setInterval(async () => {
     if (!chatState.activeSession) return;
     try {
       const messages = await api(`chat/sessions/${chatState.activeSession.id}/messages`);
       if (!messages) return;
       const hasPending = messages.some(m => m.status === 'pending');
+      // Detect new messages (delegated task results)
+      if (messages.length !== chatState._lastMsgCount) {
+        chatState._lastMsgCount = messages.length;
+        chatState._idleTicks = 0;
+      }
       renderChatMessages(messages);
       if (!hasPending) {
-        stopChatPolling();
-        // Reload sessions to update titles
-        loadChatSessions();
+        chatState._idleTicks++;
+        // Keep polling for 2 min after last message to catch delegated tasks
+        if (chatState._idleTicks > 60) { // 60 * 2s = 2 minutes
+          stopChatPolling();
+          loadChatSessions();
+        }
+      } else {
+        chatState._idleTicks = 0;
       }
     } catch(e) { console.error('poll error', e); }
   }, 2000);
