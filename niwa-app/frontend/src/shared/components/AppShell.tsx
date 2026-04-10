@@ -29,6 +29,7 @@ import {
   IconLogout,
   IconUser,
   IconHistory,
+  IconChartBar,
   IconSun,
   IconMoon,
   IconSearch,
@@ -53,6 +54,7 @@ const NAV_ITEMS = [
   { label: 'Proyectos', icon: IconFolders, path: '/projects', shortcut: 'P' },
   { label: 'Notas', icon: IconNotebook, path: '/notes', shortcut: 'N' },
   { label: 'Historial', icon: IconHistory, path: '/history', shortcut: 'Y' },
+  { label: 'Métricas', icon: IconChartBar, path: '/metrics', shortcut: 'M' },
   { label: 'Sistema', icon: IconSettings, path: '/system', shortcut: 'S' },
 ];
 
