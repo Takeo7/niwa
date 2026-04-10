@@ -25,8 +25,51 @@ It runs as 6 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `
 
 Once installed, any LLM client connected to the gateway can:
 
-- `task_list / task_create / task_update_status / pipeline_status / project_list ...` — full task pipeline management
-- `note_list / note_create / decision_create / idea_create / research_create / diary_append_today ...` — typed notes (ADRs, ideas, research logs, diary) with bidirectional task↔idea links
+### Chat (new)
+
+The web UI includes a **chat interface** where you talk directly to Claude. It uses a two-tier model:
+
+- **Chat messages → Haiku** (fast, ~10s response) — handles conversation, answers questions, orchestrates
+- **Complex tasks → Opus/Sonnet** (powerful, ~60-90s) — does real work: coding, analysis, file changes
+
+When you ask the chat for something that requires work (e.g., "haz una web que diga hola mundo"), Haiku **creates a task** in the kanban and the executor picks it up automatically with the full model. You see the task progress in real-time on the kanban board.
+
+### Memory (new)
+
+Niwa has **persistent memory** across tasks and conversations:
+
+- `memory_store` — save facts, preferences, decisions, constraints
+- `memory_search` / `memory_list` — recall previous knowledge
+- The executor loads relevant memories into every task prompt automatically
+- Categories: `preference`, `decision`, `constraint`, `pattern`, `general`
+- Scoped per-project or global
+
+### Web Search (new)
+
+Claude can search the web during task execution via the `web_search` MCP tool:
+
+- Uses **SearXNG** if `NIWA_SEARXNG_URL` is configured (self-hosted, private)
+- Falls back to **DuckDuckGo** instant answers (no API key needed)
+
+### Morning Brief (new)
+
+The `morning-brief` scheduler routine now calls the LLM to generate an **actionable daily brief** in Spanish:
+
+- Analyzes overdue, blocked, and pending tasks by priority
+- Generates 1-2 sentence summary + 3-5 bullet priorities
+- Sent via Telegram (configure `NIWA_TELEGRAM_BOT_TOKEN` + `NIWA_TELEGRAM_CHAT_ID`)
+- Falls back to SQL stats if no LLM command configured
+
+### MCP Tools
+
+Any LLM client connected to the gateway can call:
+
+- `task_list / task_create / task_update_status / project_context / pipeline_status` — task management + full project context in one call
+- `note_list / note_create / decision_create / idea_create / research_create / diary_append_today` — typed notes with bidirectional task↔idea links
+- `memory_store / memory_search / memory_list` — persistent cross-task knowledge
+- `web_search` — search the web (SearXNG or DuckDuckGo)
+- `task_log` — structured progress logging without polluting task notes
+- `task_request_input` — formally pause and ask the human a specific question
 - `container_list / container_logs / container_health / container_restart` — Docker ops on a whitelisted set of containers
 - `read_file / write_file / list_directory / search_files ...` — filesystem access scoped to two paths you pick
 - Full list: see [docs/TOOL-REFERENCE.md](./docs/TOOL-REFERENCE.md) (coming)
