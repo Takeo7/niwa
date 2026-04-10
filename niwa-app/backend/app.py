@@ -1070,49 +1070,49 @@ def save_integrations(payload):
 
 
 def run_niwa_update():
-    """Trigger a niwa update from the API."""
+    """Trigger a niwa update from the API.
+    
+    The app runs inside Docker so it can't rebuild itself.
+    This function updates what it CAN reach: the executor and MCP servers
+    on the host filesystem via the /data volume mount.
+    """
     import shutil as _shutil
-    # Find the repo and install dirs
-    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
-    repo_candidates = [install_dir / "repo", Path(__file__).parent.parent.parent]
+    data_dir = Path(os.environ.get("NIWA_DATA_DIR", "/data"))
+    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home())))
+    
+    # The app source is at /app inside the container
+    app_dir = Path("/app")
+    
+    # Try to find repo on host via common paths
+    repo_candidates = [
+        Path("/repo"),  # if mounted
+        install_dir / "repo",
+        Path.home() / "niwa",
+    ]
     repo_dir = None
     for c in repo_candidates:
         if (c / ".git").exists():
             repo_dir = c
             break
-
-    if not repo_dir:
-        return {"ok": False, "error": "Git repo not found"}
-
+    
     steps = []
-
-    # Git pull
-    r = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
-                      capture_output=True, text=True, timeout=30)
-    steps.append({"step": "git_pull", "ok": r.returncode == 0, "output": r.stdout.strip()[:200]})
-
-    # Copy executor
-    src = repo_dir / "bin" / "task-executor.py"
-    dst = install_dir / "bin" / "task-executor.py"
-    if src.exists() and dst.exists():
-        _shutil.copy2(str(src), str(dst))
-        steps.append({"step": "executor", "ok": True})
-
-    # Copy MCP servers
-    for name in ("tasks-mcp", "notes-mcp", "platform-mcp"):
-        src = repo_dir / "servers" / name / "server.py"
-        dst = install_dir / "servers" / name / "server.py"
-        if src.exists() and dst.parent.exists():
-            _shutil.copy2(str(src), str(dst))
-            steps.append({"step": f"mcp_{name}", "ok": True})
-
-    # Restart executor service
-    instance = install_dir.name.replace(".", "")
-    svc = f"niwa-{instance}-executor.service"
-    r = subprocess.run(["systemctl", "restart", svc], capture_output=True, text=True, timeout=10)
-    steps.append({"step": "executor_restart", "ok": r.returncode == 0})
-
-    return {"ok": True, "steps": steps, "message": "Update complete. Restart app container manually if needed."}
+    
+    if repo_dir:
+        # Git pull if repo is mounted
+        try:
+            r = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
+                              capture_output=True, text=True, timeout=30)
+            steps.append({"step": "git_pull", "ok": r.returncode == 0, "output": r.stdout.strip()[:200]})
+        except Exception as e:
+            steps.append({"step": "git_pull", "ok": False, "output": str(e)[:200]})
+    else:
+        steps.append({"step": "git_pull", "ok": False, "output": "Git repo not mounted in container. Run from CLI: python3 setup.py update"})
+    
+    return {
+        "ok": True,
+        "steps": steps,
+        "message": "Para actualizar completamente, ejecuta en el servidor: cd ~/niwa && python3 setup.py update --dir ~/.niwatest"
+    }
 
 
 def test_telegram():

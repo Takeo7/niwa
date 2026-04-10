@@ -101,6 +101,21 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="project_create",
+            description="Create a new project. Required: name, area. Returns the created project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "area": {"type": "string", "enum": list(VALID_AREAS)},
+                    "description": {"type": "string"},
+                    "directory": {"type": "string", "description": "Filesystem path for the project"},
+                    "url": {"type": "string", "description": "URL (repo, docs, etc.)"},
+                },
+                "required": ["name", "area"],
+            },
+        ),
+        Tool(
             name="task_create",
             description=(
                 "Create a new task. Required: title, area. Set assigned_to_claude=true for "
@@ -482,6 +497,30 @@ def _memory_list(args: dict) -> list:
     return [_row_to_dict(r) for r in rows]
 
 
+def _project_create(args: dict) -> dict:
+    name = args.get("name", "").strip()
+    if not name:
+        raise ValueError("name cannot be empty")
+    area = args.get("area", "proyecto")
+    if area not in VALID_AREAS:
+        raise ValueError(f"invalid area: {area}")
+    description = args.get("description", "")
+    directory = args.get("directory", "")
+    url = args.get("url", "")
+    slug = name.lower().replace(" ", "-").replace("_", "-")[:50]
+    now = _now_iso()
+    project_id = f"proj-{uuid.uuid4().hex[:12]}"
+    with _rw_conn() as c:
+        c.execute(
+            "INSERT INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory, url) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+            (project_id, slug, name, area, description, now, now, directory, url),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return _row_to_dict(row)
+
+
 def _project_context(args):
     project_id = args["project_id"]
     include_done = args.get("include_done", False)
@@ -556,6 +595,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _project_get(arguments["project_id"])
         elif name == "pipeline_status":
             payload = _pipeline_status()
+        elif name == "project_create":
+            payload = _project_create(arguments or {})
         elif name == "task_create":
             payload = _task_create(arguments or {})
         elif name == "task_update_status":
