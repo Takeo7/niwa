@@ -20,7 +20,7 @@
 
 services:
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy:0.3.0
     container_name: ${INSTANCE_NAME}-socket-proxy
     restart: unless-stopped
     environment:
@@ -44,7 +44,7 @@ services:
         max-file: "2"
 
   mcp-gateway:
-    image: docker/mcp-gateway:latest
+    image: docker/mcp-gateway:0.1
     container_name: ${INSTANCE_NAME}-mcp-gateway
     restart: unless-stopped
     depends_on:
@@ -81,7 +81,7 @@ services:
     # Twin gateway in legacy SSE transport mode for clients that don't speak
     # streamable HTTP (e.g. OpenClaw's bundled MCP client). Same catalog,
     # same backing servers, different transport.
-    image: docker/mcp-gateway:latest
+    image: docker/mcp-gateway:0.1
     container_name: ${INSTANCE_NAME}-mcp-gateway-sse
     restart: unless-stopped
     depends_on:
@@ -163,7 +163,7 @@ services:
     # Web terminal — provides a real host shell via the browser.
     # Uses chroot /host to access the host filesystem from inside the container.
     # Protected with the same Niwa username/password (basic auth).
-    image: tsl0922/ttyd:latest
+    image: tsl0922/ttyd:1.7.7
     container_name: ${INSTANCE_NAME}-terminal
     restart: unless-stopped
     command: >-

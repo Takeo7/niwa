@@ -606,33 +606,56 @@ from tasks_service import (
 
 # ── Chat CRUD ──
 
-def _ensure_chat_tables():
-    """Create chat tables if they don't exist."""
-    with db_conn() as c:
-        c.executescript("""
-            CREATE TABLE IF NOT EXISTS chat_sessions (
-                id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Nueva conversaci\u00f3n',
-                model_id TEXT,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-            );
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
-                content TEXT NOT NULL DEFAULT '', task_id TEXT,
-                status TEXT NOT NULL DEFAULT 'done',
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
-        """)
-        c.commit()
+def _run_migrations():
+    """Apply pending SQL migrations from db/migrations/."""
+    import glob
+    c = db_conn()
+    # Create version table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            filename TEXT
+        )
+    """)
+    c.commit()
 
-# Call it once at module level
+    # Get current version
+    row = c.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = row[0] if row[0] is not None else 0
+
+    # Find migration files
+    migrations_dir = Path(__file__).parent.parent / "db" / "migrations"
+    if not migrations_dir.exists():
+        return
+
+    files = sorted(glob.glob(str(migrations_dir / "*.sql")))
+    for f in files:
+        filename = Path(f).name
+        # Extract version number from filename (e.g., "002_chat_memory.sql" -> 2)
+        try:
+            version = int(filename.split("_")[0])
+        except (ValueError, IndexError):
+            continue
+        if version <= current:
+            continue
+
+        logger.info("Applying migration %s", filename)
+        sql = Path(f).read_text()
+        try:
+            c.executescript(sql)
+            c.execute("INSERT INTO schema_version (version, filename) VALUES (?, ?)", (version, filename))
+            c.commit()
+            logger.info("Migration %s applied", filename)
+        except Exception as e:
+            logger.error("Migration %s failed: %s", filename, e)
+            break
+
+# Call at startup
 try:
-    _ensure_chat_tables()
-except Exception:
-    pass
+    _run_migrations()
+except Exception as e:
+    logger.warning("Migration runner failed: %s", e)
 
 
 def get_chat_sessions():
@@ -1044,6 +1067,52 @@ def save_integrations(payload):
     except Exception:
         pass
     return saved
+
+
+def run_niwa_update():
+    """Trigger a niwa update from the API."""
+    import shutil as _shutil
+    # Find the repo and install dirs
+    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
+    repo_candidates = [install_dir / "repo", Path(__file__).parent.parent.parent]
+    repo_dir = None
+    for c in repo_candidates:
+        if (c / ".git").exists():
+            repo_dir = c
+            break
+
+    if not repo_dir:
+        return {"ok": False, "error": "Git repo not found"}
+
+    steps = []
+
+    # Git pull
+    r = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
+                      capture_output=True, text=True, timeout=30)
+    steps.append({"step": "git_pull", "ok": r.returncode == 0, "output": r.stdout.strip()[:200]})
+
+    # Copy executor
+    src = repo_dir / "bin" / "task-executor.py"
+    dst = install_dir / "bin" / "task-executor.py"
+    if src.exists() and dst.exists():
+        _shutil.copy2(str(src), str(dst))
+        steps.append({"step": "executor", "ok": True})
+
+    # Copy MCP servers
+    for name in ("tasks-mcp", "notes-mcp", "platform-mcp"):
+        src = repo_dir / "servers" / name / "server.py"
+        dst = install_dir / "servers" / name / "server.py"
+        if src.exists() and dst.parent.exists():
+            _shutil.copy2(str(src), str(dst))
+            steps.append({"step": f"mcp_{name}", "ok": True})
+
+    # Restart executor service
+    instance = install_dir.name.replace(".", "")
+    svc = f"niwa-{instance}-executor.service"
+    r = subprocess.run(["systemctl", "restart", svc], capture_output=True, text=True, timeout=10)
+    steps.append({"step": "executor_restart", "ok": r.returncode == 0})
+
+    return {"ok": True, "steps": steps, "message": "Update complete. Restart app container manually if needed."}
 
 
 def test_telegram():
@@ -1728,6 +1797,9 @@ class Handler(BaseHTTPRequestHandler):
                 os._exit(0)
             threading.Thread(target=_delayed_exit, daemon=True).start()
             return self._json({'ok': True, 'message': 'Restarting...'})
+        if path == '/api/system/update':
+            result = run_niwa_update()
+            return self._json(result)
         if path == '/api/settings/integrations/test-telegram':
             return self._json(test_telegram())
         if path == '/api/security/scan':

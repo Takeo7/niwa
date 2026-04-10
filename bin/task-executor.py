@@ -594,14 +594,31 @@ def _claim_next_chat_task() -> Optional[sqlite3.Row]:
         return c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
 
 
-def _execute_task(task: sqlite3.Row) -> tuple[bool, str]:
+def _build_retry_prompt(task, project_dir, previous_error: str) -> str:
+    """Build a prompt that includes the previous error for intelligent retry."""
+    base = _build_prompt(task, project_dir)
+    retry_section = (
+        "\n\n⚠️ PREVIOUS ATTEMPT FAILED\n"
+        f"Error from previous attempt:\n{previous_error[:2000]}\n\n"
+        "Analyze what went wrong and try a different approach. "
+        "If the error is unrecoverable (permissions, missing dependencies, etc.), "
+        "use task_request_input to ask the human for help instead of failing again."
+    )
+    return base + retry_section
+
+
+def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
     """Run a single task through the LLM. Returns (success, output)."""
     is_chat = dict(task).get("source") == "chat"
     project_dir = _resolve_project_dir(task["project_id"])
     if not project_dir and task["project_id"]:
         log.warning("Project dir not found for %s, using $HOME", task["project_id"])
     cwd = project_dir or Path.home()
-    prompt = _build_prompt(task, project_dir)
+
+    if retry_prompt:
+        prompt = retry_prompt
+    else:
+        prompt = _build_prompt(task, project_dir)
     log.debug("prompt: %d chars, chat=%s", len(prompt), is_chat)
 
     # Choose command and timeout based on task type
@@ -660,6 +677,7 @@ def main() -> None:
             log.info("task %s: %s [source=%s]", task["id"], task["title"], dict(task).get("source", "manual"))
             success, output = _execute_task(task)
             _active_proc = None
+            was_retry = False
 
             if success:
                 _finish_task(task["id"], "hecha", output)
@@ -667,6 +685,26 @@ def main() -> None:
                 log.info("task %s done", task["id"])
                 consecutive_failures = 0
             else:
+                # Chat tasks don't retry (fast path, user can resend)
+                is_chat = dict(task).get("source") == "chat"
+                if not is_chat and not was_retry:
+                    log.warning("task %s failed, retrying with error context...", task["id"])
+                    _record_event(task["id"], "comment", {
+                        "author": "executor",
+                        "kind": "warning",
+                        "message": f"First attempt failed: {output[:500]}. Retrying..."
+                    })
+                    retry_prompt = _build_retry_prompt(task, _resolve_project_dir(task["project_id"]), output)
+                    success2, output2 = _execute_task(task, retry_prompt=retry_prompt)
+                    _active_proc = None
+                    if success2:
+                        _finish_task(task["id"], "hecha", output2)
+                        _record_event(task["id"], "completed", {"executor": "niwa-executor", "retry": True})
+                        log.info("task %s done (after retry)", task["id"])
+                        consecutive_failures = 0
+                        continue
+                    output = f"[attempt 1]\n{output}\n\n[attempt 2]\n{output2}"
+
                 _finish_task(task["id"], "bloqueada", output)
                 _record_event(
                     task["id"], "status_changed",

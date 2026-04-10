@@ -608,6 +608,20 @@ tailwind.config = {
           <div id="sys-by-status" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"></div>
         </div>
       </div>
+      <!-- Update button -->
+      <div class="col-span-12">
+        <div class="niwa-card rounded-2xl shadow-sm p-6 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-semibold">Actualizar Niwa</h3>
+            <p class="text-xs text-on-surface-variant mt-1">Descarga la \u00faltima versi\u00f3n y reinicia los servicios. Config y datos se preservan.</p>
+          </div>
+          <button id="btn-niwa-update" onclick="niwaUpdate()"
+            class="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+            style="background: var(--c-primary); color: var(--c-on-primary);">
+            Actualizar Niwa
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 

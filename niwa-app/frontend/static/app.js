@@ -2512,6 +2512,19 @@ async function restartNiwa() {
   }
 }
 
+async function niwaUpdate() {
+  if (!confirm('\u00bfActualizar Niwa a la \u00faltima versi\u00f3n? (Config y datos se preservan)')) return;
+  const btn = document.getElementById('btn-niwa-update');
+  if (btn) { btn.disabled = true; btn.textContent = 'Actualizando...'; }
+  try {
+    const result = await api('/api/system/update', { method: 'POST', body: '{}' });
+    alert(result.ok ? '\u2705 Actualizaci\u00f3n completada. Recarga la p\u00e1gina.' : '\u274c Error: ' + (result.error || 'unknown'));
+  } catch(e) {
+    alert('\u274c Error: ' + e.message);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Actualizar Niwa'; }
+}
+
 // ======================== STYLES ========================
 const STYLE_COLORS = [
   { key: 'primary', label: 'Primary', light: '#3b6eb5', dark: '#85adff' },

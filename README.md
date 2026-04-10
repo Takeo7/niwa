@@ -60,6 +60,23 @@ The `morning-brief` scheduler routine now calls the LLM to generate an **actiona
 - Sent via Telegram (configure `NIWA_TELEGRAM_BOT_TOKEN` + `NIWA_TELEGRAM_CHAT_ID`)
 - Falls back to SQL stats if no LLM command configured
 
+### Agentic Execution (the key differentiator)
+
+When the executor runs a task via `claude -p --max-turns 50`, Claude Code operates as a **full agentic loop** — not a one-shot call. During execution, Claude can:
+
+- **Read and write files** in the project directory
+- **Create sub-tasks** via `task_create` MCP tool — breaking complex work into smaller pieces
+- **Log progress** via `task_log` — structured findings/decisions visible in the task timeline  
+- **Search memory** via `memory_search` — recall knowledge from previous tasks
+- **Store learnings** via `memory_store` — persist facts for future tasks
+- **Create notes** via `note_create` — document decisions, research, ideas in the project
+- **Search the web** via `web_search` — look up documentation, APIs, solutions
+- **Request human input** via `task_request_input` — formally pause and ask a question
+
+This means a task like "research competitors and create 5 research notes" will **actually create those 5 notes in your database**. A task like "refactor the auth module" can create sub-tasks, log its progress, and store architectural decisions — all within a single execution.
+
+The executor is not a task runner with an LLM. It's an agent runtime where Claude has full access to your Niwa instance.
+
 ### MCP Tools
 
 Any LLM client connected to the gateway can call:

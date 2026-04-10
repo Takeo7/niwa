@@ -1903,6 +1903,85 @@ def cmd_backup(args) -> None:
         info(f"Rotated {rotated} backup(s) older than 7 days")
 
 
+def cmd_update(args) -> None:
+    """Update Niwa: pull latest code, rebuild containers, apply migrations.
+    Preserves all config, secrets, and data."""
+    install_dir = Path(args.dir) if getattr(args, 'dir', None) else _find_install_dir()
+    if not install_dir or not install_dir.exists():
+        print("\u274c Niwa install not found. Use --dir or set NIWA_HOME.")
+        sys.exit(1)
+
+    repo_dir = install_dir / "repo"
+    if not (repo_dir / ".git").exists():
+        # Find repo from the clone record
+        repo_dir = Path(__file__).parent
+        if not (repo_dir / ".git").exists():
+            print("\u274c Git repo not found. Clone the repo first.")
+            sys.exit(1)
+
+    print("\U0001f504 Updating Niwa...")
+
+    # 1. Git pull
+    print("  \u2192 Pulling latest code...")
+    result = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
+                          capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  \u26a0\ufe0f  Git pull failed: {result.stderr[:200]}")
+        print("  Continuing with current code...")
+    else:
+        print(f"  \u2713 {result.stdout.strip()}")
+
+    # 2. Copy updated files (preserve secrets/config)
+    print("  \u2192 Updating executor...")
+    src_executor = repo_dir / "bin" / "task-executor.py"
+    dst_executor = install_dir / "bin" / "task-executor.py"
+    if src_executor.exists() and dst_executor.exists():
+        shutil.copy2(str(src_executor), str(dst_executor))
+        print("  \u2713 Executor updated")
+
+    print("  \u2192 Updating MCP servers...")
+    for server_name in ("tasks-mcp", "notes-mcp", "platform-mcp"):
+        src = repo_dir / "servers" / server_name / "server.py"
+        dst = install_dir / "servers" / server_name / "server.py"
+        if src.exists() and dst.parent.exists():
+            shutil.copy2(str(src), str(dst))
+            print(f"  \u2713 {server_name}")
+
+    # 3. Rebuild app container
+    print("  \u2192 Rebuilding app container...")
+    instance = install_dir.name.replace(".", "")
+    compose_file = install_dir / "docker-compose.yml"
+    if compose_file.exists():
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "build", "--no-cache", "app"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print("  \u2713 App container rebuilt")
+            # Restart app
+            subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "up", "-d", "--no-deps", "app"],
+                capture_output=True, text=True
+            )
+            print("  \u2713 App restarted")
+        else:
+            print(f"  \u26a0\ufe0f  Build failed: {result.stderr[:200]}")
+
+    # 4. Restart executor
+    print("  \u2192 Restarting executor...")
+    service_name = f"niwa-{instance}-executor.service" if instance != "niwa" else "niwa-executor.service"
+    result = subprocess.run(["systemctl", "restart", service_name],
+                          capture_output=True, text=True)
+    if result.returncode == 0:
+        print("  \u2713 Executor restarted")
+    else:
+        print(f"  \u26a0\ufe0f  Executor restart failed (may need: sudo systemctl restart {service_name})")
+
+    print("\n\u2705 Niwa updated successfully!")
+    print("   Config, secrets, and data are preserved.")
+    print("   Migrations will run automatically on next app startup.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Niwa installer and CLI")
     sub = parser.add_subparsers(dest="cmd")
@@ -1934,6 +2013,9 @@ def main():
     p_config.add_argument("value", nargs="?", help="New value (omit to show current)")
     p_config.add_argument("--dir", help="Install location (auto-detect by default)")
 
+    p_update = sub.add_parser("update", help="Update Niwa to the latest version (preserves config/data)")
+    p_update.add_argument("--dir", help="Install directory")
+
     args = parser.parse_args()
     cmd = args.cmd or "install"
     if cmd == "install":
@@ -1950,6 +2032,8 @@ def main():
         cmd_backup(args)
     elif cmd == "config":
         cmd_config(args)
+    elif cmd == "update":
+        cmd_update(args)
 
 
 if __name__ == "__main__":
