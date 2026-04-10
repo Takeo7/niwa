@@ -117,7 +117,6 @@ def update_task(task_id, payload):
 
 def delete_task(task_id):
     with _db_conn() as conn:
-        conn.execute('DELETE FROM day_focus_tasks WHERE task_id=?', (task_id,))
         conn.execute('DELETE FROM tasks WHERE id=?', (task_id,))
         conn.commit()
 

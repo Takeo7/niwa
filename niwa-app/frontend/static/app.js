@@ -275,9 +275,6 @@ async function loadDashboard() {
   await renderAttentionItems(dash);
   renderProjectsOverview(projects);
 
-  // Mi día
-  loadMyDay();
-
   if (activity) renderActivityFeed(activity);
 
   // Routines KPI
@@ -288,6 +285,15 @@ async function loadDashboard() {
     const sub = document.getElementById('kpi-routines-sub');
     if (sub) sub.textContent = count === 1 ? 'activa' : 'activas';
   });
+
+  // Executor metrics KPIs (non-blocking)
+  api('metrics').then(m => {
+    if (!m) return;
+    const pendEl = document.getElementById('kpi-pending');
+    const blockEl = document.getElementById('kpi-blocked');
+    if (pendEl) pendEl.textContent = m.tasks_pending != null ? m.tasks_pending : '--';
+    if (blockEl) blockEl.textContent = m.tasks_blocked != null ? m.tasks_blocked : '--';
+  }).catch(() => {});
 
   // Pipeline / Bottlenecks (non-blocking)
   loadPipelineChart().catch(() => {});
@@ -3174,34 +3180,6 @@ async function deleteRoutine(id) {
   await api('routines/' + id, { method: 'DELETE' });
   loadRoutines();
   toast('Rutina eliminada');
-}
-
-// ======================== MI DIA ========================
-async function loadMyDay() {
-  const data = await api('my-day');
-  const dateEl = document.getElementById('dash-myday-date');
-  const summaryEl = document.getElementById('dash-myday-summary');
-  const tasksEl = document.getElementById('dash-myday-tasks');
-  const emptyEl = document.getElementById('dash-myday-empty');
-  if (!data) return;
-  if (dateEl) dateEl.textContent = data.day || '';
-  if (data.summary && summaryEl) {
-    summaryEl.textContent = data.summary;
-    summaryEl.classList.remove('hidden');
-  }
-  if (!data.tasks || !data.tasks.length) {
-    if (tasksEl) tasksEl.innerHTML = '';
-    if (emptyEl) emptyEl.classList.remove('hidden');
-    return;
-  }
-  if (emptyEl) emptyEl.classList.add('hidden');
-  if (tasksEl) tasksEl.innerHTML = data.tasks.map(t => `
-    <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-bright/50 cursor-pointer" onclick="openTaskById('${escJsAttr(t.id)}')">
-      <span class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-${t.status === 'hecha' ? 'tertiary' : t.status === 'en_progreso' ? 'primary' : 'outline'})"></span>
-      <span class="text-xs text-on-surface truncate flex-1">${escHtml(t.title)}</span>
-      <span class="text-[10px] text-on-surface-variant shrink-0">${t.priority}</span>
-    </div>
-  `).join('');
 }
 
 // ======================== INIT ========================

@@ -7,16 +7,6 @@ Write verbs: task_create, task_update_status
 Backing store: /data/niwa.sqlite3 (mounted RW; reads still use mode=ro URI).
 """
 
-# Hosting module import (optional — gracefully degrades if not available)
-try:
-    import sys as _sys
-    from pathlib import Path as _Path
-    _sys.path.insert(0, str(_Path(__file__).parent.parent.parent / "niwa-app" / "backend"))
-    from hosting import deploy_project, undeploy_project, list_deployments as _list_deployments
-    _HOSTING_AVAILABLE = True
-except ImportError:
-    _HOSTING_AVAILABLE = False
-
 import asyncio
 import html
 import json
@@ -494,6 +484,25 @@ except Exception:
     pass
 
 
+def _ensure_deployments_table() -> None:
+    with _rw_conn() as c:
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS deployments (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+                directory TEXT NOT NULL, url TEXT, status TEXT NOT NULL DEFAULT 'active',
+                deployed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
+        """)
+
+
+try:
+    _ensure_deployments_table()
+except Exception:
+    pass
+
+
 def _memory_store(args: dict) -> dict:
     key = args.get("key", "").strip()
     value = args.get("value", "").strip()
@@ -701,22 +710,61 @@ def _task_request_input(args):
     return {"ok": True, "status": "revision", "event_id": eid, "question": question}
 
 def _deploy_web(args):
-    if not _HOSTING_AVAILABLE:
-        return {"error": "Hosting module not available. Install hosting.py in the backend."}
-    return deploy_project(args["project_id"], args.get("slug", ""))
+    project_id = args["project_id"]
+    slug = args.get("slug", "")
+    with _rw_conn() as c:
+        project = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+        project = _row_to_dict(project)
+        slug = slug or project.get("slug", project_id)
+        directory = project.get("directory", "")
+        if not directory:
+            raise ValueError("Project has no directory set")
+
+        now = _now_iso()
+        existing = c.execute("SELECT id FROM deployments WHERE project_id=?", (project_id,)).fetchone()
+        if existing:
+            c.execute(
+                "UPDATE deployments SET slug=?, directory=?, status='active', updated_at=? WHERE project_id=?",
+                (slug, directory, now, project_id),
+            )
+        else:
+            deploy_id = str(uuid.uuid4())
+            c.execute(
+                "INSERT INTO deployments (id, project_id, slug, directory, status, deployed_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (deploy_id, project_id, slug, directory, "active", now, now),
+            )
+
+        public_url = os.environ.get("NIWA_PUBLIC_URL", "http://localhost")
+        port = os.environ.get("NIWA_HOSTING_PORT", "8880")
+        url = f"{public_url}:{port}/{slug}/"
+
+        c.execute("UPDATE deployments SET url=? WHERE project_id=?", (url, project_id))
+        c.execute("UPDATE projects SET url=?, updated_at=? WHERE id=?", (url, now, project_id))
+        c.commit()
+
+    return {"url": url, "slug": slug, "directory": directory, "status": "deployed"}
 
 
 def _undeploy_web(args):
-    if not _HOSTING_AVAILABLE:
-        return {"error": "Hosting module not available"}
-    undeploy_project(args["project_id"])
+    project_id = args["project_id"]
+    now = _now_iso()
+    with _rw_conn() as c:
+        c.execute(
+            "UPDATE deployments SET status='inactive', updated_at=? WHERE project_id=?",
+            (now, project_id),
+        )
+        c.commit()
     return {"ok": True}
 
 
 def _list_deployments_handler(args):
-    if not _HOSTING_AVAILABLE:
-        return {"error": "Hosting module not available"}
-    return _list_deployments()
+    with _ro_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM deployments WHERE status='active' ORDER BY deployed_at DESC"
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
 
 
 @server.call_tool()

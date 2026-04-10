@@ -234,17 +234,6 @@ def register_login_attempt(key: str, success: bool):
 
 
 
-def fetch_my_day():
-    day = date.today().isoformat()
-    with db_conn() as conn:
-        rows = conn.execute(
-            'SELECT t.*, p.name as project_name FROM day_focus_tasks d JOIN tasks t ON t.id=d.task_id LEFT JOIN projects p ON p.id=t.project_id WHERE d.day=? ORDER BY d.position ASC',
-            (day,),
-        ).fetchall()
-        summary_row = conn.execute('SELECT summary FROM day_focus WHERE day=?', (day,)).fetchone()
-        return {'day': day, 'summary': summary_row['summary'] if summary_row else '', 'tasks': [dict(r) for r in rows]}
-
-
 def fetch_projects():
     with db_conn() as conn:
         rows = conn.execute(
@@ -338,16 +327,12 @@ def compute_live_state():
             """
             SELECT
                 MAX(updated_at) AS tasks_updated_at,
-                (SELECT MAX(updated_at) FROM day_focus) AS day_focus_updated_at,
-                (SELECT MAX(created_at) FROM day_focus_tasks) AS day_focus_tasks_created_at,
                 (SELECT MAX(updated_at) FROM kanban_columns) AS columns_updated_at
             FROM tasks
             """
         ).fetchone()
     values = [
         row['tasks_updated_at'] if row else '',
-        row['day_focus_updated_at'] if row else '',
-        row['day_focus_tasks_created_at'] if row else '',
         row['columns_updated_at'] if row else '',
         _safe_path_mtime(WORKSPACE_AGENTS_STATE_PATH),
         _safe_path_mtime(WORKSPACE_DELEGATIONS_PATH),
@@ -398,14 +383,10 @@ def dashboard_data():
         'empresa': len([t for t in tasks if t['area'] == 'empresa' and t['status'] not in ('hecha', 'archivada')]),
         'proyecto': len([t for t in tasks if t['area'] == 'proyecto' and t['status'] not in ('hecha', 'archivada')]),
     }
-    my_day = fetch_my_day()
-    my_day_task_ids = [t['id'] for t in my_day['tasks']]
     return {
         'urgent': urgent[:8],
         'today': today[:10],
         'projects': fetch_projects(),
-        'my_day': my_day,
-        'my_day_task_ids': my_day_task_ids,
         'kanban_columns': fetch_kanban_columns(include_terminal=True),
         'counts': {
             'inbox': 0,  # deprecated, merged into pendiente
@@ -418,31 +399,6 @@ def dashboard_data():
     }
 
 
-def add_task_to_my_day(task_id):
-    day = date.today().isoformat()
-    ts = datetime.now(timezone.utc).isoformat()
-    with db_conn() as conn:
-        # Ensure day_focus row exists
-        conn.execute('INSERT OR IGNORE INTO day_focus (day, summary, created_at, updated_at) VALUES (?, ?, ?, ?)', (day, '', ts, ts))
-        # Get next position
-        row = conn.execute('SELECT COALESCE(MAX(position),0)+1 as next_pos FROM day_focus_tasks WHERE day=?', (day,)).fetchone()
-        next_pos = row['next_pos'] if row else 0
-        conn.execute('INSERT OR IGNORE INTO day_focus_tasks (day, task_id, position) VALUES (?, ?, ?)', (day, task_id, next_pos))
-        conn.commit()
-
-
-def remove_task_from_my_day(task_id):
-    day = date.today().isoformat()
-    with db_conn() as conn:
-        conn.execute('DELETE FROM day_focus_tasks WHERE day=? AND task_id=?', (day, task_id))
-        conn.commit()
-
-
-def is_task_in_my_day(task_id):
-    day = date.today().isoformat()
-    with db_conn() as conn:
-        row = conn.execute('SELECT 1 FROM day_focus_tasks WHERE day=? AND task_id=?', (day, task_id)).fetchone()
-        return row is not None
 
 
 
@@ -746,8 +702,9 @@ def get_chat_messages(session_id):
     if result:
         session_start = result[0].get('created_at', '')
         delegated = c.execute(
-            "SELECT t.id, t.title, t.status, e.payload_json "
-            "FROM tasks t LEFT JOIN task_events e ON e.task_id=t.id AND e.type='comment' "
+            "SELECT t.id, t.title, t.status, "
+            "(SELECT payload_json FROM task_events WHERE task_id=t.id AND type='comment' ORDER BY created_at DESC LIMIT 1) as payload_json "
+            "FROM tasks t "
             "WHERE t.source='mcp:tasks' AND t.status IN ('hecha','bloqueada') "
             "AND t.created_at >= ? "
             "AND t.id NOT IN (SELECT task_id FROM chat_messages WHERE session_id=? AND task_id IS NOT NULL) "
@@ -779,12 +736,13 @@ def get_chat_messages(session_id):
 
         # Also check for tasks waiting for input (revision status)
         waiting = c.execute(
-            "SELECT t.id, t.title, e.payload_json "
-            "FROM tasks t JOIN task_events e ON e.task_id=t.id AND e.type='alerted' "
+            "SELECT t.id, t.title, "
+            "(SELECT payload_json FROM task_events WHERE task_id=t.id AND type='alerted' ORDER BY created_at DESC LIMIT 1) as payload_json "
+            "FROM tasks t "
             "WHERE t.source='mcp:tasks' AND t.status='revision' "
             "AND t.created_at >= ? "
             "AND t.id NOT IN (SELECT task_id FROM chat_messages WHERE session_id=? AND task_id IS NOT NULL) "
-            "ORDER BY e.created_at DESC LIMIT 5",
+            "ORDER BY t.updated_at DESC LIMIT 5",
             (session_start, session_id),
         ).fetchall()
         for w in waiting:
@@ -1078,6 +1036,17 @@ def fetch_config():
     return result
 
 
+_SETTINGS_SENSITIVE_KEYS = {'int.llm_api_key', 'int.llm_setup_token', 'int.telegram_bot_token'}
+
+
+def _mask_sensitive(key, value):
+    if key in _SETTINGS_SENSITIVE_KEYS and value:
+        if len(value) > 16:
+            return value[:8] + '\u2022' * (len(value) - 12) + value[-4:]
+        return '\u2022' * 8
+    return value
+
+
 def fetch_settings():
     settings = {}
     try:
@@ -1088,7 +1057,8 @@ def fetch_settings():
     with db_conn() as conn:
         for row in conn.execute('SELECT key, value FROM settings').fetchall():
             settings[row['key']] = row['value']
-    return settings
+    # Mask sensitive values before returning
+    return {k: _mask_sensitive(k, v) for k, v in settings.items()}
 
 
 def save_setting(key, value):
@@ -1694,8 +1664,6 @@ class Handler(BaseHTTPRequestHandler):
                 if _doc_path.exists():
                     docs[name.lower()] = _doc_path.read_text(encoding='utf-8', errors='ignore')
             return self._json(docs)
-        if path == '/api/my-day':
-            return self._json(fetch_my_day())
         if path == '/api/projects':
             return self._json(fetch_projects())
         if path == '/api/kanban-columns':
@@ -1864,12 +1832,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/tasks':
             task_id = create_task(payload)
             return self._json({'ok': True, 'id': task_id}, 201)
-        if path == '/api/my-day/tasks':
-            task_id = payload.get('task_id')
-            if not task_id:
-                return self._json({'error': 'task_id required'}, 400)
-            add_task_to_my_day(task_id)
-            return self._json({'ok': True}, 201)
         if path == '/api/crons/toggle':
             job_id = payload.get('id') or payload.get('job_id', '')
             return self._json(toggle_cron(job_id))
@@ -2007,10 +1969,6 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/tasks/') and path.count('/') == 3:
             task_id = path.split('/')[3]
             delete_task(task_id)
-            return self._json({'ok': True})
-        if path.startswith('/api/my-day/tasks/'):
-            task_id = path.split('/')[-1]
-            remove_task_from_my_day(task_id)
             return self._json({'ok': True})
         if path.startswith('/api/notes/') and path.count('/') == 3:
             note_id = path.split('/')[3]

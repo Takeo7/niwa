@@ -202,6 +202,22 @@ tailwind.config = {
       <div class="text-2xl font-headline font-bold" id="kpi-routines-count">--</div>
       <p class="text-[10px] text-on-surface-variant mt-1" id="kpi-routines-sub">activas</p>
     </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Pendientes</span>
+        <span class="material-symbols-outlined text-warning text-lg">pending</span>
+      </div>
+      <div class="text-2xl font-headline font-bold" id="kpi-pending">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1">en cola</p>
+    </div>
+    <div class="niwa-card p-5 rounded-2xl shadow-sm">
+      <div class="flex justify-between items-start mb-3">
+        <span class="text-on-surface-variant text-[10px] font-label uppercase tracking-wider">Bloqueadas</span>
+        <span class="material-symbols-outlined text-error text-lg">block</span>
+      </div>
+      <div class="text-2xl font-headline font-bold" id="kpi-blocked">--</div>
+      <p class="text-[10px] text-on-surface-variant mt-1">tareas</p>
+    </div>
   </div>
 
   <!-- Main grid -->
@@ -267,16 +283,7 @@ tailwind.config = {
         <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider mb-4">Actividad reciente</h3>
         <div id="activity-feed" class="space-y-3 overflow-y-auto max-h-[400px]"></div>
       </div>
-      <!-- Mi día -->
-      <div class="niwa-card rounded-2xl shadow-sm p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-headline font-bold text-on-surface uppercase tracking-wider">Mi día</h3>
-          <span class="text-[10px] text-on-surface-variant" id="dash-myday-date"></span>
-        </div>
-        <div id="dash-myday-summary" class="text-xs text-on-surface-variant mb-3 hidden"></div>
-        <div id="dash-myday-tasks" class="space-y-2"></div>
-        <p id="dash-myday-empty" class="text-xs text-on-surface-variant hidden">Sin tareas para hoy. Añade desde el kanban.</p>
-      </div>
+
     </div>
   </div>
 </section>
@@ -293,7 +300,7 @@ tailwind.config = {
         <option value="">All Projects</option>
       </select>
       <label class="flex items-center gap-2 text-xs text-on-surface-variant">
-        <input type="checkbox" id="kanban-show-done" class="rounded bg-surface-container-high border-none" onchange="loadKanban()"> Done
+        <input type="checkbox" id="kanban-show-done" class="rounded bg-surface-container-high border-none" onchange="loadKanban()" checked> Done
       </label>
       <button id="btn-run-review" onclick="triggerIdleReview()" class="flex items-center gap-2 bg-primary hover:bg-primary/80 text-on-primary rounded-lg py-2 px-4 text-sm font-medium transition-colors">
         <svg id="review-icon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
