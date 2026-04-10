@@ -16,11 +16,14 @@ function extractImages(content: string): { text: string; images: string[] } {
   const images: string[] = [];
   const imagePattern = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp))/gi;
   const generatedPattern = /\/static\/generated-images\/[^\s)]+/g;
+  // Match OpenAI DALL-E temporary image URLs
+  const dallePattern = /(https?:\/\/oaidalleapiprodscus\.blob\.core\.windows\.net\/[^\s)]+)/gi;
 
   let text = content;
   const urlMatches = content.match(imagePattern) || [];
   const genMatches = content.match(generatedPattern) || [];
-  images.push(...urlMatches, ...genMatches);
+  const dalleMatches = content.match(dallePattern) || [];
+  images.push(...urlMatches, ...genMatches, ...dalleMatches);
 
   for (const img of images) {
     text = text.replace(img, '');

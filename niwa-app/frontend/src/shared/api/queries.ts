@@ -241,6 +241,22 @@ export function useTestService() {
   });
 }
 
+// ── OpenClaw ──
+export function useOpenClawDetect() {
+  return useQuery({
+    queryKey: ['openclaw-detect'],
+    queryFn: () => api<{installed: boolean, config_exists: boolean, gateway_running: boolean}>('integrations/openclaw/detect'),
+    staleTime: 60000,
+  });
+}
+
+export function useOpenClawConfig() {
+  return useQuery({
+    queryKey: ['openclaw-config'],
+    queryFn: () => api<{gateway_url: string, has_token: boolean, domains: string, cli_command: string}>('integrations/openclaw/config'),
+  });
+}
+
 // ── OAuth ──
 export function useOAuthStatus(provider: string) {
   return useQuery({

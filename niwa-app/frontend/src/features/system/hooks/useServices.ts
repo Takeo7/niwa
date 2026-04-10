@@ -6,4 +6,6 @@ export {
   useStartOAuth,
   useRevokeOAuth,
   useImportOAuth,
+  useOpenClawDetect,
+  useOpenClawConfig,
 } from '../../../shared/api/queries';

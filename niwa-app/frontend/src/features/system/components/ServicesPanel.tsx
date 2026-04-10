@@ -15,6 +15,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   llm: 'Proveedores LLM',
   image: 'Generación de Imágenes',
   search: 'Búsqueda',
+  hosting: 'Hosting',
+  orchestration: 'Orquestación',
   notifications: 'Notificaciones',
   storage: 'Almacenamiento',
   tools: 'Herramientas',

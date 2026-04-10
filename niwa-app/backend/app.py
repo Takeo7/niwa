@@ -1514,6 +1514,73 @@ SERVICES_REGISTRY = [
             "3. Pulsa 'Probar' para enviar un mensaje de prueba"
         ]
     },
+    # ── Hosting (category: hosting) ──
+    {
+        "id": "hosting",
+        "name": "Hosting de sitios web",
+        "description": "Despliega sitios web estáticos en subdominios. Necesitas un dominio con wildcard DNS apuntando a este servidor.",
+        "icon": "🌐",
+        "category": "hosting",
+        "fields": [
+            {"key": "svc.hosting.domain", "type": "text", "label": "Dominio base", "required": True,
+             "help": "Tu dominio con wildcard DNS. Ejemplo: miweb.com → los sitios se servirán en proyecto.miweb.com",
+             "placeholder": "miweb.com"},
+            {"key": "svc.hosting.port", "type": "number", "label": "Puerto del hosting server", "default": "8880",
+             "help": "Puerto donde corre el hosting server. Por defecto: 8880"},
+            {"key": "svc.hosting.directory", "type": "text", "label": "Directorio de deployments",
+             "default": "/opt/niwa/data/deployments",
+             "help": "Ruta donde se guardan los archivos de los sitios desplegados"},
+        ],
+        "test_action": "test_hosting",
+        "setup_guide": [
+            "1. Compra un dominio (ej: miweb.com)",
+            "2. En tu DNS, crea un registro wildcard: *.miweb.com → IP de este servidor",
+            "3. También apunta miweb.com → misma IP",
+            "4. Configura un reverse proxy (Caddy/nginx) que envíe el tráfico de *.miweb.com al puerto 8880",
+            "5. Pon el dominio aquí arriba y dale a Guardar",
+            "6. Pulsa 'Probar' para verificar",
+            "",
+            "Ejemplo de configuración Caddy:",
+            "*.miweb.com { reverse_proxy localhost:8880 }",
+        ]
+    },
+    # ── OpenClaw (category: orchestration) ──
+    {
+        "id": "openclaw",
+        "name": "OpenClaw",
+        "description": "Conecta Niwa con OpenClaw para orquestación multi-canal y multi-modelo. OpenClaw actúa como cerebro, Niwa como backend de capacidades.",
+        "icon": "🦞",
+        "category": "orchestration",
+        "fields": [
+            {"key": "svc.openclaw.mode", "type": "select", "label": "Modo de integración", "options": [
+                {"value": "disabled", "label": "Desactivado"},
+                {"value": "mcp_client", "label": "OpenClaw → Niwa (OpenClaw usa las tools de Niwa)"},
+                {"value": "bidirectional", "label": "Bidireccional (experimental)"},
+            ], "default": "disabled", "help": "OpenClaw como client MCP de Niwa es el modo recomendado."},
+            {"key": "svc.openclaw.gateway_url", "type": "url", "label": "URL del MCP Gateway de Niwa",
+             "help": "La URL que OpenClaw usará para conectarse. Ejemplo: http://tu-servidor:28812/sse",
+             "show_when": {"field": "svc.openclaw.mode", "value": ["mcp_client", "bidirectional"]}},
+            {"key": "svc.openclaw.gateway_token", "type": "password", "label": "Token del Gateway", "sensitive": True,
+             "help": "El MCP_GATEWAY_AUTH_TOKEN. OpenClaw lo necesita para autenticarse.",
+             "show_when": {"field": "svc.openclaw.mode", "value": ["mcp_client", "bidirectional"]}},
+            {"key": "svc.openclaw.domains", "type": "select", "label": "Dominios expuestos", "options": [
+                {"value": "all", "label": "Todos (niwa-core + niwa-ops + niwa-files)"},
+                {"value": "core_only", "label": "Solo core (tareas, proyectos, memoria)"},
+                {"value": "core_ops", "label": "Core + Ops (+ búsqueda, imágenes, deploy)"},
+            ], "default": "all",
+             "show_when": {"field": "svc.openclaw.mode", "value": ["mcp_client", "bidirectional"]}},
+        ],
+        "test_action": "test_openclaw",
+        "setup_guide": [
+            "1. Instala OpenClaw: https://docs.openclaw.ai/getting-started",
+            "2. Activa el modo 'OpenClaw → Niwa' arriba",
+            "3. Copia la URL del gateway y el token",
+            "4. En tu terminal con OpenClaw:",
+            "   openclaw mcp set niwa-core '{\"url\":\"URL_GATEWAY/sse\",\"transport\":\"sse\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
+            "5. Reinicia OpenClaw: openclaw gateway restart",
+            "6. Verifica: openclaw mcp list (debe mostrar las tools de Niwa)",
+        ]
+    },
 ]
 
 # Service ID → svc prefix mapping
@@ -1529,6 +1596,8 @@ _SERVICE_PREFIX_MAP = {
     "web_search": "svc.search.",
     "notify_telegram": "svc.notify.telegram.",
     "notify_webhook": "svc.notify.webhook.",
+    "hosting": "svc.hosting.",
+    "openclaw": "svc.openclaw.",
 }
 
 
@@ -1944,6 +2013,36 @@ def _test_service(service_id):
             return {"ok": True, "message": f"{provider.title()} configurado ✓ — API key presente"}
         else:
             return {"ok": True, "message": "DuckDuckGo activo ✓ — no requiere configuración"}
+
+    if service_id == "hosting":
+        domain = settings.get("svc.hosting.domain", "")
+        if not domain:
+            return {"ok": False, "message": "No hay dominio configurado."}
+        port = int(settings.get("svc.hosting.port", "8880"))
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect(("127.0.0.1", port))
+            s.close()
+            return {"ok": True, "message": f"Hosting server activo en :{port} ✓ — Dominio: {domain}"}
+        except Exception:
+            return {"ok": False, "message": f"El hosting server no está escuchando en el puerto {port}. ¿Está ejecutándose?"}
+
+    if service_id == "openclaw":
+        mode = settings.get("svc.openclaw.mode", "disabled")
+        if mode == "disabled":
+            return {"ok": True, "message": "Integración desactivada. Actívala para conectar con OpenClaw."}
+        gateway_url = settings.get("svc.openclaw.gateway_url", "")
+        gateway_token = settings.get("svc.openclaw.gateway_token", "")
+        if not gateway_url:
+            return {"ok": False, "message": "Falta la URL del gateway."}
+        try:
+            req = urllib.request.Request(gateway_url, headers={"Authorization": f"Bearer {gateway_token}"} if gateway_token else {})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return {"ok": True, "message": f"Gateway accesible ✓ — Listo para OpenClaw"}
+        except Exception as e:
+            return {"ok": False, "message": f"Gateway no accesible: {e}"}
 
     return {"ok": False, "message": "Test no implementado para este servicio"}
 
@@ -3134,6 +3233,40 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(get_available_models())
         if path == '/api/agents':
             return self._json(get_agents_config())
+        # ── OpenClaw integration endpoints ──
+        if path == '/api/integrations/openclaw/detect':
+            import shutil
+            result = {
+                "installed": bool(shutil.which('openclaw')),
+                "config_exists": os.path.exists(os.path.expanduser('~/.openclaw/openclaw.json')),
+                "gateway_running": False,
+            }
+            try:
+                import subprocess
+                ps = subprocess.run(['pgrep', '-f', 'openclaw'], capture_output=True, timeout=3)
+                result["gateway_running"] = ps.returncode == 0
+            except Exception:
+                pass
+            return self._json(result)
+        if path == '/api/integrations/openclaw/config':
+            settings = fetch_settings(raw=True)
+            gateway_url = settings.get("svc.openclaw.gateway_url", "")
+            if not gateway_url:
+                host = os.environ.get('NIWA_APP_PUBLIC_BASE_URL', '')
+                if not host:
+                    host = self.headers.get('Host', 'localhost')
+                    proto = self.headers.get('X-Forwarded-Proto', 'http')
+                    host = f"{proto}://{host}"
+                gateway_url = host.rsplit(':', 1)[0] + ':28812/sse'
+            gateway_token = settings.get("svc.openclaw.gateway_token", "") or os.environ.get("MCP_GATEWAY_AUTH_TOKEN", "")
+            domains = settings.get("svc.openclaw.domains", "all")
+            config = {
+                "gateway_url": gateway_url,
+                "has_token": bool(gateway_token),
+                "domains": domains,
+                "cli_command": f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"sse","headers":{{"Authorization":"Bearer {gateway_token}"}}}}\'' if gateway_token else f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"sse"}}\'',
+            }
+            return self._json(config)
         # ── Services API ──
         if path == '/api/services':
             raw_settings = fetch_settings(raw=True)

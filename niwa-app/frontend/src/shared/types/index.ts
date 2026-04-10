@@ -98,17 +98,18 @@ export interface ServiceFieldOption {
 
 export interface ServiceFieldShowWhen {
   field: string;
-  value: string;
+  value: string | string[];
 }
 
 export interface ServiceField {
   key: string;
-  type: 'select' | 'password' | 'text' | 'url';
+  type: 'select' | 'password' | 'text' | 'url' | 'number';
   label: string;
   required?: boolean;
   sensitive?: boolean;
   help?: string;
   default?: string;
+  placeholder?: string;
   options?: ServiceFieldOption[];
   options_by_provider?: Record<string, ServiceFieldOption[]>;
   show_when?: ServiceFieldShowWhen;

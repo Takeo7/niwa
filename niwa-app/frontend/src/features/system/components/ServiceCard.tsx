@@ -62,7 +62,11 @@ export function ServiceCard({ service }: Props) {
 
   const isFieldVisible = (field: ServiceField): boolean => {
     if (!field.show_when) return true;
-    return values[field.show_when.field] === field.show_when.value;
+    const currentVal = values[field.show_when.field];
+    if (Array.isArray(field.show_when.value)) {
+      return field.show_when.value.includes(currentVal);
+    }
+    return currentVal === field.show_when.value;
   };
 
   const getFieldOptions = (field: ServiceField) => {
@@ -282,6 +286,17 @@ function FieldRenderer({
           type="url"
         />
       );
+    case 'number':
+      return (
+        <TextInput
+          label={field.label}
+          description={field.help}
+          value={value}
+          onChange={(e) => onChange(e.currentTarget.value)}
+          placeholder={field.placeholder}
+          type="number"
+        />
+      );
     default:
       return (
         <TextInput
@@ -289,6 +304,7 @@ function FieldRenderer({
           description={field.help}
           value={value}
           onChange={(e) => onChange(e.currentTarget.value)}
+          placeholder={field.placeholder}
         />
       );
   }

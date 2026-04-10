@@ -769,9 +769,25 @@ def _deploy_web(args):
                 (deploy_id, project_id, slug, directory, "active", now, now),
             )
 
-        public_url = os.environ.get("NIWA_PUBLIC_URL", "http://localhost")
-        port = os.environ.get("NIWA_HOSTING_PORT", "8880")
-        url = f"{public_url}:{port}/{slug}/"
+        # Read hosting config from DB settings, fall back to env vars
+        hosting_domain = ""
+        hosting_port = ""
+        try:
+            with _ro_conn() as rc:
+                for row in rc.execute("SELECT key, value FROM settings WHERE key LIKE 'svc.hosting.%'").fetchall():
+                    if row["key"] == "svc.hosting.domain":
+                        hosting_domain = row["value"]
+                    elif row["key"] == "svc.hosting.port":
+                        hosting_port = row["value"]
+        except Exception:
+            pass
+        if hosting_domain:
+            port = hosting_port or os.environ.get("NIWA_HOSTING_PORT", "8880")
+            url = f"https://{slug}.{hosting_domain}/"
+        else:
+            public_url = os.environ.get("NIWA_PUBLIC_URL", "http://localhost")
+            port = hosting_port or os.environ.get("NIWA_HOSTING_PORT", "8880")
+            url = f"{public_url}:{port}/{slug}/"
 
         c.execute("UPDATE deployments SET url=? WHERE project_id=?", (url, project_id))
         c.execute("UPDATE projects SET url=?, updated_at=? WHERE id=?", (url, now, project_id))
