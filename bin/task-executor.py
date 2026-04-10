@@ -456,7 +456,15 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     if not LLM_COMMAND:
         return False, "NIWA_LLM_COMMAND is not configured"
     import pty, select
-    cmd = shlex.split(LLM_COMMAND) + [prompt]
+    # Write prompt to temp file — Claude Code interprets long positional
+    # args as file paths, causing ENAMETOOLONG with enriched prompts.
+    import tempfile
+    prompt_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", prefix="niwa-prompt-", delete=False,
+    )
+    prompt_file.write(prompt)
+    prompt_file.close()
+    cmd = shlex.split(LLM_COMMAND) + [prompt_file.name]
     log.info("exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
     run_env = os.environ.copy()
     run_env["TERM"] = "dumb"
@@ -523,6 +531,11 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
         return False, f"[command not found: {e}]"
     except Exception as e:
         return False, f"[error: {e}]"
+    finally:
+        try:
+            os.unlink(prompt_file.name)
+        except Exception:
+            pass
 
 
 # ────────────────────────── main loop ──────────────────────────
