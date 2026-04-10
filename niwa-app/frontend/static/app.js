@@ -1725,7 +1725,33 @@ async function loadConfig() {
       ${_renderSettingToggle(_t('settings.idle_review'), isAuto ? _t('sys.auto_mode') : _t('sys.manual_mode'), isAuto, 'toggleIdleReviewMode()')}
     </div>`;
 
-  box.innerHTML = integrationsHtml + settingsHtml + (data ? Object.entries(data).map(([key, val]) => `
+  const modelsHtml = `
+    <div class="niwa-card rounded-lg p-6 mb-4">
+      <div class="flex items-center gap-3 mb-4">
+        <span class="material-symbols-outlined text-secondary">model_training</span>
+        <h3 class="text-sm font-semibold uppercase tracking-wider">Modelos LLM</h3>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat (respuestas rápidas)</label>
+          <input id="model-chat" type="text" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono"
+                 placeholder="claude -p --max-turns 10 --model claude-haiku-4-5">
+        </div>
+        <div>
+          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Tareas (modelo principal)</label>
+          <input id="model-tasks" type="text" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono"
+                 placeholder="claude -p --max-turns 50">
+        </div>
+      </div>
+      <div class="flex items-center gap-3 mt-3">
+        <button onclick="saveModels()" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">
+          Guardar modelos
+        </button>
+        <span id="model-save-status" class="text-xs" style="color:var(--c-on-surface-variant);"></span>
+      </div>
+    </div>`;
+
+  box.innerHTML = integrationsHtml + settingsHtml + modelsHtml + (data ? Object.entries(data).map(([key, val]) => `
     <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
         <span class="material-symbols-outlined text-primary">settings</span>
@@ -1736,6 +1762,8 @@ async function loadConfig() {
     </div>`).join('') : '');
   // Initialize contextual help
   updateLlmHelp();
+  // Load current model settings
+  loadModels();
 }
 
 function _renderSettingToggle(label, desc, isOn, onclickExpr, opts) {
@@ -1760,6 +1788,34 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
     className: isMaster ? 'mb-4 pb-4 border-b border-outline-variant/10' : 'mb-3 pl-2',
     dimLabel: !isMaster
   });
+}
+
+async function loadModels() {
+  try {
+    const settings = await api('settings');
+    const chatInput = document.getElementById('model-chat');
+    const taskInput = document.getElementById('model-tasks');
+    if (chatInput) chatInput.value = (settings && settings['int.llm_command_chat']) || '';
+    if (taskInput) taskInput.value = (settings && settings['int.llm_command']) || '';
+  } catch(e) {}
+}
+
+async function saveModels() {
+  const chatEl = document.getElementById('model-chat');
+  const taskEl = document.getElementById('model-tasks');
+  const status = document.getElementById('model-save-status');
+  const chat = chatEl ? chatEl.value.trim() : '';
+  const tasks = taskEl ? taskEl.value.trim() : '';
+  try {
+    if (chat) await saveSetting('int.llm_command_chat', chat);
+    if (tasks) await saveSetting('int.llm_command', tasks);
+    if (status) {
+      status.textContent = '\u2713 Guardado. Reinicia el executor para aplicar.';
+      setTimeout(() => { status.textContent = ''; }, 5000);
+    }
+  } catch(e) {
+    if (status) status.textContent = '\u2717 Error: ' + e.message;
+  }
 }
 
 async function saveIntegration(group) {
