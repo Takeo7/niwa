@@ -1091,7 +1091,7 @@ async function openProject(name) {
     S.settings ? Promise.resolve() : loadSettings()
   ]);
 
-  const projectTasks = allTasks.filter(t => t.project_name === name);
+  const projectTasks = allTasks.filter(t => t.project_id === (proj && proj.id));
 
   // Idle review toggle
   var idleToggleBox = document.getElementById('project-idle-toggle');
@@ -1567,34 +1567,102 @@ function renderServices() {
     return;
   }
 
-  container.innerHTML = _servicesData.map(svc => {
-    const st = svc.status || {};
-    const statusClass = st.status === 'configured' ? 'text-green-500' : st.status === 'error' ? 'text-red-500' : 'text-amber-500';
-    const statusIcon = st.status === 'configured' ? '✓' : st.status === 'error' ? '✗' : '⚠';
-    const statusLabel = st.status === 'configured' ? 'Configurado' : st.status === 'error' ? 'Error' : 'No configurado';
+  // Save expanded state before re-render
+  const expandedIds = new Set();
+  container.querySelectorAll('[id^="svc-body-"]').forEach(el => {
+    if (!el.classList.contains('hidden')) expandedIds.add(el.id.replace('svc-body-', ''));
+  });
 
-    return `
-      <div class="niwa-card rounded-2xl shadow-sm overflow-hidden" id="svc-card-${svc.id}">
-        <div class="p-5 cursor-pointer hover:bg-surface-bright/30 transition-colors flex items-center gap-3"
-             onclick="toggleServiceCard('${svc.id}')">
-          <span class="text-2xl">${svc.icon || '⚙️'}</span>
-          <div class="flex-1">
-            <div class="flex items-center gap-2">
-              <span class="font-headline font-bold text-on-surface">${escHtml(svc.name)}</span>
-              <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${statusClass} bg-surface-dim/50">${statusIcon} ${statusLabel}</span>
-            </div>
-            <p class="text-xs text-on-surface-variant mt-0.5">${escHtml(svc.description)}</p>
-          </div>
-          <span class="material-symbols-outlined text-on-surface-variant svc-chevron-${svc.id} transition-transform">expand_more</span>
-        </div>
-        <div id="svc-body-${svc.id}" class="hidden border-t border-outline-variant/20">
-          ${renderServiceBody(svc)}
+  // Count statuses
+  const configured = _servicesData.filter(s => s.status?.status === 'configured').length;
+  const notConfigured = _servicesData.filter(s => s.status?.status === 'not_configured').length;
+  const errors = _servicesData.filter(s => s.status?.status === 'error').length;
+
+  // Group by category
+  const categories = {};
+  _servicesData.forEach(svc => {
+    const cat = svc.category || 'other';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(svc);
+  });
+
+  const categoryNames = {
+    'llm': 'Modelos de texto',
+    'image': 'Generación de imágenes',
+    'search': 'Búsqueda',
+    'notify': 'Notificaciones',
+    'ai': 'Servicios de IA',
+    'other': 'Otros'
+  };
+  const categoryOrder = ['llm', 'image', 'search', 'notify', 'ai', 'other'];
+
+  // Status pills for configured services
+  const configuredPills = _servicesData.filter(s => s.status?.status === 'configured')
+    .map(s => `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-500/10 text-green-500">${s.icon} ${s.name.split('(')[0].trim()}</span>`)
+    .join('');
+
+  let dashboardHtml = `
+    <div class="niwa-card rounded-2xl p-5 mb-6">
+      <div class="flex items-center gap-4 mb-3">
+        <span class="text-green-500 font-bold text-sm">${configured} configurado${configured !== 1 ? 's' : ''}</span>
+        ${notConfigured ? `<span class="text-amber-500 font-bold text-sm">${notConfigured} sin configurar</span>` : ''}
+        ${errors ? `<span class="text-red-500 font-bold text-sm">${errors} con error</span>` : ''}
+      </div>
+      ${configuredPills ? `<div class="flex flex-wrap gap-1.5">${configuredPills}</div>` : '<p class="text-xs text-on-surface-variant">Ningún servicio configurado todavía. Empieza configurando un proveedor de LLM.</p>'}
+    </div>`;
+
+  // Render categories
+  let categoriesHtml = '';
+  for (const cat of categoryOrder) {
+    const services = categories[cat];
+    if (!services || !services.length) continue;
+    categoriesHtml += `
+      <div class="mb-6">
+        <h3 class="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-3">${categoryNames[cat] || cat}</h3>
+        <div class="space-y-3">
+          ${services.map(svc => renderServiceCard(svc)).join('')}
         </div>
       </div>`;
-  }).join('');
+  }
+
+  container.innerHTML = dashboardHtml + categoriesHtml;
+
+  // Restore expanded state
+  expandedIds.forEach(id => {
+    const body = document.getElementById('svc-body-' + id);
+    const chevron = document.querySelector('.svc-chevron-' + id);
+    if (body) { body.classList.remove('hidden'); }
+    if (chevron) chevron.style.transform = 'rotate(180deg)';
+  });
 
   // Initialize conditional field visibility for each service
   _servicesData.forEach(svc => onServiceFieldChange(svc.id));
+}
+
+function renderServiceCard(svc) {
+  const st = svc.status || {};
+  const statusClass = st.status === 'configured' ? 'text-green-500' : st.status === 'error' ? 'text-red-500' : 'text-amber-500';
+  const statusIcon = st.status === 'configured' ? '✓' : st.status === 'error' ? '✗' : '⚠';
+  const statusLabel = st.status === 'configured' ? 'Configurado' : st.status === 'error' ? 'Error' : 'No configurado';
+
+  return `
+    <div class="niwa-card rounded-2xl shadow-sm overflow-hidden" id="svc-card-${svc.id}">
+      <div class="p-5 cursor-pointer hover:bg-surface-bright/30 transition-colors flex items-center gap-3"
+           onclick="toggleServiceCard('${svc.id}')">
+        <span class="text-2xl">${svc.icon || '⚙️'}</span>
+        <div class="flex-1">
+          <div class="flex items-center gap-2">
+            <span class="font-headline font-bold text-on-surface">${escHtml(svc.name)}</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${statusClass} bg-surface-dim/50">${statusIcon} ${statusLabel}</span>
+          </div>
+          <p class="text-xs text-on-surface-variant mt-0.5">${escHtml(svc.description)}</p>
+        </div>
+        <span class="material-symbols-outlined text-on-surface-variant svc-chevron-${svc.id} transition-transform">expand_more</span>
+      </div>
+      <div id="svc-body-${svc.id}" class="hidden border-t border-outline-variant/20">
+        ${renderServiceBody(svc)}
+      </div>
+    </div>`;
 }
 
 function toggleServiceCard(serviceId) {
@@ -1625,7 +1693,7 @@ function renderServiceBody(svc) {
     const isSet = valuesSet[field.key] || false;
     const showWhen = field.show_when;
     const hiddenClass = showWhen ? 'svc-conditional' : '';
-    const showWhenAttr = showWhen ? `data-show-field="${showWhen.field}" data-show-value="${showWhen.value}"` : '';
+    const showWhenAttr = showWhen ? `data-show-field="${showWhen.field}" data-show-value="${Array.isArray(showWhen.value) ? escHtml(JSON.stringify(showWhen.value)) : escHtml(showWhen.value)}"` : '';
 
     let inputHtml = '';
     if (field.type === 'select') {
@@ -1718,12 +1786,15 @@ function onServiceFieldChange(serviceId) {
     fieldValues[el.dataset.svcKey] = el.value;
   });
 
-  // Show/hide conditional fields
+  // Show/hide conditional fields (show_when supports string or array of values)
   card.querySelectorAll('.svc-conditional').forEach(wrapper => {
     const showField = wrapper.dataset.showField;
     const showValue = wrapper.dataset.showValue;
     if (showField && showValue) {
-      const visible = fieldValues[showField] === showValue;
+      let allowedValues;
+      try { allowedValues = JSON.parse(showValue); } catch(e) { allowedValues = showValue; }
+      const currentVal = fieldValues[showField] || '';
+      const visible = Array.isArray(allowedValues) ? allowedValues.includes(currentVal) : currentVal === allowedValues;
       wrapper.style.display = visible ? '' : 'none';
     }
   });
@@ -1772,8 +1843,12 @@ async function saveService(serviceId) {
     if (res && res.ok) {
       toast('Servicio guardado ✓', 'success');
       if (statusEl) { statusEl.innerHTML = '<span class="text-green-500">Guardado ✓</span>'; setTimeout(() => statusEl.textContent = '', 4000); }
-      // Refresh to update status badges
-      loadServices();
+      // Refresh to update status badges, then re-expand the saved card
+      await loadServices();
+      const body = document.getElementById('svc-body-' + serviceId);
+      const chevron = document.querySelector('.svc-chevron-' + serviceId);
+      if (body) { body.classList.remove('hidden'); }
+      if (chevron) chevron.style.transform = 'rotate(180deg)';
     } else {
       toast('Error al guardar', 'error');
     }
@@ -1816,7 +1891,7 @@ async function loadConfig() {
   const ig = integrations || {};
   if (ig.terminal_port) S._terminalPort = ig.terminal_port;
 
-  // Integrations panel
+  // Integrations panel — LLM/Telegram/Webhook moved to Services tab
   let integrationsHtml = `
     <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center justify-between mb-6">
@@ -1829,109 +1904,8 @@ async function loadConfig() {
         </button>
       </div>
 
-      <!-- Telegram -->
-      <div class="mb-6 pb-5 border-b border-outline-variant/10">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="material-symbols-outlined text-primary text-base">send</span>
-          <span class="text-sm font-medium">Telegram</span>
-          ${ig.telegram_bot_token_set ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary font-bold">Configurado</span>' : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-outline-variant/20 text-on-surface-variant font-bold">No configurado</span>'}
-        </div>
-        ${!ig.telegram_bot_token_set ? '<div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"><p><b>Setup:</b> 1. Abre @BotFather en Telegram y crea un bot con /newbot</p><p>2. Copia el token que te da (ej: 123456:ABC-DEF...)</p><p>3. Abre @userinfobot para obtener tu Chat ID numérico</p><p>4. Pega ambos aquí y dale a Guardar, luego Test</p></div>' : ''}
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Bot Token ${ig.telegram_bot_token_set ? '<span class="text-tertiary">(guardado)</span>' : ''}</label>
-            <input id="int-telegram-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.telegram_bot_token_set ? 'Guardado — deja vacío para mantener' : '123456:ABC-DEF1234...'}" value="">
-          </div>
-          <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Chat ID</label>
-            <input id="int-telegram-chatid" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="123456789" value="${escHtml(ig.telegram_chat_id || '')}">
-          </div>
-        </div>
-        <div class="flex gap-2">
-          <button onclick="saveIntegration('telegram')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
-          <button onclick="testTelegram()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Test</button>
-        </div>
-        <div id="telegram-test-result" class="mt-2 text-xs hidden"></div>
-      </div>
-
-      <!-- Webhook -->
-      <div class="mb-6 pb-5 border-b border-outline-variant/10">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="material-symbols-outlined text-secondary text-base">webhook</span>
-          <span class="text-sm font-medium">Webhook</span>
-        </div>
-        <div class="mb-3">
-          <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">URL</label>
-          <input id="int-webhook-url" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.webhook_url || 'https://example.com/hook'}" value="${ig.webhook_url || ''}">
-        </div>
-        <button onclick="saveIntegration('webhook')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
-      </div>
-
-      <!-- LLM Provider -->
-      <div class="mb-6 pb-5 border-b border-outline-variant/10">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="material-symbols-outlined text-tertiary text-base">smart_toy</span>
-          <span class="text-sm font-medium">LLM Provider</span>
-          <span class="text-[10px] text-on-surface-variant">(ejecuta tareas automáticamente)</span>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Provider</label>
-            <select id="int-llm-provider" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
-              <option value="" ${!ig.llm_provider?'selected':''}>No configurado</option>
-              <option value="claude" ${ig.llm_provider==='claude'?'selected':''}>Claude (Anthropic)</option>
-              <option value="llm" ${ig.llm_provider==='llm'?'selected':''}>llm CLI (Simon Willison)</option>
-              <option value="gemini" ${ig.llm_provider==='gemini'?'selected':''}>Gemini (Google)</option>
-              <option value="custom" ${ig.llm_provider==='custom'?'selected':''}>Custom</option>
-            </select>
-          </div>
-          <div>
-            <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Autenticación</label>
-            <select id="int-llm-auth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" onchange="updateLlmHelp()">
-              <option value="api_key" ${(ig.llm_auth_method||'api_key')==='api_key'?'selected':''}>API Key</option>
-              <option value="setup_token" ${ig.llm_auth_method==='setup_token'?'selected':''}>Setup Token (Claude Max/Team)</option>
-              <option value="oauth" ${ig.llm_auth_method==='oauth'?'selected':''}>OAuth (ya autenticado en terminal)</option>
-            </select>
-          </div>
-        </div>
-        <div id="llm-auth-fields" class="mb-3">
-          <div id="llm-auth-apikey" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">API Key</label>
-              <input id="int-llm-apikey" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="${ig.llm_api_key_set ? ig.llm_api_key : 'sk-ant-...'}" value="">
-            </div>
-            <div>
-              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-              <input id="int-llm-command" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --output-format text" value="${escHtml(ig.llm_command || '')}">
-            </div>
-          </div>
-          <div id="llm-auth-token" class="hidden">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Setup Token</label>
-                <input id="int-llm-setup-token" type="password" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="Pega el token de claude.ai/settings">
-              </div>
-              <div>
-                <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-                <input id="int-llm-command-token" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text" value="${escHtml(ig.llm_command || '')}">
-              </div>
-            </div>
-            <button onclick="applySetupToken()" class="mt-2 px-3 py-1.5 bg-secondary text-on-secondary text-xs font-bold rounded-lg hover:opacity-90">Aplicar token</button>
-            <span id="setup-token-result" class="ml-2 text-xs"></span>
-          </div>
-          <div id="llm-auth-oauth" class="hidden">
-            <div class="mb-2">
-              <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">Comando</label>
-              <input id="int-llm-command-oauth" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono" placeholder="claude -p --max-turns 50 --output-format text" value="${escHtml(ig.llm_command || '')}">
-            </div>
-          </div>
-        </div>
-        <div id="llm-setup-help" class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant space-y-1"></div>
-        <div id="llm-status" class="mb-3 text-xs"></div>
-        <div class="flex gap-2">
-          <button onclick="saveIntegration('llm')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
-          <button onclick="checkLlmStatus()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Verificar</button>
-        </div>
+      <div class="bg-surface-dim/50 rounded-lg p-3 mb-5 text-xs text-on-surface-variant">
+        <p>Proveedores de LLM, generación de imágenes y notificaciones se configuran en la pestaña <b>Servicios</b>.</p>
       </div>
 
       <!-- Executor -->
@@ -1941,7 +1915,7 @@ async function loadConfig() {
           <span class="text-sm font-medium">Task Executor</span>
         </div>
         <div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant">
-          <p>El executor recoge tareas en estado <b>pendiente</b> y las ejecuta con el LLM configurado arriba.</p>
+          <p>El executor recoge tareas en estado <b>pendiente</b> y las ejecuta con el LLM configurado en Servicios.</p>
           <p>Corre como daemon en el host (no en Docker). Poll = cada cuántos segundos busca tareas. Timeout = máximo por tarea.</p>
           <p>Los cambios se guardan en la DB. Pulsa "Recargar" para que el executor los aplique sin reiniciar.</p>
         </div>
@@ -2019,8 +1993,6 @@ async function loadConfig() {
       </div>
       <pre class="bg-black/20 p-4 rounded-lg text-[11px] font-mono text-on-surface/80 overflow-x-auto max-h-64 overflow-y-auto">${escHtml(JSON.stringify(val.data, null, 2))}</pre>
     </div>`).join('') : '');
-  // Initialize contextual help
-  updateLlmHelp();
   // Load agents config
   loadAgents();
 }
@@ -2837,7 +2809,7 @@ document.addEventListener('keydown', e => {
 let _pollInProgress = false;
 function _shouldSkipPoll() {
   // Don't reload while user is editing forms — it wipes input values
-  if (S.view === 'system' && (S.systemTab === 'config' || S.systemTab === 'styles')) return true;
+  if (S.view === 'system' && (S.systemTab === 'config' || S.systemTab === 'styles' || S.systemTab === 'services')) return true;
   // Don't poll while any modal is open
   const modals = ['task-modal', 'note-editor-modal', 'routine-editor-modal', 'search-overlay'];
   for (const id of modals) {

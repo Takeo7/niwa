@@ -1123,64 +1123,286 @@ def save_setting(key, value):
 # Each service defines its config schema, test endpoint, and setup guide.
 # Adding a new service = adding an entry here. The frontend renders dynamically.
 SERVICES_REGISTRY = [
+    # ── LLM Providers (category: llm) ──
+    {
+        "id": "llm_anthropic",
+        "name": "Anthropic (Claude)",
+        "description": "Modelos Claude para razonamiento, código y análisis. Haiku (rápido), Sonnet (equilibrado), Opus (potente).",
+        "icon": "🧠",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.anthropic.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://console.anthropic.com/settings/keys"},
+            {"key": "svc.llm.anthropic.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "claude-haiku-4-5", "label": "Claude Haiku 4.5 (rápido, económico)"},
+                {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (equilibrado)"},
+                {"value": "claude-opus-4-6", "label": "Claude Opus 4.6 (máxima capacidad)"},
+            ], "default": "claude-sonnet-4-6"},
+        ],
+        "test_action": "test_llm_anthropic",
+        "setup_guide": [
+            "1. Ve a https://console.anthropic.com/settings/keys",
+            "2. Crea una API key nueva",
+            "3. Pégala aquí y dale a Guardar",
+            "4. Pulsa 'Probar' para verificar la conexión"
+        ]
+    },
+    {
+        "id": "llm_openai",
+        "name": "OpenAI (GPT)",
+        "description": "Modelos GPT-4o, o1, o3 para conversación, código y razonamiento. También incluye DALL-E para imágenes.",
+        "icon": "💬",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.openai.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://platform.openai.com/api-keys"},
+            {"key": "svc.llm.openai.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "gpt-4o", "label": "GPT-4o (rápido, multimodal)"},
+                {"value": "gpt-4o-mini", "label": "GPT-4o Mini (económico)"},
+                {"value": "o1", "label": "o1 (razonamiento avanzado)"},
+                {"value": "o3-mini", "label": "o3 Mini (razonamiento eficiente)"},
+            ], "default": "gpt-4o"},
+            {"key": "svc.llm.openai.organization_id", "type": "text", "label": "Organization ID", "required": False,
+             "help": "Opcional. Solo si perteneces a una organización."},
+        ],
+        "test_action": "test_llm_openai",
+        "setup_guide": [
+            "1. Ve a https://platform.openai.com/api-keys",
+            "2. Crea una API key nueva",
+            "3. Pégala aquí y dale a Guardar",
+            "4. Pulsa 'Probar' para verificar la conexión"
+        ]
+    },
+    {
+        "id": "llm_google",
+        "name": "Google (Gemini)",
+        "description": "Modelos Gemini para razonamiento, código y análisis multimodal.",
+        "icon": "✨",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.google.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://aistudio.google.com/apikey"},
+            {"key": "svc.llm.google.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (potente)"},
+                {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (rápido)"},
+            ], "default": "gemini-2.5-flash"},
+        ],
+        "test_action": "test_llm_google",
+        "setup_guide": [
+            "1. Ve a https://aistudio.google.com/apikey",
+            "2. Crea una API key",
+            "3. Pégala aquí y dale a Guardar",
+            "4. Pulsa 'Probar' para verificar"
+        ]
+    },
+    {
+        "id": "llm_ollama",
+        "name": "Ollama (Local)",
+        "description": "Ejecuta modelos de IA en tu propio hardware. Gratis, privado, sin límites.",
+        "icon": "🦙",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.ollama.base_url", "type": "url", "label": "URL de Ollama", "required": True,
+             "default": "http://localhost:11434", "help": "La URL donde corre Ollama. Por defecto: http://localhost:11434"},
+            {"key": "svc.llm.ollama.default_model", "type": "text", "label": "Modelo por defecto",
+             "default": "llama3", "help": "Nombre del modelo (ej: llama3, mistral, codellama). Debe estar descargado con 'ollama pull'."},
+        ],
+        "test_action": "test_llm_ollama",
+        "setup_guide": [
+            "1. Instala Ollama: https://ollama.com/download",
+            "2. Descarga un modelo: ollama pull llama3",
+            "3. Pon la URL aquí (normalmente http://localhost:11434)",
+            "4. Pulsa 'Probar' para verificar conexión y modelos disponibles"
+        ]
+    },
+    {
+        "id": "llm_groq",
+        "name": "Groq",
+        "description": "Inferencia ultrarrápida de modelos open-source (Llama, Mixtral, Gemma).",
+        "icon": "⚡",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.groq.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://console.groq.com/keys"},
+            {"key": "svc.llm.groq.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (versátil)"},
+                {"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (ultrarrápido)"},
+                {"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B (contexto largo)"},
+                {"value": "gemma2-9b-it", "label": "Gemma 2 9B"},
+            ], "default": "llama-3.3-70b-versatile"},
+        ],
+        "test_action": "test_llm_groq",
+        "setup_guide": [
+            "1. Ve a https://console.groq.com/keys",
+            "2. Crea una API key",
+            "3. Pégala aquí y dale a Guardar",
+            "4. Pulsa 'Probar' — Groq es muy rápido, verás resultado casi al instante"
+        ]
+    },
+    {
+        "id": "llm_mistral",
+        "name": "Mistral AI",
+        "description": "Modelos europeos de alto rendimiento. Mistral Large, Medium y Small.",
+        "icon": "🌊",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.mistral.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://console.mistral.ai/api-keys"},
+            {"key": "svc.llm.mistral.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "mistral-large-latest", "label": "Mistral Large (más capaz)"},
+                {"value": "mistral-medium-latest", "label": "Mistral Medium (equilibrado)"},
+                {"value": "mistral-small-latest", "label": "Mistral Small (rápido)"},
+                {"value": "codestral-latest", "label": "Codestral (código)"},
+            ], "default": "mistral-large-latest"},
+        ],
+        "test_action": "test_llm_mistral",
+        "setup_guide": [
+            "1. Ve a https://console.mistral.ai/api-keys",
+            "2. Crea una API key",
+            "3. Pégala aquí y dale a Guardar"
+        ]
+    },
+    {
+        "id": "llm_deepseek",
+        "name": "DeepSeek",
+        "description": "Modelos potentes y económicos. DeepSeek V3 y R1 para razonamiento.",
+        "icon": "🔬",
+        "category": "llm",
+        "fields": [
+            {"key": "svc.llm.deepseek.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Obtén tu API key en https://platform.deepseek.com/api_keys"},
+            {"key": "svc.llm.deepseek.default_model", "type": "select", "label": "Modelo por defecto", "options": [
+                {"value": "deepseek-chat", "label": "DeepSeek V3 (general)"},
+                {"value": "deepseek-reasoner", "label": "DeepSeek R1 (razonamiento)"},
+            ], "default": "deepseek-chat"},
+        ],
+        "test_action": "test_llm_deepseek",
+        "setup_guide": [
+            "1. Ve a https://platform.deepseek.com/api_keys",
+            "2. Crea una API key",
+            "3. Pégala aquí"
+        ]
+    },
+    # ── Image Generation (category: image) ──
     {
         "id": "image_generation",
         "name": "Generación de imágenes",
-        "description": "Genera imágenes con IA a partir de texto. Necesitas una API key de OpenAI o Stability AI.",
+        "description": "Genera imágenes con IA a partir de texto.",
         "icon": "🎨",
-        "category": "ai",
+        "category": "image",
         "fields": [
             {"key": "svc.image.provider", "type": "select", "label": "Proveedor", "options": [
-                {"value": "openai", "label": "OpenAI (DALL-E)"},
-                {"value": "stability", "label": "Stability AI (SDXL)"},
-            ], "default": "openai", "help": "Elige el proveedor de generación de imágenes"},
+                {"value": "openai", "label": "OpenAI (DALL-E 3)"},
+                {"value": "stability", "label": "Stability AI (SDXL, SD3)"},
+                {"value": "replicate", "label": "Replicate (Flux, SDXL, etc.)"},
+                {"value": "fal", "label": "fal.ai (Flux rápido)"},
+                {"value": "together", "label": "Together AI (Flux, SDXL)"},
+            ], "default": "openai", "help": "OpenAI DALL-E 3 es el más fácil de configurar. Replicate y fal.ai tienen más variedad de modelos."},
             {"key": "svc.image.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
-             "help": "Tu API key del proveedor seleccionado. OpenAI: https://platform.openai.com/api-keys | Stability: https://platform.stability.ai/account/keys"},
+             "help": "La API key del proveedor seleccionado."},
             {"key": "svc.image.model", "type": "select", "label": "Modelo", "options_by_provider": {
                 "openai": [{"value": "dall-e-3", "label": "DALL-E 3 (mejor calidad)"}, {"value": "dall-e-2", "label": "DALL-E 2 (más barato)"}],
                 "stability": [{"value": "stable-diffusion-xl-1024-v1-0", "label": "SDXL 1.0"}, {"value": "sd3.5-large", "label": "SD 3.5 Large"}],
-            }, "default": "dall-e-3", "help": "Modelo a usar para generar imágenes"},
+                "replicate": [{"value": "black-forest-labs/flux-1.1-pro", "label": "Flux 1.1 Pro"}, {"value": "black-forest-labs/flux-schnell", "label": "Flux Schnell (rápido)"}, {"value": "stability-ai/sdxl", "label": "SDXL via Replicate"}],
+                "fal": [{"value": "fal-ai/flux-pro/v1.1", "label": "Flux Pro 1.1"}, {"value": "fal-ai/flux/schnell", "label": "Flux Schnell (rápido)"}, {"value": "fal-ai/flux/dev", "label": "Flux Dev"}],
+                "together": [{"value": "black-forest-labs/FLUX.1-schnell-Free", "label": "Flux Schnell (gratis)"}, {"value": "black-forest-labs/FLUX.1.1-pro", "label": "Flux 1.1 Pro"}, {"value": "stabilityai/stable-diffusion-xl-base-1.0", "label": "SDXL"}],
+            }, "default": "dall-e-3"},
             {"key": "svc.image.default_size", "type": "select", "label": "Tamaño por defecto", "options": [
                 {"value": "1024x1024", "label": "1024×1024 (cuadrado)"},
                 {"value": "1792x1024", "label": "1792×1024 (panorámico)"},
                 {"value": "1024x1792", "label": "1024×1792 (vertical)"},
-            ], "default": "1024x1024", "help": "Tamaño por defecto de las imágenes generadas"},
+            ], "default": "1024x1024"},
         ],
         "test_action": "test_image_generation",
         "setup_guide": [
-            "1. Ve a https://platform.openai.com/api-keys (o stability.ai si prefieres Stability)",
-            "2. Crea una API key nueva",
-            "3. Pégala aquí arriba y dale a Guardar",
-            "4. Pulsa 'Probar' para verificar que funciona"
+            "1. Elige un proveedor arriba",
+            "2. Obtén la API key del proveedor elegido",
+            "3. Pégala, selecciona modelo, y dale a Guardar",
+            "4. Pulsa 'Probar' para verificar"
         ]
     },
+    # ── Web Search (category: search) ──
     {
         "id": "web_search",
         "name": "Búsqueda web",
-        "description": "Permite buscar en internet. Funciona con DuckDuckGo por defecto, o con SearXNG si tienes una instancia propia.",
+        "description": "Permite buscar en internet. DuckDuckGo funciona sin configuración.",
         "icon": "🔍",
         "category": "search",
         "fields": [
             {"key": "svc.search.provider", "type": "select", "label": "Proveedor", "options": [
-                {"value": "duckduckgo", "label": "DuckDuckGo (sin configuración)"},
+                {"value": "duckduckgo", "label": "DuckDuckGo (gratis, sin API key)"},
                 {"value": "searxng", "label": "SearXNG (autoalojado)"},
-            ], "default": "duckduckgo", "help": "DuckDuckGo funciona sin nada extra. SearXNG es más potente pero necesitas tu propia instancia."},
-            {"key": "svc.search.searxng_url", "type": "url", "label": "URL de SearXNG", "required": False,
-             "help": "Ejemplo: http://localhost:8080 — Solo necesario si eliges SearXNG",
+                {"value": "tavily", "label": "Tavily (optimizado para IA)"},
+                {"value": "brave", "label": "Brave Search API"},
+            ], "default": "duckduckgo"},
+            {"key": "svc.search.api_key", "type": "password", "label": "API Key", "required": False, "sensitive": True,
+             "help": "Solo necesario para Tavily o Brave.",
+             "show_when": {"field": "svc.search.provider", "value": ["tavily", "brave"]}},
+            {"key": "svc.search.searxng_url", "type": "url", "label": "URL de SearXNG",
+             "help": "Ejemplo: http://localhost:8080",
              "show_when": {"field": "svc.search.provider", "value": "searxng"}},
         ],
         "test_action": "test_web_search",
         "setup_guide": [
             "DuckDuckGo funciona directamente, sin configuración.",
-            "Para SearXNG: instala tu instancia (https://docs.searxng.org) y pon la URL aquí."
+            "Para mejores resultados, prueba Tavily (https://tavily.com) — está optimizado para agentes de IA."
+        ]
+    },
+    # ── Notifications (category: notify) ──
+    {
+        "id": "notify_telegram",
+        "name": "Telegram",
+        "description": "Recibe notificaciones y briefings por Telegram.",
+        "icon": "📱",
+        "category": "notify",
+        "fields": [
+            {"key": "svc.notify.telegram.bot_token", "type": "password", "label": "Bot Token", "required": True, "sensitive": True,
+             "help": "Crea un bot con @BotFather en Telegram y copia el token."},
+            {"key": "svc.notify.telegram.chat_id", "type": "text", "label": "Chat ID", "required": True,
+             "help": "Tu chat ID. Envía /start a tu bot y usa @userinfobot para obtenerlo."},
+        ],
+        "test_action": "test_notify_telegram",
+        "setup_guide": [
+            "1. Abre Telegram y busca @BotFather",
+            "2. Envía /newbot y sigue los pasos para crear tu bot",
+            "3. Copia el token que te da y pégalo aquí",
+            "4. Abre una conversación con tu bot y envía /start",
+            "5. Para obtener tu Chat ID, busca @userinfobot en Telegram",
+            "6. Pulsa 'Probar' para verificar"
+        ]
+    },
+    {
+        "id": "notify_webhook",
+        "name": "Webhook",
+        "description": "Envía notificaciones a cualquier URL (Slack, Discord, n8n, Make, etc.).",
+        "icon": "🔗",
+        "category": "notify",
+        "fields": [
+            {"key": "svc.notify.webhook.url", "type": "url", "label": "URL del Webhook", "required": True,
+             "help": "URL que recibirá las notificaciones como POST JSON."},
+        ],
+        "test_action": "test_notify_webhook",
+        "setup_guide": [
+            "1. Crea un webhook en tu servicio (Slack, Discord, n8n, Make, etc.)",
+            "2. Pega la URL aquí",
+            "3. Pulsa 'Probar' para enviar un mensaje de prueba"
         ]
     },
 ]
 
 # Service ID → svc prefix mapping
 _SERVICE_PREFIX_MAP = {
+    "llm_anthropic": "svc.llm.anthropic.",
+    "llm_openai": "svc.llm.openai.",
+    "llm_google": "svc.llm.google.",
+    "llm_ollama": "svc.llm.ollama.",
+    "llm_groq": "svc.llm.groq.",
+    "llm_mistral": "svc.llm.mistral.",
+    "llm_deepseek": "svc.llm.deepseek.",
     "image_generation": "svc.image.",
     "web_search": "svc.search.",
+    "notify_telegram": "svc.notify.telegram.",
+    "notify_webhook": "svc.notify.webhook.",
 }
 
 
@@ -1227,11 +1449,167 @@ def _get_service_status(service_id):
 def _test_service(service_id):
     """Run the test action for a service."""
     settings = fetch_settings(raw=True)
+
+    # ── LLM providers ──
+    if service_id == "llm_anthropic":
+        api_key = settings.get("svc.llm.anthropic.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request("https://api.anthropic.com/v1/messages",
+                data=json.dumps({"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "Hi"}]}).encode(),
+                headers={"x-api-key": api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return {"ok": True, "message": "Anthropic conectado ✓ — Claude disponible"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "API key inválida."}
+            if e.code == 429:
+                return {"ok": True, "message": "Anthropic conectado ✓ (rate limited, pero la key funciona)"}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "llm_openai":
+        api_key = settings.get("svc.llm.openai.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request("https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                model_count = len(data.get("data", []))
+                return {"ok": True, "message": f"OpenAI conectado ✓ — {model_count} modelos disponibles"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "API key inválida."}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "llm_google":
+        api_key = settings.get("svc.llm.google.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                model_count = len(data.get("models", []))
+                return {"ok": True, "message": f"Google AI conectado ✓ — {model_count} modelos disponibles"}
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 403):
+                return {"ok": False, "message": "API key inválida o sin permisos."}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "llm_ollama":
+        base_url = (settings.get("svc.llm.ollama.base_url", "") or "http://localhost:11434").rstrip("/")
+        try:
+            req = urllib.request.Request(f"{base_url}/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                models = [m["name"] for m in data.get("models", [])]
+                if models:
+                    return {"ok": True, "message": f"Ollama conectado ✓ — Modelos: {', '.join(models[:5])}{'...' if len(models) > 5 else ''}"}
+                return {"ok": True, "message": "Ollama conectado ✓ — Sin modelos. Ejecuta: ollama pull llama3"}
+        except Exception:
+            return {"ok": False, "message": f"No se puede conectar a Ollama en {base_url}. ¿Está ejecutándose?"}
+
+    if service_id == "llm_groq":
+        api_key = settings.get("svc.llm.groq.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request("https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return {"ok": True, "message": "Groq conectado ✓"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "API key inválida."}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "llm_mistral":
+        api_key = settings.get("svc.llm.mistral.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request("https://api.mistral.ai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return {"ok": True, "message": "Mistral AI conectado ✓"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "API key inválida."}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "llm_deepseek":
+        api_key = settings.get("svc.llm.deepseek.api_key", "")
+        if not api_key:
+            return {"ok": False, "message": "No hay API key configurada."}
+        try:
+            req = urllib.request.Request("https://api.deepseek.com/models",
+                headers={"Authorization": f"Bearer {api_key}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return {"ok": True, "message": "DeepSeek conectado ✓"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "API key inválida."}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    # ── Notification services ──
+    if service_id == "notify_telegram":
+        bot_token = settings.get("svc.notify.telegram.bot_token", "")
+        chat_id = settings.get("svc.notify.telegram.chat_id", "")
+        if not bot_token:
+            return {"ok": False, "message": "Falta el Bot Token."}
+        if not chat_id:
+            return {"ok": False, "message": "Falta el Chat ID."}
+        try:
+            msg = "✅ Niwa conectado correctamente con Telegram"
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            data = json.dumps({"chat_id": chat_id, "text": msg}).encode()
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return {"ok": True, "message": "Telegram conectado ✓ — mensaje de prueba enviado"}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {"ok": False, "message": "Bot Token inválido."}
+            if e.code == 400:
+                return {"ok": False, "message": "Chat ID inválido. ¿Has enviado /start al bot?"}
+            return {"ok": False, "message": f"Error HTTP {e.code}"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error: {e}"}
+
+    if service_id == "notify_webhook":
+        webhook_url = settings.get("svc.notify.webhook.url", "")
+        if not webhook_url:
+            return {"ok": False, "message": "Falta la URL del webhook."}
+        try:
+            data = json.dumps({"text": "✅ Niwa test notification", "source": "niwa"}).encode()
+            req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return {"ok": True, "message": "Webhook conectado ✓ — notificación de prueba enviada"}
+        except Exception as e:
+            return {"ok": False, "message": f"Error enviando al webhook: {e}"}
+
+    # ── Image generation ──
     if service_id == "image_generation":
         provider = settings.get("svc.image.provider", "openai")
         api_key = settings.get("svc.image.api_key", "")
         return image_service.test_connection(provider, api_key)
-    elif service_id == "web_search":
+
+    # ── Web search ──
+    if service_id == "web_search":
         provider = settings.get("svc.search.provider", "duckduckgo")
         if provider == "searxng":
             searxng_url = settings.get("svc.search.searxng_url", "")
@@ -1246,9 +1624,14 @@ def _test_service(service_id):
                     return {"ok": True, "message": f"SearXNG conectado ✓ — {count} resultados de prueba"}
             except Exception as e:
                 return {"ok": False, "message": f"Error conectando a SearXNG: {e}"}
+        elif provider in ("tavily", "brave"):
+            api_key = settings.get("svc.search.api_key", "")
+            if not api_key:
+                return {"ok": False, "message": f"Falta la API key para {provider}."}
+            return {"ok": True, "message": f"{provider.title()} configurado ✓ — API key presente"}
         else:
-            # DuckDuckGo always works
             return {"ok": True, "message": "DuckDuckGo activo ✓ — no requiere configuración"}
+
     return {"ok": False, "message": "Test no implementado para este servicio"}
 
 
@@ -1403,62 +1786,121 @@ def apply_setup_token(token: str) -> dict:
 
 
 def get_available_models():
-    """Return list of available LLM models, filtered by configured provider."""
+    """Return available LLM models from ALL configured providers."""
     settings = fetch_settings(raw=True)
-    provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
+    models = []
 
-    claude_models = [
-        {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
-         "description": "Rápido y económico. Ideal para chat y triaje."},
-        {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium",
-         "description": "Balance entre velocidad y capacidad. Ideal para implementar código."},
-        {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
-         "description": "Máxima capacidad. Ideal para planificación y análisis complejo."},
-    ]
-    openai_models = [
-        {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium",
-         "description": "Multimodal, rápido y potente. Ideal para la mayoría de tareas."},
-        {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low",
-         "description": "Versión ligera de GPT-4o. Rápido y económico."},
-        {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high",
-         "description": "Razonamiento avanzado. Ideal para problemas complejos."},
-        {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium",
-         "description": "Razonamiento eficiente. Buen balance calidad/coste."},
-    ]
-    gemini_models = [
-        {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini", "speed": "medium", "cost": "medium",
-         "description": "Modelo más capaz de Google. Bueno para código y razonamiento."},
-        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "gemini", "speed": "fast", "cost": "low",
-         "description": "Versión rápida y económica de Gemini."},
-    ]
-    auto_model = [
-        {"id": "auto", "name": "Auto (el planner decide)", "provider": "auto", "speed": "varies", "cost": "optimized",
-         "description": "El planner elige el modelo según la complejidad de cada tarea."},
-    ]
+    # Check each new-style LLM service
+    if settings.get("svc.llm.anthropic.api_key"):
+        models.extend([
+            {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
+             "description": "Rápido y económico. Ideal para chat."},
+            {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium",
+             "description": "Equilibrado. Ideal para código."},
+            {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
+             "description": "Máxima capacidad. Ideal para planificación."},
+        ])
+    if settings.get("svc.llm.openai.api_key"):
+        models.extend([
+            {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium",
+             "description": "Multimodal y rápido."},
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low",
+             "description": "Económico."},
+            {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high",
+             "description": "Razonamiento avanzado."},
+            {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium",
+             "description": "Razonamiento eficiente."},
+        ])
+    if settings.get("svc.llm.google.api_key"):
+        models.extend([
+            {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google", "speed": "medium", "cost": "medium",
+             "description": "Potente y multimodal."},
+            {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "google", "speed": "fast", "cost": "low",
+             "description": "Rápido y económico."},
+        ])
+    if settings.get("svc.llm.ollama.base_url"):
+        ollama_models = _fetch_ollama_models(settings)
+        models.extend(ollama_models)
+    if settings.get("svc.llm.groq.api_key"):
+        models.extend([
+            {"id": "llama-3.3-70b-versatile", "name": "Llama 3.3 70B", "provider": "groq", "speed": "fast", "cost": "low",
+             "description": "Ultrarrápido vía Groq."},
+            {"id": "llama-3.1-8b-instant", "name": "Llama 3.1 8B", "provider": "groq", "speed": "fast", "cost": "low",
+             "description": "Instantáneo."},
+            {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B", "provider": "groq", "speed": "fast", "cost": "low",
+             "description": "Contexto largo."},
+        ])
+    if settings.get("svc.llm.mistral.api_key"):
+        models.extend([
+            {"id": "mistral-large-latest", "name": "Mistral Large", "provider": "mistral", "speed": "medium", "cost": "medium",
+             "description": "Más capaz de Mistral."},
+            {"id": "mistral-small-latest", "name": "Mistral Small", "provider": "mistral", "speed": "fast", "cost": "low",
+             "description": "Rápido."},
+            {"id": "codestral-latest", "name": "Codestral", "provider": "mistral", "speed": "medium", "cost": "medium",
+             "description": "Especializado en código."},
+        ])
+    if settings.get("svc.llm.deepseek.api_key"):
+        models.extend([
+            {"id": "deepseek-chat", "name": "DeepSeek V3", "provider": "deepseek", "speed": "medium", "cost": "low",
+             "description": "General, económico."},
+            {"id": "deepseek-reasoner", "name": "DeepSeek R1", "provider": "deepseek", "speed": "slow", "cost": "low",
+             "description": "Razonamiento."},
+        ])
 
-    if provider == 'claude' or provider == 'anthropic' or not provider:
-        models = claude_models
-    elif provider == 'llm' or provider == 'openai':
-        models = openai_models
-    elif provider == 'gemini':
-        models = gemini_models
-    elif provider == 'ollama':
-        models = _fetch_ollama_models(settings)
-        if not models:
-            models = [{"id": "custom", "name": "Sin modelos detectados", "provider": "ollama", "speed": "varies", "cost": "free",
-                       "description": "Configura Ollama y arranca al menos un modelo."}]
-    elif provider == 'custom':
-        models = [{"id": "custom", "name": "Modelo personalizado", "provider": "custom", "speed": "varies", "cost": "varies",
-                   "description": "Usa el comando CLI configurado."}]
-    else:
-        models = claude_models
+    # Legacy fallback: check int.llm_* for backward compat during migration
+    if not models:
+        provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
+        if provider in ('claude', 'anthropic', ''):
+            models = [
+                {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
+                 "description": "Rápido y económico. Ideal para chat y triaje."},
+                {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium",
+                 "description": "Balance entre velocidad y capacidad."},
+                {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
+                 "description": "Máxima capacidad."},
+            ]
+        elif provider in ('llm', 'openai'):
+            models = [
+                {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Multimodal."},
+                {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low", "description": "Económico."},
+                {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high", "description": "Razonamiento avanzado."},
+                {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Razonamiento eficiente."},
+            ]
+        elif provider == 'gemini':
+            models = [
+                {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini", "speed": "medium", "cost": "medium", "description": "Potente."},
+                {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "gemini", "speed": "fast", "cost": "low", "description": "Rápido."},
+            ]
+        elif provider == 'ollama':
+            models = _fetch_ollama_models(settings)
+            if not models:
+                models = [{"id": "custom", "name": "Sin modelos detectados", "provider": "ollama", "speed": "varies", "cost": "free",
+                           "description": "Configura Ollama y arranca al menos un modelo."}]
+        elif provider == 'custom':
+            models = [{"id": "custom", "name": "Modelo personalizado", "provider": "custom", "speed": "varies", "cost": "varies",
+                       "description": "Usa el comando CLI configurado."}]
+        else:
+            models = [
+                {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low", "description": "Rápido."},
+                {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium", "description": "Equilibrado."},
+                {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high", "description": "Potente."},
+            ]
 
-    return models + auto_model
+    # If still no models, show a message directing user to Services
+    if not models:
+        models.append({"id": "none", "name": "Sin modelos — configura un proveedor en Servicios", "provider": "none", "speed": "", "cost": "",
+                       "description": "Ve a Sistema > Servicios y configura al menos un proveedor de LLM."})
+
+    # Always add auto
+    models.append({"id": "auto", "name": "Auto (el planner decide)", "provider": "auto", "speed": "varies", "cost": "optimized",
+                   "description": "El planner elige el modelo según la complejidad de cada tarea."})
+
+    return models
 
 
 def _fetch_ollama_models(settings):
     """Try to fetch available models from Ollama API."""
-    ollama_url = (settings.get('int.ollama_url') or os.environ.get('OLLAMA_URL', 'http://localhost:11434')).rstrip('/')
+    ollama_url = (settings.get('svc.llm.ollama.base_url') or settings.get('int.ollama_url') or os.environ.get('OLLAMA_URL', 'http://localhost:11434')).rstrip('/')
     try:
         req = urllib.request.Request(f"{ollama_url}/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -2018,6 +2460,116 @@ class Handler(BaseHTTPRequestHandler):
                 if _doc_path.exists():
                     docs[name.lower()] = _doc_path.read_text(encoding='utf-8', errors='ignore')
             return self._json(docs)
+        # ── Project sub-endpoints (must come BEFORE /api/projects) ──
+        _m_tree = re.match(r'^/api/projects/([^/]+)/tree$', path)
+        if _m_tree:
+            slug = _m_tree.group(1)
+            mode = qs.get('mode', ['full'])[0]
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+            if not proj:
+                return self._json({'error': 'Project not found'}, 404)
+            directory = proj['directory'] or ''
+            if not directory or not os.path.isdir(directory):
+                return self._json({'tree': [], 'root_file_count': 0, 'truncated': False})
+            tree = []
+            root_file_count = 0
+            MAX_ITEMS = 500
+            _skip_dirs = {'.git', 'node_modules', '__pycache__', 'venv', '.venv', '.tox', '.mypy_cache'}
+            if mode == 'folders':
+                for entry in sorted(os.listdir(directory)):
+                    full = os.path.join(directory, entry)
+                    if entry.startswith('.'):
+                        continue
+                    if os.path.isdir(full):
+                        try:
+                            count = len(os.listdir(full))
+                        except Exception:
+                            count = 0
+                        tree.append({'name': entry, 'type': 'folder', 'children_count': count})
+                    else:
+                        root_file_count += 1
+            else:
+                count = 0
+                for root, dirs, files in os.walk(directory):
+                    rel = os.path.relpath(root, directory)
+                    if rel == '.':
+                        rel = ''
+                    dirs[:] = [d for d in sorted(dirs) if not d.startswith('.') and d not in _skip_dirs]
+                    for f in sorted(files):
+                        if f.startswith('.'):
+                            continue
+                        fpath = os.path.join(root, f)
+                        try:
+                            size = os.path.getsize(fpath)
+                        except Exception:
+                            size = 0
+                        tree.append({'name': f, 'path': os.path.join(rel, f) if rel else f, 'size': size, 'type': 'file'})
+                        count += 1
+                        if count >= MAX_ITEMS:
+                            return self._json({'tree': tree, 'root_file_count': root_file_count, 'truncated': True})
+                    for d in dirs:
+                        dpath = os.path.join(root, d)
+                        try:
+                            child_count = len(os.listdir(dpath))
+                        except Exception:
+                            child_count = 0
+                        tree.append({'name': d, 'path': os.path.join(rel, d) if rel else d, 'type': 'folder', 'children_count': child_count})
+            return self._json({'tree': tree, 'root_file_count': root_file_count, 'truncated': False})
+
+        _m_folder = re.match(r'^/api/projects/([^/]+)/folder-files/(.+)$', path)
+        if _m_folder:
+            slug = _m_folder.group(1)
+            folder_path = urllib.parse.unquote(_m_folder.group(2))
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+            if not proj or not proj['directory']:
+                return self._json({'error': 'Project not found'}, 404)
+            target_dir = os.path.join(proj['directory'], folder_path)
+            if not os.path.realpath(target_dir).startswith(os.path.realpath(proj['directory'])):
+                return self._json({'error': 'forbidden'}, 403)
+            if not os.path.isdir(target_dir):
+                return self._json({'files': []})
+            files = []
+            for entry in sorted(os.listdir(target_dir)):
+                full = os.path.join(target_dir, entry)
+                if entry.startswith('.'):
+                    continue
+                if os.path.isfile(full):
+                    try:
+                        size = os.path.getsize(full)
+                    except Exception:
+                        size = 0
+                    files.append({'name': entry, 'size': size})
+                elif os.path.isdir(full):
+                    try:
+                        count = len(os.listdir(full))
+                    except Exception:
+                        count = 0
+                    files.append({'name': entry, 'type': 'folder', 'children_count': count})
+            return self._json({'files': files})
+
+        _m_uploads = re.match(r'^/api/projects/([^/]+)/uploads$', path)
+        if _m_uploads:
+            slug = _m_uploads.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+            if not proj or not proj['directory']:
+                return self._json([])
+            uploads_dir = os.path.join(proj['directory'], 'uploads')
+            if not os.path.isdir(uploads_dir):
+                return self._json([])
+            uploads = []
+            for f in sorted(os.listdir(uploads_dir)):
+                full = os.path.join(uploads_dir, f)
+                if os.path.isfile(full):
+                    try:
+                        size = os.path.getsize(full)
+                    except Exception:
+                        size = 0
+                    uploads.append({'name': f, 'size': size})
+            return self._json(uploads)
+
         if path == '/api/projects':
             return self._json(fetch_projects())
         if path == '/api/kanban-columns':
@@ -2171,6 +2723,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        # Handle multipart project uploads BEFORE reading body as form/json
+        _m_proj_upload = re.match(r'^/api/projects/([^/]+)/upload$', path)
+        if _m_proj_upload:
+            if self._require_auth():
+                return
+            slug = _m_proj_upload.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
+            if not proj or not proj['directory']:
+                return self._json({'error': 'Project not found'}, 404)
+            uploads_dir = os.path.join(proj['directory'], 'uploads')
+            os.makedirs(uploads_dir, exist_ok=True)
+            content_type = self.headers.get('Content-Type', '')
+            if 'multipart/form-data' not in content_type:
+                return self._json({'error': 'multipart required'}, 400)
+            import cgi
+            length = int(self.headers.get('Content-Length', '0'))
+            environ = {'REQUEST_METHOD': 'POST', 'CONTENT_TYPE': content_type, 'CONTENT_LENGTH': str(length)}
+            form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=environ)
+            saved = []
+            file_items = form['files'] if 'files' in form else (form['file'] if 'file' in form else None)
+            if file_items is not None:
+                if not isinstance(file_items, list):
+                    file_items = [file_items]
+                for item in file_items:
+                    if getattr(item, 'filename', None):
+                        safe_name = os.path.basename(item.filename)
+                        dest = os.path.join(uploads_dir, safe_name)
+                        with open(dest, 'wb') as f:
+                            f.write(item.file.read())
+                        try:
+                            size = os.path.getsize(dest)
+                        except Exception:
+                            size = 0
+                        saved.append({'name': safe_name, 'size': size})
+            return self._json({'ok': True, 'count': len(saved), 'files': saved})
         # Handle multipart uploads BEFORE reading body as form/json
         if re.match(r'^/api/tasks/[^/]+/attachments$', path):
             if self._require_auth():
