@@ -21,6 +21,7 @@ import tasks_service
 import health_service
 import scheduler
 import notifier
+import image_service
 
 _scheduler: scheduler.SchedulerThread | None = None
 from http.cookies import SimpleCookie
@@ -639,6 +640,42 @@ def _run_migrations():
             logger.error("Migration %s failed: %s", filename, e)
             break
 
+    # One-time migration: import settings.json into SQLite settings table
+    _migrate_settings_json_to_sqlite(c)
+
+
+def _migrate_settings_json_to_sqlite(c):
+    """If settings.json exists, import all its keys into the SQLite settings table, then rename it."""
+    if not SETTINGS_JSON_PATH.exists():
+        return
+    # Check if already migrated (file renamed)
+    migrated_path = SETTINGS_JSON_PATH.parent / 'settings.json.migrated'
+    if migrated_path.exists():
+        # Clean up: remove settings.json if the migrated marker exists
+        try:
+            SETTINGS_JSON_PATH.unlink()
+        except Exception:
+            pass
+        return
+    try:
+        data = json.loads(SETTINGS_JSON_PATH.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            return
+        count = 0
+        for key, value in data.items():
+            if value is not None:
+                # Don't overwrite existing DB values
+                existing = c.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+                if not existing:
+                    c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
+                    count += 1
+        c.commit()
+        # Rename to .migrated
+        SETTINGS_JSON_PATH.rename(migrated_path)
+        logger.info("Migrated %d settings from settings.json to SQLite", count)
+    except Exception as e:
+        logger.warning("Failed to migrate settings.json: %s", e)
+
 # Call at startup
 try:
     _run_migrations()
@@ -1039,39 +1076,180 @@ def fetch_config():
 _SETTINGS_SENSITIVE_KEYS = {'int.llm_api_key', 'int.llm_setup_token', 'int.telegram_bot_token'}
 
 
+def _is_sensitive_key(key):
+    """Check if a settings key should be masked (exact match or svc.*.api_key pattern)."""
+    if key in _SETTINGS_SENSITIVE_KEYS:
+        return True
+    if key.startswith('svc.') and ('api_key' in key or 'token' in key or 'secret' in key):
+        return True
+    return False
+
+
 def _mask_sensitive(key, value):
-    if key in _SETTINGS_SENSITIVE_KEYS and value:
+    if _is_sensitive_key(key) and value:
         if len(value) > 16:
             return value[:8] + '\u2022' * (len(value) - 12) + value[-4:]
         return '\u2022' * 8
     return value
 
 
-def fetch_settings():
+def fetch_settings(raw=False):
+    """Read all settings from SQLite only. If raw=True, skip masking."""
     settings = {}
-    try:
-        if SETTINGS_JSON_PATH.exists():
-            settings = json.loads(SETTINGS_JSON_PATH.read_text(encoding='utf-8'))
-    except Exception:
-        pass
     with db_conn() as conn:
         for row in conn.execute('SELECT key, value FROM settings').fetchall():
             settings[row['key']] = row['value']
-    # Mask sensitive values before returning
+    if raw:
+        return settings
     return {k: _mask_sensitive(k, v) for k, v in settings.items()}
 
 
+def fetch_setting_raw(key):
+    """Read a single raw (unmasked) setting value from SQLite."""
+    with db_conn() as conn:
+        row = conn.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        return row['value'] if row else None
+
+
 def save_setting(key, value):
-    settings = {}
-    if SETTINGS_JSON_PATH.exists():
-        try:
-            settings = json.loads(SETTINGS_JSON_PATH.read_text(encoding='utf-8'))
-        except Exception:
-            pass
-    settings[key] = value
-    SETTINGS_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_JSON_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding='utf-8')
-    return settings
+    """Write a setting to SQLite settings table."""
+    with db_conn() as conn:
+        conn.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+        conn.commit()
+    return {key: value}
+
+
+# ── Service Registry ──
+# Each service defines its config schema, test endpoint, and setup guide.
+# Adding a new service = adding an entry here. The frontend renders dynamically.
+SERVICES_REGISTRY = [
+    {
+        "id": "image_generation",
+        "name": "Generación de imágenes",
+        "description": "Genera imágenes con IA a partir de texto. Necesitas una API key de OpenAI o Stability AI.",
+        "icon": "🎨",
+        "category": "ai",
+        "fields": [
+            {"key": "svc.image.provider", "type": "select", "label": "Proveedor", "options": [
+                {"value": "openai", "label": "OpenAI (DALL-E)"},
+                {"value": "stability", "label": "Stability AI (SDXL)"},
+            ], "default": "openai", "help": "Elige el proveedor de generación de imágenes"},
+            {"key": "svc.image.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
+             "help": "Tu API key del proveedor seleccionado. OpenAI: https://platform.openai.com/api-keys | Stability: https://platform.stability.ai/account/keys"},
+            {"key": "svc.image.model", "type": "select", "label": "Modelo", "options_by_provider": {
+                "openai": [{"value": "dall-e-3", "label": "DALL-E 3 (mejor calidad)"}, {"value": "dall-e-2", "label": "DALL-E 2 (más barato)"}],
+                "stability": [{"value": "stable-diffusion-xl-1024-v1-0", "label": "SDXL 1.0"}, {"value": "sd3.5-large", "label": "SD 3.5 Large"}],
+            }, "default": "dall-e-3", "help": "Modelo a usar para generar imágenes"},
+            {"key": "svc.image.default_size", "type": "select", "label": "Tamaño por defecto", "options": [
+                {"value": "1024x1024", "label": "1024×1024 (cuadrado)"},
+                {"value": "1792x1024", "label": "1792×1024 (panorámico)"},
+                {"value": "1024x1792", "label": "1024×1792 (vertical)"},
+            ], "default": "1024x1024", "help": "Tamaño por defecto de las imágenes generadas"},
+        ],
+        "test_action": "test_image_generation",
+        "setup_guide": [
+            "1. Ve a https://platform.openai.com/api-keys (o stability.ai si prefieres Stability)",
+            "2. Crea una API key nueva",
+            "3. Pégala aquí arriba y dale a Guardar",
+            "4. Pulsa 'Probar' para verificar que funciona"
+        ]
+    },
+    {
+        "id": "web_search",
+        "name": "Búsqueda web",
+        "description": "Permite buscar en internet. Funciona con DuckDuckGo por defecto, o con SearXNG si tienes una instancia propia.",
+        "icon": "🔍",
+        "category": "search",
+        "fields": [
+            {"key": "svc.search.provider", "type": "select", "label": "Proveedor", "options": [
+                {"value": "duckduckgo", "label": "DuckDuckGo (sin configuración)"},
+                {"value": "searxng", "label": "SearXNG (autoalojado)"},
+            ], "default": "duckduckgo", "help": "DuckDuckGo funciona sin nada extra. SearXNG es más potente pero necesitas tu propia instancia."},
+            {"key": "svc.search.searxng_url", "type": "url", "label": "URL de SearXNG", "required": False,
+             "help": "Ejemplo: http://localhost:8080 — Solo necesario si eliges SearXNG",
+             "show_when": {"field": "svc.search.provider", "value": "searxng"}},
+        ],
+        "test_action": "test_web_search",
+        "setup_guide": [
+            "DuckDuckGo funciona directamente, sin configuración.",
+            "Para SearXNG: instala tu instancia (https://docs.searxng.org) y pon la URL aquí."
+        ]
+    },
+]
+
+# Service ID → svc prefix mapping
+_SERVICE_PREFIX_MAP = {
+    "image_generation": "svc.image.",
+    "web_search": "svc.search.",
+}
+
+
+def get_service_config(service_short_id):
+    """Get all config for a service, returns dict of short_key->value.
+    service_short_id: 'image', 'search', etc.
+    """
+    prefix = f"svc.{service_short_id}."
+    settings = fetch_settings(raw=True)
+    result = {}
+    for k, v in settings.items():
+        if k.startswith(prefix):
+            short_key = k[len(prefix):]
+            result[short_key] = v
+    return result
+
+
+def _get_service_prefix(service_id):
+    """Get the svc.* prefix for a service ID."""
+    return _SERVICE_PREFIX_MAP.get(service_id, f"svc.{service_id}.")
+
+
+def _get_service_status(service_id):
+    """Check service status: configured, not_configured, or error."""
+    prefix = _get_service_prefix(service_id)
+    settings = fetch_settings(raw=True)
+    # Find the service definition
+    svc_def = next((s for s in SERVICES_REGISTRY if s['id'] == service_id), None)
+    if not svc_def:
+        return {"status": "unknown", "message": "Servicio no encontrado"}
+    # Check required fields
+    for field in svc_def['fields']:
+        if field.get('required'):
+            val = settings.get(field['key'], '')
+            if not val:
+                return {"status": "not_configured", "message": f"Falta: {field['label']}"}
+    # Has at least some config
+    has_any = any(k.startswith(prefix) and v for k, v in settings.items())
+    if has_any:
+        return {"status": "configured", "message": "Configurado ✓"}
+    return {"status": "not_configured", "message": "No configurado"}
+
+
+def _test_service(service_id):
+    """Run the test action for a service."""
+    settings = fetch_settings(raw=True)
+    if service_id == "image_generation":
+        provider = settings.get("svc.image.provider", "openai")
+        api_key = settings.get("svc.image.api_key", "")
+        return image_service.test_connection(provider, api_key)
+    elif service_id == "web_search":
+        provider = settings.get("svc.search.provider", "duckduckgo")
+        if provider == "searxng":
+            searxng_url = settings.get("svc.search.searxng_url", "")
+            if not searxng_url:
+                return {"ok": False, "message": "URL de SearXNG no configurada."}
+            try:
+                url = f"{searxng_url.rstrip('/')}/search?q=test&format=json&categories=general"
+                req = urllib.request.Request(url, headers={"User-Agent": "niwa/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                    count = len(data.get("results", []))
+                    return {"ok": True, "message": f"SearXNG conectado ✓ — {count} resultados de prueba"}
+            except Exception as e:
+                return {"ok": False, "message": f"Error conectando a SearXNG: {e}"}
+        else:
+            # DuckDuckGo always works
+            return {"ok": True, "message": "DuckDuckGo activo ✓ — no requiere configuración"}
+    return {"ok": False, "message": "Test no implementado para este servicio"}
 
 
 # ── Integrations config (Telegram, LLM, Executor, Webhook) ──
@@ -1225,19 +1403,82 @@ def apply_setup_token(token: str) -> dict:
 
 
 def get_available_models():
-    """Return list of available LLM models."""
-    models = [
+    """Return list of available LLM models, filtered by configured provider."""
+    settings = fetch_settings(raw=True)
+    provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
+
+    claude_models = [
         {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
          "description": "Rápido y económico. Ideal para chat y triaje."},
         {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium",
          "description": "Balance entre velocidad y capacidad. Ideal para implementar código."},
         {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
          "description": "Máxima capacidad. Ideal para planificación y análisis complejo."},
+    ]
+    openai_models = [
+        {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium",
+         "description": "Multimodal, rápido y potente. Ideal para la mayoría de tareas."},
+        {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low",
+         "description": "Versión ligera de GPT-4o. Rápido y económico."},
+        {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high",
+         "description": "Razonamiento avanzado. Ideal para problemas complejos."},
+        {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium",
+         "description": "Razonamiento eficiente. Buen balance calidad/coste."},
+    ]
+    gemini_models = [
+        {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini", "speed": "medium", "cost": "medium",
+         "description": "Modelo más capaz de Google. Bueno para código y razonamiento."},
+        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "gemini", "speed": "fast", "cost": "low",
+         "description": "Versión rápida y económica de Gemini."},
+    ]
+    auto_model = [
         {"id": "auto", "name": "Auto (el planner decide)", "provider": "auto", "speed": "varies", "cost": "optimized",
          "description": "El planner elige el modelo según la complejidad de cada tarea."},
     ]
-    # TODO: detect Ollama models if OLLAMA_URL is configured
-    return models
+
+    if provider == 'claude' or provider == 'anthropic' or not provider:
+        models = claude_models
+    elif provider == 'llm' or provider == 'openai':
+        models = openai_models
+    elif provider == 'gemini':
+        models = gemini_models
+    elif provider == 'ollama':
+        models = _fetch_ollama_models(settings)
+        if not models:
+            models = [{"id": "custom", "name": "Sin modelos detectados", "provider": "ollama", "speed": "varies", "cost": "free",
+                       "description": "Configura Ollama y arranca al menos un modelo."}]
+    elif provider == 'custom':
+        models = [{"id": "custom", "name": "Modelo personalizado", "provider": "custom", "speed": "varies", "cost": "varies",
+                   "description": "Usa el comando CLI configurado."}]
+    else:
+        models = claude_models
+
+    return models + auto_model
+
+
+def _fetch_ollama_models(settings):
+    """Try to fetch available models from Ollama API."""
+    ollama_url = (settings.get('int.ollama_url') or os.environ.get('OLLAMA_URL', 'http://localhost:11434')).rstrip('/')
+    try:
+        req = urllib.request.Request(f"{ollama_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            models = []
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                size = m.get("size", 0)
+                size_gb = round(size / (1024**3), 1) if size else 0
+                models.append({
+                    "id": name,
+                    "name": name,
+                    "provider": "ollama",
+                    "speed": "varies",
+                    "cost": "free",
+                    "description": f"Modelo local ({size_gb}GB)" if size_gb else "Modelo local",
+                })
+            return models
+    except Exception:
+        return []
 
 
 def get_agents_config():
@@ -1566,6 +1807,24 @@ def toggle_cron_delivery(job_id, action='mute'):
         return {'error': str(e)}
 
 
+GENERATED_IMAGES_DIR = BASE_DIR / 'data' / 'generated-images'
+
+
+def _save_generated_image(result):
+    """Save a base64-encoded generated image to disk and replace base64 with a URL."""
+    import hashlib
+    GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    img_data = base64.b64decode(result['base64'])
+    img_hash = hashlib.md5(img_data).hexdigest()[:12]
+    filename = f"{img_hash}.png"
+    filepath = GENERATED_IMAGES_DIR / filename
+    filepath.write_bytes(img_data)
+    result['saved_path'] = f"/static/generated-images/{filename}"
+    # Don't send base64 over the wire — replace with local URL
+    del result['base64']
+    result['url'] = result['saved_path']
+
+
 _INDEX_HTML_CACHE = {'html': None, 'mtime': 0}
 
 
@@ -1657,6 +1916,22 @@ class Handler(BaseHTTPRequestHandler):
     }
 
     def _serve_static(self, rel_path):
+        # Serve generated images from data directory
+        if rel_path.startswith('generated-images/'):
+            target = (GENERATED_IMAGES_DIR / rel_path[len('generated-images/'):]).resolve()
+            if not str(target).startswith(str(GENERATED_IMAGES_DIR.resolve())):
+                return self._json({'error': 'forbidden'}, 403)
+            if not target.is_file():
+                return self._json({'error': 'not_found'}, 404)
+            ext = target.suffix.lower()
+            mime = self._MIME_MAP.get(ext, 'application/octet-stream')
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.end_headers()
+            return self.wfile.write(body)
         static_dir = BASE_DIR / 'frontend' / 'static'
         target = (static_dir / rel_path).resolve()
         frontend_dir = BASE_DIR / 'frontend'
@@ -1871,6 +2146,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(get_available_models())
         if path == '/api/agents':
             return self._json(get_agents_config())
+        # ── Services API ──
+        if path == '/api/services':
+            raw_settings = fetch_settings(raw=True)
+            result = []
+            for svc in SERVICES_REGISTRY:
+                svc_data = dict(svc)
+                prefix = _get_service_prefix(svc['id'])
+                # Fill current values (masked)
+                for field in svc_data['fields']:
+                    raw_val = raw_settings.get(field['key'], '')
+                    if field.get('sensitive') and raw_val:
+                        svc_data.setdefault('values', {})[field['key']] = _mask_sensitive(field['key'], raw_val)
+                        svc_data.setdefault('values_set', {})[field['key']] = True
+                    else:
+                        svc_data.setdefault('values', {})[field['key']] = raw_val
+                svc_data['status'] = _get_service_status(svc['id'])
+                result.append(svc_data)
+            return self._json(result)
+        if re.match(r'^/api/services/[^/]+/status$', path):
+            service_id = path.split('/')[3]
+            return self._json(_get_service_status(service_id))
         return self._json({'error': 'not_found'}, 404)
 
     def do_POST(self):
@@ -2007,6 +2303,36 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/agents':
             result = save_agents_config(payload)
             return self._json(result)
+        # ── Services API ──
+        if re.match(r'^/api/services/[^/]+$', path) and path.count('/') == 3:
+            service_id = path.split('/')[3]
+            svc_def = next((s for s in SERVICES_REGISTRY if s['id'] == service_id), None)
+            if not svc_def:
+                return self._json({'error': 'Servicio no encontrado'}, 404)
+            valid_keys = {f['key'] for f in svc_def['fields']}
+            saved = []
+            for key, value in payload.items():
+                if key in valid_keys:
+                    save_setting(key, str(value).strip())
+                    saved.append(key)
+            return self._json({'ok': True, 'saved': saved})
+        if re.match(r'^/api/services/[^/]+/test$', path):
+            service_id = path.split('/')[3]
+            return self._json(_test_service(service_id))
+        if path == '/api/services/image_generation/generate':
+            prompt = payload.get('prompt', '').strip()
+            if not prompt:
+                return self._json({'error': 'Se requiere un prompt'}, 400)
+            size = payload.get('size', None)
+            result = image_service.generate_image(prompt, size=size)
+            # Save generated image to data dir if base64
+            if result.get('base64'):
+                _save_generated_image(result)
+            return self._json(result)
+        # ── Executor restart (hot reload) ──
+        if path == '/api/executor/restart':
+            save_setting('sys.executor_restart_requested', now_iso())
+            return self._json({'ok': True, 'message': 'Señal de recarga enviada. El executor recargará su configuración en el próximo ciclo.'})
         return self._json({'error': 'not_found'}, 404)
 
     def do_PATCH(self):

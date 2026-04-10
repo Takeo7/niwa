@@ -1461,6 +1461,7 @@ function loadSystemTabData(tab) {
     case 'overview': loadSystemOverview(); break;
     case 'routines': loadRoutines(); break;
     case 'logs': loadLogs(); break;
+    case 'services': loadServices(); break;
     case 'config': loadConfig(); break;
     case 'stats': loadStats(); break;
     case 'kpis': loadKpis(); break;
@@ -1542,6 +1543,265 @@ async function loadDocs() {
   box.innerHTML = html;
 }
 
+
+
+// ── Services UI (dynamic, extensible) ──────────────────────────
+let _servicesData = [];
+
+async function loadServices() {
+  const container = document.getElementById('services-container');
+  if (!container) return;
+  try {
+    const services = await api('services');
+    _servicesData = services || [];
+    renderServices();
+  } catch(e) {
+    container.innerHTML = '<p class="text-on-surface-variant">Error cargando servicios.</p>';
+  }
+}
+
+function renderServices() {
+  const container = document.getElementById('services-container');
+  if (!container || !_servicesData.length) {
+    if (container) container.innerHTML = '<p class="text-on-surface-variant">No hay servicios disponibles.</p>';
+    return;
+  }
+
+  container.innerHTML = _servicesData.map(svc => {
+    const st = svc.status || {};
+    const statusClass = st.status === 'configured' ? 'text-green-500' : st.status === 'error' ? 'text-red-500' : 'text-amber-500';
+    const statusIcon = st.status === 'configured' ? '✓' : st.status === 'error' ? '✗' : '⚠';
+    const statusLabel = st.status === 'configured' ? 'Configurado' : st.status === 'error' ? 'Error' : 'No configurado';
+
+    return `
+      <div class="niwa-card rounded-2xl shadow-sm overflow-hidden" id="svc-card-${svc.id}">
+        <div class="p-5 cursor-pointer hover:bg-surface-bright/30 transition-colors flex items-center gap-3"
+             onclick="toggleServiceCard('${svc.id}')">
+          <span class="text-2xl">${svc.icon || '⚙️'}</span>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <span class="font-headline font-bold text-on-surface">${escHtml(svc.name)}</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${statusClass} bg-surface-dim/50">${statusIcon} ${statusLabel}</span>
+            </div>
+            <p class="text-xs text-on-surface-variant mt-0.5">${escHtml(svc.description)}</p>
+          </div>
+          <span class="material-symbols-outlined text-on-surface-variant svc-chevron-${svc.id} transition-transform">expand_more</span>
+        </div>
+        <div id="svc-body-${svc.id}" class="hidden border-t border-outline-variant/20">
+          ${renderServiceBody(svc)}
+        </div>
+      </div>`;
+  }).join('');
+
+  // Initialize conditional field visibility for each service
+  _servicesData.forEach(svc => onServiceFieldChange(svc.id));
+}
+
+function toggleServiceCard(serviceId) {
+  const body = document.getElementById('svc-body-' + serviceId);
+  const chevron = document.querySelector('.svc-chevron-' + serviceId);
+  if (!body) return;
+  const hidden = body.classList.toggle('hidden');
+  if (chevron) chevron.style.transform = hidden ? '' : 'rotate(180deg)';
+}
+
+function renderServiceBody(svc) {
+  const values = svc.values || {};
+  const valuesSet = svc.values_set || {};
+
+  // Setup guide
+  let guideHtml = '';
+  if (svc.setup_guide && svc.setup_guide.length) {
+    guideHtml = `
+      <div class="bg-surface-dim/50 rounded-lg p-3 mb-4 text-xs text-on-surface-variant space-y-1">
+        <p class="font-bold mb-1">Guía de configuración:</p>
+        ${svc.setup_guide.map(s => `<p>${escHtml(s)}</p>`).join('')}
+      </div>`;
+  }
+
+  // Fields
+  const fieldsHtml = svc.fields.map(field => {
+    const val = values[field.key] || '';
+    const isSet = valuesSet[field.key] || false;
+    const showWhen = field.show_when;
+    const hiddenClass = showWhen ? 'svc-conditional' : '';
+    const showWhenAttr = showWhen ? `data-show-field="${showWhen.field}" data-show-value="${showWhen.value}"` : '';
+
+    let inputHtml = '';
+    if (field.type === 'select') {
+      // Handle options_by_provider
+      const hasProviderOptions = !!field.options_by_provider;
+      if (hasProviderOptions) {
+        // Render all option groups, JS will show/hide
+        const providerField = svc.fields.find(f => f.key.endsWith('.provider'));
+        const currentProvider = providerField ? (values[providerField.key] || providerField.default || '') : '';
+        let allOptions = '';
+        for (const [prov, opts] of Object.entries(field.options_by_provider)) {
+          allOptions += opts.map(o =>
+            `<option value="${escHtml(o.value)}" data-provider="${prov}" ${o.value === val || (!val && o.value === field.default) ? 'selected' : ''}>${escHtml(o.label)}</option>`
+          ).join('');
+        }
+        inputHtml = `<select id="svc-field-${field.key}" data-svc-key="${field.key}" data-provider-select="true"
+          class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface"
+          onchange="onServiceFieldChange('${svc.id}')">${allOptions}</select>`;
+      } else {
+        const opts = (field.options || []).map(o =>
+          `<option value="${escHtml(o.value)}" ${o.value === val || (!val && o.value === field.default) ? 'selected' : ''}>${escHtml(o.label)}</option>`
+        ).join('');
+        inputHtml = `<select id="svc-field-${field.key}" data-svc-key="${field.key}"
+          class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface"
+          onchange="onServiceFieldChange('${svc.id}')">${opts}</select>`;
+      }
+    } else if (field.type === 'password') {
+      const placeholder = isSet ? 'Guardado — deja vacío para mantener' : (field.placeholder || '');
+      inputHtml = `<div class="relative">
+        <input id="svc-field-${field.key}" data-svc-key="${field.key}" type="password"
+          class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 pr-10 text-sm text-on-surface font-mono"
+          placeholder="${escHtml(placeholder)}" value="">
+        <button type="button" onclick="toggleSvcPassword('${field.key}')"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface">
+          <span class="material-symbols-outlined text-sm">visibility</span>
+        </button>
+      </div>`;
+    } else if (field.type === 'url') {
+      inputHtml = `<input id="svc-field-${field.key}" data-svc-key="${field.key}" type="url"
+        class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface font-mono"
+        placeholder="${escHtml(field.placeholder || '')}" value="${escHtml(val)}">`;
+    } else if (field.type === 'number') {
+      inputHtml = `<input id="svc-field-${field.key}" data-svc-key="${field.key}" type="number"
+        class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface"
+        value="${escHtml(val || field.default || '')}" min="${field.min || ''}" max="${field.max || ''}">`;
+    } else {
+      inputHtml = `<input id="svc-field-${field.key}" data-svc-key="${field.key}" type="text"
+        class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface"
+        placeholder="${escHtml(field.placeholder || '')}" value="${escHtml(val)}">`;
+    }
+
+    const helpHtml = field.help ? `<p class="text-[10px] text-on-surface-variant mt-1">${escHtml(field.help)}</p>` : '';
+    const requiredBadge = field.required ? '<span class="text-red-400 text-[10px] ml-1">*</span>' : '';
+
+    return `<div class="svc-field-wrapper ${hiddenClass}" ${showWhenAttr}>
+      <label class="text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">${escHtml(field.label)}${requiredBadge}</label>
+      ${inputHtml}
+      ${helpHtml}
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="p-5 space-y-4">
+      ${guideHtml}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${fieldsHtml}
+      </div>
+      <div class="flex gap-2 items-center pt-2">
+        <button onclick="saveService('${svc.id}')" class="px-4 py-2 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+        ${svc.test_action ? `<button onclick="testService('${svc.id}')" class="px-4 py-2 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Probar</button>` : ''}
+        <span id="svc-status-${svc.id}" class="text-xs ml-2"></span>
+      </div>
+    </div>`;
+}
+
+function toggleSvcPassword(fieldKey) {
+  const input = document.getElementById('svc-field-' + fieldKey);
+  if (!input) return;
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function onServiceFieldChange(serviceId) {
+  // Handle conditional visibility (show_when)
+  const card = document.getElementById('svc-card-' + serviceId);
+  if (!card) return;
+
+  // Get all current field values
+  const fieldValues = {};
+  card.querySelectorAll('[data-svc-key]').forEach(el => {
+    fieldValues[el.dataset.svcKey] = el.value;
+  });
+
+  // Show/hide conditional fields
+  card.querySelectorAll('.svc-conditional').forEach(wrapper => {
+    const showField = wrapper.dataset.showField;
+    const showValue = wrapper.dataset.showValue;
+    if (showField && showValue) {
+      const visible = fieldValues[showField] === showValue;
+      wrapper.style.display = visible ? '' : 'none';
+    }
+  });
+
+  // Handle options_by_provider
+  card.querySelectorAll('[data-provider-select="true"]').forEach(select => {
+    // Find the provider field for this service
+    const providerKey = select.dataset.svcKey.replace(/\.[^.]+$/, '.provider');
+    const providerValue = fieldValues[providerKey] || '';
+    const currentVal = select.value;
+    let firstVisible = null;
+    let currentVisible = false;
+    for (const opt of select.options) {
+      const optProvider = opt.dataset.provider || '';
+      const show = !optProvider || optProvider === providerValue;
+      opt.style.display = show ? '' : 'none';
+      opt.disabled = !show;
+      if (show && !firstVisible) firstVisible = opt.value;
+      if (show && opt.value === currentVal) currentVisible = true;
+    }
+    if (!currentVisible && firstVisible) select.value = firstVisible;
+  });
+}
+
+async function saveService(serviceId) {
+  const card = document.getElementById('svc-card-' + serviceId);
+  const statusEl = document.getElementById('svc-status-' + serviceId);
+  if (!card) return;
+
+  const payload = {};
+  card.querySelectorAll('[data-svc-key]').forEach(el => {
+    const key = el.dataset.svcKey;
+    const val = el.value.trim();
+    // For password fields, only send if user typed something
+    if (el.type === 'password' && !val) return;
+    payload[key] = val;
+  });
+
+  if (!Object.keys(payload).length) {
+    toast('Nada que guardar', 'info');
+    return;
+  }
+
+  try {
+    const res = await api(`services/${serviceId}`, { method: 'POST', body: JSON.stringify(payload) });
+    if (res && res.ok) {
+      toast('Servicio guardado ✓', 'success');
+      if (statusEl) { statusEl.innerHTML = '<span class="text-green-500">Guardado ✓</span>'; setTimeout(() => statusEl.textContent = '', 4000); }
+      // Refresh to update status badges
+      loadServices();
+    } else {
+      toast('Error al guardar', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function testService(serviceId) {
+  const statusEl = document.getElementById('svc-status-' + serviceId);
+  if (statusEl) statusEl.innerHTML = '<span class="text-on-surface-variant">Probando...</span>';
+
+  try {
+    const res = await api(`services/${serviceId}/test`, { method: 'POST', body: '{}' });
+    if (res && res.ok) {
+      toast(res.message || 'Conexión verificada', 'success');
+      if (statusEl) statusEl.innerHTML = `<span class="text-green-500">${escHtml(res.message || 'OK ✓')}</span>`;
+    } else {
+      const msg = (res && res.message) || 'Error en la prueba';
+      toast(msg, 'error');
+      if (statusEl) statusEl.innerHTML = `<span class="text-red-500">${escHtml(msg)}</span>`;
+    }
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<span class="text-red-500">Error: ${escHtml(e.message)}</span>`;
+  }
+  // Auto-clear after 10s
+  setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 10000);
+}
 
 
 async function loadConfig() {
@@ -1683,7 +1943,7 @@ async function loadConfig() {
         <div class="bg-surface-dim/50 rounded-lg p-3 mb-3 text-xs text-on-surface-variant">
           <p>El executor recoge tareas en estado <b>pendiente</b> y las ejecuta con el LLM configurado arriba.</p>
           <p>Corre como daemon en el host (no en Docker). Poll = cada cuántos segundos busca tareas. Timeout = máximo por tarea.</p>
-          <p>Cambios aquí se guardan en la DB. Para que el executor los lea, reinícialo: <code>niwa restart</code></p>
+          <p>Los cambios se guardan en la DB. Pulsa "Recargar" para que el executor los aplique sin reiniciar.</p>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
@@ -1702,7 +1962,13 @@ async function loadConfig() {
             <input id="int-executor-timeout" type="number" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg py-2 px-3 text-sm text-on-surface" value="${ig.executor_timeout_seconds || '1800'}" min="60" max="7200">
           </div>
         </div>
-        <button onclick="saveIntegration('executor')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+        <div class="flex gap-2 items-center">
+          <button onclick="saveIntegration('executor')" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
+          <button onclick="reloadExecutorConfig()" class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high flex items-center gap-1">
+            <span class="material-symbols-outlined text-sm">refresh</span> Recargar
+          </button>
+          <span id="executor-reload-status-config" class="text-xs"></span>
+        </div>
       </div>
     </div>`;
 
@@ -1730,11 +1996,18 @@ async function loadConfig() {
       <h3 class="text-lg font-bold mb-1" style="color:var(--c-on-surface);">Agentes</h3>
       <p class="text-xs mb-4" style="color:var(--c-on-surface-variant);">Configura qué modelo usa cada agente del sistema.</p>
       <div id="agents-grid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
-      <button onclick="saveAgents()" class="mt-4 px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
-              style="background:var(--c-primary);color:var(--c-on-primary);">
-        Guardar configuración
-      </button>
-      <span id="agents-save-status" class="ml-2 text-xs" style="color:var(--c-on-surface-variant);"></span>
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <button onclick="saveAgents()" class="px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+                style="background:var(--c-primary);color:var(--c-on-primary);">
+          Guardar configuración
+        </button>
+        <button onclick="reloadExecutorConfig()" class="px-4 py-2 rounded-lg text-sm font-medium transition-all hover:opacity-80"
+                style="background:var(--c-surface-cont);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);">
+          <span class="material-symbols-outlined text-sm align-middle">refresh</span> Recargar executor
+        </button>
+        <span id="agents-save-status" class="text-xs" style="color:var(--c-on-surface-variant);"></span>
+        <span id="executor-reload-status-agents" class="text-xs"></span>
+      </div>
     </div>`;
 
   box.innerHTML = integrationsHtml + settingsHtml + agentsPanelHtml + (data ? Object.entries(data).map(([key, val]) => `
@@ -1856,9 +2129,25 @@ async function saveAgents() {
   }
   try {
     await api('agents', { method: 'POST', body: JSON.stringify(data) });
-    if (status) { status.textContent = '✓ Guardado. Reinicia el executor para aplicar.'; setTimeout(() => status.textContent = '', 5000); }
+    if (status) { status.textContent = '✓ Guardado.'; setTimeout(() => status.textContent = '', 3000); }
+    // Auto-reload executor config
+    reloadExecutorConfig();
   } catch(e) {
     if (status) status.textContent = '✗ Error: ' + e.message;
+  }
+}
+
+async function reloadExecutorConfig() {
+  const statusEl = document.getElementById('executor-reload-status-config') || document.getElementById('executor-reload-status-agents');
+  try {
+    const res = await api('executor/restart', { method: 'POST', body: '{}' });
+    if (res && res.ok) {
+      if (statusEl) { statusEl.innerHTML = '<span class="text-green-500">Configuración recargada ✓</span>'; setTimeout(() => statusEl.textContent = '', 5000); }
+    } else {
+      if (statusEl) statusEl.innerHTML = '<span class="text-amber-500">No se pudo recargar</span>';
+    }
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = '<span class="text-red-500">Error: ' + escHtml(e.message) + '</span>';
   }
 }
 
@@ -1895,8 +2184,8 @@ async function saveIntegration(group) {
   const res = await api('settings/integrations', { method: 'POST', body: JSON.stringify(payload) });
   if (res && res.ok) {
     toast('Configuración guardada', 'success');
-    // Show restart banner for settings that need a service restart
-    if (['llm', 'executor'].includes(group)) showRestartBanner();
+    // Auto-reload executor config instead of requiring restart
+    if (['llm', 'executor'].includes(group)) reloadExecutorConfig();
   } else {
     toast('Error al guardar', 'error');
   }
@@ -3374,11 +3663,31 @@ function renderChatMessages(messages) {
     const bg = isUser ? 'var(--c-primary-cont)' : 'var(--c-surface-cont)';
     const color = isUser ? 'var(--c-on-primary-cont)' : 'var(--c-on-surface)';
     let content = (m.content || '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\[>[0-9]*m/g, '').replace(/\[<[a-z]/g, '').trim();
+    // Detect image URLs in content (from generate_image tool results)
+    let imageHtml = '';
+    const imgUrlMatch = content.match(/"url"\s*:\s*"(https?:\/\/[^"]+)"/);
+    const imgPathMatch = content.match(/"(?:url|saved_path)"\s*:\s*"(\/static\/generated-images\/[^"]+)"/);
+    const imgSrc = imgPathMatch ? imgPathMatch[1] : (imgUrlMatch ? imgUrlMatch[1] : null);
+    if (imgSrc) {
+      imageHtml = `<div class="mt-2 mb-1"><img src="${escHtml(imgSrc)}" alt="Imagen generada" style="max-width:100%;border-radius:0.75rem;cursor:pointer;" onclick="window.open('${escHtml(imgSrc)}','_blank')"><div class="mt-1"><a href="${escHtml(imgSrc)}" download class="text-[10px] text-primary hover:underline flex items-center gap-1"><span class="material-symbols-outlined text-xs">download</span> Descargar</a></div></div>`;
+    }
+
     content = escHtml(content);
     // Simple markdown: bold, code blocks, line breaks
     content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     content = content.replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded text-xs" style="background:var(--c-surface-variant)">$1</code>');
     content = content.replace(/\n/g, '<br>');
+
+    // If there's image content, replace raw JSON with cleaner display
+    if (imageHtml) {
+      // Try to extract revised_prompt or keep a clean message
+      const promptMatch = (m.content || '').match(/"revised_prompt"\s*:\s*"([^"]+)"/);
+      if (promptMatch) {
+        content = `<em>${escHtml(promptMatch[1])}</em>${imageHtml}`;
+      } else {
+        content = content + imageHtml;
+      }
+    }
 
     if (m.status === 'pending') {
       content = '<div class="flex items-center gap-2"><div class="animate-pulse flex gap-1"><span class="w-2 h-2 rounded-full" style="background:var(--c-primary)"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.2s"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.4s"></span></div><span class="text-xs" style="color:var(--c-on-surface-variant)">Pensando...</span></div>';

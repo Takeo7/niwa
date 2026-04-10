@@ -287,6 +287,18 @@ async def list_tools() -> list[Tool]:
             description="List all currently deployed web projects with their URLs.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="generate_image",
+            description="Generate an image from a text description using AI (DALL-E, Stability AI, etc.). Returns an image URL or path.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Detailed text description of the image to generate"},
+                    "size": {"type": "string", "description": "Image size: 1024x1024, 1792x1024, or 1024x1792", "default": "1024x1024"},
+                },
+                "required": ["prompt"],
+            },
+        ),
     ]
 
 
@@ -403,16 +415,37 @@ def _task_update_status(args: dict[str, Any]) -> dict[str, Any]:
 _SEARXNG_URL = os.environ.get("NIWA_SEARXNG_URL", "").rstrip("/")
 
 
+def _get_setting(key: str) -> str:
+    """Read a single setting from the SQLite settings table."""
+    try:
+        with _ro_conn() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else ""
+    except Exception:
+        return ""
+
+
+def _get_search_config() -> tuple[str, str]:
+    """Get search provider and SearXNG URL from DB settings, falling back to env var."""
+    provider = _get_setting("svc.search.provider") or "duckduckgo"
+    searxng_url = _get_setting("svc.search.searxng_url") or _SEARXNG_URL
+    return provider, searxng_url.rstrip("/") if searxng_url else ""
+
+
 def _web_search(args: dict) -> dict:
     query = args.get("query", "").strip()
     max_results = min(int(args.get("max_results", 5)), 10)
     if not query:
         raise ValueError("query cannot be empty")
 
-    # Try SearXNG first (self-hosted, if configured)
-    if _SEARXNG_URL:
+    # Read search config from DB (with env var fallback)
+    provider, searxng_url = _get_search_config()
+
+    # Try SearXNG first if configured
+    if provider == "searxng" and searxng_url or (provider != "searxng" and _SEARXNG_URL):
+        searxng_url = searxng_url or _SEARXNG_URL
         try:
-            url = f"{_SEARXNG_URL}/search?q={urllib.parse.quote(query)}&format=json&categories=general"
+            url = f"{searxng_url}/search?q={urllib.parse.quote(query)}&format=json&categories=general"
             req = urllib.request.Request(url, headers={"User-Agent": "niwa-mcp/1.0"})
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read().decode())
@@ -767,6 +800,82 @@ def _list_deployments_handler(args):
     return [_row_to_dict(r) for r in rows]
 
 
+def _generate_image(args: dict) -> dict:
+    """Generate an image using the configured image generation service."""
+    prompt = args.get("prompt", "").strip()
+    if not prompt:
+        raise ValueError("prompt cannot be empty")
+    size = args.get("size", "1024x1024")
+
+    # Read image service config from DB
+    config = {}
+    try:
+        with _ro_conn() as c:
+            for row in c.execute("SELECT key, value FROM settings WHERE key LIKE 'svc.image.%'").fetchall():
+                short_key = row["key"].replace("svc.image.", "")
+                config[short_key] = row["value"]
+    except Exception:
+        pass
+
+    provider = config.get("provider", "openai")
+    api_key = config.get("api_key", "")
+    model = config.get("model", "dall-e-3")
+    default_size = config.get("default_size", "1024x1024")
+
+    if not api_key:
+        return {"error": "No hay API key configurada para generación de imágenes. Pide al usuario que vaya a Sistema > Servicios para configurarla."}
+
+    size = size or default_size
+
+    if provider == "openai":
+        return _generate_image_openai(prompt, api_key, model, size)
+    elif provider == "stability":
+        return _generate_image_stability(prompt, api_key, model, size)
+    return {"error": f"Proveedor desconocido: {provider}"}
+
+
+def _generate_image_openai(prompt, api_key, model, size):
+    """Generate via OpenAI DALL-E API."""
+    import json as _json
+    url = "https://api.openai.com/v1/images/generations"
+    payload = _json.dumps({"model": model, "prompt": prompt, "n": 1, "size": size, "response_format": "url"}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = _json.loads(resp.read())
+            img = data["data"][0]
+            return {"url": img.get("url"), "revised_prompt": img.get("revised_prompt", prompt), "model": model, "size": size, "provider": "openai"}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            msg = _json.loads(body).get("error", {}).get("message", body)
+        except Exception:
+            msg = body
+        return {"error": f"OpenAI error: {msg}"}
+    except Exception as e:
+        return {"error": f"Error generando imagen: {e}"}
+
+
+def _generate_image_stability(prompt, api_key, model, size):
+    """Generate via Stability AI API."""
+    import json as _json
+    w, h = size.split("x")
+    url = f"https://api.stability.ai/v1/generation/{model}/text-to-image"
+    payload = _json.dumps({"text_prompts": [{"text": prompt, "weight": 1}], "cfg_scale": 7, "height": int(h), "width": int(w), "samples": 1, "steps": 30}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = _json.loads(resp.read())
+            img = data["artifacts"][0]
+            # Return base64 data for Stability (no URL)
+            return {"base64": img["base64"], "model": model, "size": size, "provider": "stability"}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        return {"error": f"Stability AI error: {body}"}
+    except Exception as e:
+        return {"error": f"Error generando imagen: {e}"}
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
@@ -810,6 +919,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _undeploy_web(arguments or {})
         elif name == "list_deployments":
             payload = _list_deployments_handler(arguments or {})
+        elif name == "generate_image":
+            payload = _generate_image(arguments or {})
         else:
             return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
         return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]

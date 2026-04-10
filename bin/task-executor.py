@@ -76,11 +76,30 @@ _SETTINGS_PATH = (
     / "settings.json"
 )
 _SETTINGS: dict = {}
+# Read from settings.json (legacy, may have been migrated to SQLite)
 if _SETTINGS_PATH.exists():
     try:
         _SETTINGS = json.loads(_SETTINGS_PATH.read_text())
     except Exception:
         pass
+
+
+def _read_db_settings() -> dict:
+    """Read all settings from SQLite settings table."""
+    _db = ENV.get("NIWA_DB_PATH") or str(INSTALL_DIR / "data" / "niwa.sqlite3")
+    try:
+        c = sqlite3.connect(_db, timeout=5)
+        c.row_factory = sqlite3.Row
+        rows = c.execute("SELECT key, value FROM settings").fetchall()
+        c.close()
+        return {r["key"]: r["value"] for r in rows}
+    except Exception:
+        return {}
+
+
+# Merge DB settings (primary) with JSON settings (legacy fallback)
+_DB_SETTINGS = _read_db_settings()
+_SETTINGS.update(_DB_SETTINGS)
 
 
 def _cfg(key: str, env_key: str, default: str = "") -> str:
@@ -797,7 +816,66 @@ def _handle_task_result(task_id: str, success: bool, output: str, was_retry: boo
         return False, 1  # failure, increment counter
 
 
+def _reload_config():
+    """Hot-reload configuration from settings.json and DB settings table."""
+    global LLM_COMMAND, LLM_COMMAND_CHAT, LLM_COMMAND_PLANNER, LLM_COMMAND_EXECUTOR
+    global LLM_API_KEY, LLM_SETUP_TOKEN, POLL_SECONDS, TIMEOUT_SECONDS
+
+    # Re-read settings.json
+    global _SETTINGS
+    if _SETTINGS_PATH.exists():
+        try:
+            _SETTINGS = json.loads(_SETTINGS_PATH.read_text())
+        except Exception:
+            pass
+
+    # Also read from DB settings table (which is now the primary store)
+    db_settings = {}
+    try:
+        with _conn() as c:
+            for row in c.execute("SELECT key, value FROM settings").fetchall():
+                db_settings[row["key"]] = row["value"]
+    except Exception:
+        pass
+
+    # Merge: DB takes priority over settings.json
+    merged = dict(_SETTINGS)
+    merged.update(db_settings)
+
+    def _cfg_reload(key, env_key, default=""):
+        return (merged.get(f"int.{key}") or ENV.get(env_key, "") or default).strip()
+
+    LLM_COMMAND = _cfg_reload("llm_command", "NIWA_LLM_COMMAND")
+    LLM_COMMAND_CHAT = _cfg_reload("llm_command_chat", "NIWA_LLM_COMMAND_CHAT") or ""
+    LLM_COMMAND_PLANNER = _cfg_reload("llm_command_planner", "NIWA_LLM_COMMAND_PLANNER") or ""
+    LLM_COMMAND_EXECUTOR = _cfg_reload("llm_command_executor", "NIWA_LLM_COMMAND_EXECUTOR") or ""
+    LLM_API_KEY = _cfg_reload("llm_api_key", "NIWA_LLM_API_KEY")
+    LLM_SETUP_TOKEN = _cfg_reload("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
+    POLL_SECONDS = int(_cfg_reload("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
+    TIMEOUT_SECONDS = int(_cfg_reload("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
+
+    log.info("Configuration reloaded — LLM: %s, Chat: %s, Planner: %s, Executor: %s",
+             LLM_COMMAND or "(none)", LLM_COMMAND_CHAT or "(same)", LLM_COMMAND_PLANNER or "(none)", LLM_COMMAND_EXECUTOR or "(same)")
+
+
+def _check_reload_requested(start_time_iso: str) -> bool:
+    """Check if a config reload has been requested via DB flag."""
+    try:
+        with _conn() as c:
+            row = c.execute("SELECT value FROM settings WHERE key='sys.executor_restart_requested'").fetchone()
+            if row and row["value"]:
+                if row["value"] > start_time_iso:
+                    # Clear the flag
+                    c.execute("DELETE FROM settings WHERE key='sys.executor_restart_requested'")
+                    c.commit()
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def main() -> None:
+    start_time_iso = _now_iso()
     log.info(
         "Niwa executor starting (workers=%d, db=%s, poll=%ds, chat_poll=%ds)",
         MAX_WORKERS, DB_PATH, POLL_SECONDS, CHAT_POLL_SECONDS,
@@ -853,6 +931,11 @@ def main() -> None:
                 except Exception as e:
                     log.exception("task %s raised: %s", tid, e)
                     active_tasks.pop(tid, None)
+
+            # Check for config reload request
+            if _check_reload_requested(start_time_iso):
+                _reload_config()
+                start_time_iso = _now_iso()
 
             # Don't spawn new tasks if at capacity
             if len(active_futures) >= MAX_WORKERS:

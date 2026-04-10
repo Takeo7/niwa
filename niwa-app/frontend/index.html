@@ -567,6 +567,7 @@ tailwind.config = {
     <button data-systab="overview" onclick="switchSystemTab('overview')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Overview</button>
     <button data-systab="routines" onclick="switchSystemTab('routines')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Routines</button>
     <button data-systab="logs" onclick="switchSystemTab('logs')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Logs</button>
+    <button data-systab="services" onclick="switchSystemTab('services')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Servicios</button>
     <button data-systab="config" onclick="switchSystemTab('config')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Config</button>
     <button data-systab="stats" onclick="switchSystemTab('stats')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Stats</button>
     <button data-systab="kpis" onclick="switchSystemTab('kpis')" class="sys-tab px-4 py-2 rounded-lg text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">KPIs</button>
@@ -666,6 +667,11 @@ tailwind.config = {
       </div>
       <div id="routines-list" class="space-y-3"></div>
     </div>
+  </div>
+
+  <!-- Services Tab -->
+  <div id="sys-services" class="sys-panel hidden">
+    <div id="services-container" class="space-y-4"></div>
   </div>
 
   <!-- Config Tab -->
