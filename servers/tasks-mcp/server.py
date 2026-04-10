@@ -103,8 +103,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="task_create",
             description=(
-                "Create a new task. Required: title, area. Optional: project_id, status (default 'inbox'), "
-                "priority (default 'media'), description, notes. Returns the created task."
+                "Create a new task. Required: title, area. Set assigned_to_claude=true for "
+                "auto-execution by the main model. Returns the created task."
             ),
             inputSchema={
                 "type": "object",
@@ -112,10 +112,11 @@ async def list_tools() -> list[Tool]:
                     "title": {"type": "string", "minLength": 1},
                     "area": {"type": "string", "enum": list(VALID_AREAS)},
                     "project_id": {"type": "string"},
-                    "status": {"type": "string", "enum": list(VALID_STATUSES), "default": "inbox"},
+                    "status": {"type": "string", "enum": list(VALID_STATUSES), "default": "pendiente"},
                     "priority": {"type": "string", "enum": list(VALID_PRIORITIES), "default": "media"},
                     "description": {"type": "string"},
                     "notes": {"type": "string"},
+                    "assigned_to_claude": {"type": "boolean", "default": False, "description": "Set true for auto-execution by the main model"},
                 },
                 "required": ["title", "area"],
             },
@@ -278,6 +279,8 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
     description = args.get("description")
     notes = args.get("notes")
 
+    assigned_to_claude = 1 if args.get("assigned_to_claude") else 0
+
     task_id = f"task-{uuid.uuid4().hex[:12]}"
     now = _now_iso()
     with _rw_conn() as c:
@@ -287,9 +290,9 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
                 id, title, description, area, project_id, status, priority,
                 urgent, source, notes, created_at, updated_at,
                 assigned_to_yume, assigned_to_claude
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'mcp:tasks', ?, ?, ?, 0, 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'mcp:tasks', ?, ?, ?, 0, ?)
             """,
-            (task_id, title, description, area, project_id, status, priority, notes, now, now),
+            (task_id, title, description, area, project_id, status, priority, notes, now, now, assigned_to_claude),
         )
         c.commit()
         row = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()

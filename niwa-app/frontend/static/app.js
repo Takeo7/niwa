@@ -3293,11 +3293,12 @@ function renderChatMessages(messages) {
       content = '<div class="flex items-center gap-2"><div class="animate-pulse flex gap-1"><span class="w-2 h-2 rounded-full" style="background:var(--c-primary)"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.2s"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.4s"></span></div><span class="text-xs" style="color:var(--c-on-surface-variant)">Pensando...</span></div>';
     }
 
-    return `<div class="flex flex-col ${align} max-w-[80%] ${isUser ? 'self-end' : 'self-start'}">
-      <div class="rounded-2xl px-4 py-2 text-sm" style="background:${bg}; color:${color}; white-space:pre-wrap; word-break:break-word;">
+    const mlAuto = isUser ? 'margin-left:auto;' : 'margin-right:auto;';
+    return `<div style="display:flex;flex-direction:column;${isUser ? 'align-items:flex-end;' : 'align-items:flex-start;'}max-width:75%;${mlAuto}">
+      <div style="border-radius:1rem;padding:0.625rem 1rem;font-size:0.875rem;background:${bg};color:${color};white-space:pre-wrap;word-break:break-word;line-height:1.5;">
         ${content}
       </div>
-      <span class="text-xs mt-1" style="color:var(--c-on-surface-variant)">${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+      <span style="font-size:0.7rem;margin-top:0.25rem;color:var(--c-on-surface-variant);">${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
     </div>`;
   }).join('');
   el.scrollTop = el.scrollHeight;
