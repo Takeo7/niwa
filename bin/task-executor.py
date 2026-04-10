@@ -363,7 +363,7 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
                 parts.append(f"    {m['key']}: {m['value']}{scope}")
 
     # Instructions — different for chat vs tasks
-    is_chat = task.get("source") == "chat"
+    is_chat = dict(task).get("source") == "chat"
     parts.append("")
     if is_chat:
         parts.append("ROLE: You are Niwa's chat assistant (fast, conversational).")
@@ -594,7 +594,7 @@ def _claim_next_chat_task() -> Optional[sqlite3.Row]:
 
 def _execute_task(task: sqlite3.Row) -> tuple[bool, str]:
     """Run a single task through the LLM. Returns (success, output)."""
-    is_chat = task.get("source") == "chat"
+    is_chat = dict(task).get("source") == "chat"
     project_dir = _resolve_project_dir(task["project_id"])
     if not project_dir and task["project_id"]:
         log.warning("Project dir not found for %s, using $HOME", task["project_id"])
@@ -655,7 +655,7 @@ def main() -> None:
                 time.sleep(CHAT_POLL_SECONDS)
                 continue
 
-            log.info("task %s: %s [source=%s]", task["id"], task["title"], task.get("source", "manual"))
+            log.info("task %s: %s [source=%s]", task["id"], task["title"], dict(task).get("source", "manual"))
             success, output = _execute_task(task)
             _active_proc = None
 
