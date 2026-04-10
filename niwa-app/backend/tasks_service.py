@@ -29,7 +29,7 @@ def get_task(task_id):
 
 
 def fetch_tasks(area=None, status=None, today_only=False, include_done=False):
-    query = 'SELECT t.*, p.name as project_name FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE 1=1'
+    query = 'SELECT t.*, p.name as project_name FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != "chat"'
     params = []
     if area:
         query += ' AND t.area=?'

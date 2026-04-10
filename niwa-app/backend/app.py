@@ -261,15 +261,15 @@ def fetch_projects():
 def fetch_stats():
     with db_conn() as conn:
         total = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
-        open_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE status NOT IN ('hecha','archivada')").fetchone()[0]
-        done_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='hecha'").fetchone()[0]
-        done_today = conn.execute("SELECT COUNT(*) FROM tasks WHERE status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
+        open_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE source != 'chat' AND status NOT IN ('hecha','archivada')").fetchone()[0]
+        done_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE source != 'chat' AND status='hecha'").fetchone()[0]
+        done_today = conn.execute("SELECT COUNT(*) FROM tasks WHERE source != 'chat' AND status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
         overdue = conn.execute("SELECT COUNT(*) FROM tasks WHERE due_at IS NOT NULL AND date(due_at)<date('now') AND status NOT IN ('hecha','archivada')").fetchone()[0]
         by_status = {}
         for row in conn.execute("SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status").fetchall():
             by_status[row['status']] = row['cnt']
         by_priority = {}
-        for row in conn.execute("SELECT priority, COUNT(*) as c FROM tasks WHERE status NOT IN ('hecha','archivada') GROUP BY priority").fetchall():
+        for row in conn.execute("SELECT priority, COUNT(*) as c FROM tasks WHERE source != 'chat' AND status NOT IN ('hecha','archivada') GROUP BY priority").fetchall():
             by_priority[row['priority'] or 'sin_prioridad'] = row['c']
         cbd_rows = conn.execute(
             "SELECT date(completed_at) as day, COUNT(*) as count FROM tasks "
@@ -1555,9 +1555,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 _metrics['niwa-app'] = {'status':'down','latency_ms':-1}
             with db_conn() as _mc:
-                _metrics['tasks_today'] = _mc.execute("SELECT count(*) FROM tasks WHERE status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
-                _metrics['tasks_pending'] = _mc.execute("SELECT count(*) FROM tasks WHERE status='pendiente'").fetchone()[0]
-                _metrics['tasks_blocked'] = _mc.execute("SELECT count(*) FROM tasks WHERE status='bloqueada'").fetchone()[0]
+                _metrics['tasks_today'] = _mc.execute("SELECT count(*) FROM tasks WHERE source != 'chat' AND status='hecha' AND date(completed_at)=date('now')").fetchone()[0]
+                _metrics['tasks_pending'] = _mc.execute("SELECT count(*) FROM tasks WHERE source != 'chat' AND status='pendiente'").fetchone()[0]
+                _metrics['tasks_blocked'] = _mc.execute("SELECT count(*) FROM tasks WHERE source != 'chat' AND status='bloqueada'").fetchone()[0]
             return self._json(_metrics)
         if path == '/api/health/full':
             return self._json(fetch_health())
