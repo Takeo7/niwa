@@ -224,3 +224,17 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
+
+-- ── OAuth tokens (subscription auth for Claude/OpenAI/Gemini) ──
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    provider    TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    id_token    TEXT,
+    expires_at  INTEGER,
+    email       TEXT,
+    account_id  TEXT,
+    metadata    TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);

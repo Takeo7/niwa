@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import sqlite3
 import subprocess
 import threading
@@ -207,7 +208,13 @@ def toggle_routine(db_conn_fn: Callable, routine_id: str) -> Optional[bool]:
 # ────────────────────────── action executors ──────────────────────────
 
 def _exec_create_task(config: dict, db_conn_fn: Callable) -> str:
-    """Create a new task from the routine config."""
+    """Create a new task from the routine config.
+
+    NOTE: Column list is hardcoded — must be kept in sync with the tasks
+    table schema in schema.sql. If new NOT NULL columns are added without
+    defaults, this INSERT will break. Consider using tasks_service.create_task()
+    if the scheduler gains access to app dependencies.
+    """
     ts = _now_iso()
     task_id = str(uuid.uuid4())
     with db_conn_fn() as conn:
@@ -242,7 +249,7 @@ def _exec_script(config: dict, install_dir: Path) -> str:
     cwd = config.get("cwd") or str(install_dir)
     try:
         result = subprocess.run(
-            script, shell=True, capture_output=True, text=True,
+            shlex.split(script), capture_output=True, text=True,
             timeout=timeout, cwd=cwd,
         )
         output = (result.stdout or "") + (result.stderr or "")
@@ -305,13 +312,10 @@ class SchedulerThread(threading.Thread):
 
     def _tick(self) -> None:
         now_utc = datetime.now(timezone.utc)
-        conn = self.db_conn_fn()
-        try:
+        with self.db_conn_fn() as conn:
             rows = conn.execute(
                 "SELECT * FROM routines WHERE enabled = 1"
             ).fetchall()
-        finally:
-            conn.close()
 
         for row in rows:
             routine = dict(row)

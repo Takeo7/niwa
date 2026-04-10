@@ -9,7 +9,9 @@ from tasks_helpers import (
     record_task_event,
 )
 
-# Set by _make_deps() from app.py
+# Set by _make_deps() from app.py — must be called before using any function in this module.
+# These module-level mutable globals avoid circular imports but make testing harder.
+# Consider refactoring to a class or explicit parameter passing if testability becomes a concern.
 _db_conn = None
 _now_iso = None
 _UPLOADS_DIR = None
@@ -28,9 +30,12 @@ def get_task(task_id):
         return dict(row) if row else None
 
 
-def fetch_tasks(area=None, status=None, today_only=False, include_done=False):
-    query = 'SELECT t.*, p.name as project_name FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != "chat"'
+def fetch_tasks(area=None, status=None, today_only=False, include_done=False, project_id=None):
+    query = "SELECT t.*, p.name as project_name FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != 'chat'"
     params = []
+    if project_id:
+        query += ' AND t.project_id=?'
+        params.append(project_id)
     if area:
         query += ' AND t.area=?'
         params.append(area)

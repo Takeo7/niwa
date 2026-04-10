@@ -35,8 +35,10 @@ ALLOWED_ORDER = {'asc', 'desc'}
 
 
 def _db_conn():
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=5)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=5000')
     return conn
 
 
@@ -107,6 +109,12 @@ def fetch_task_history(params, db_conn_fn=None):
     sort = params.get('sort', 'completed_at')
     order = params.get('order', 'desc')
 
+    _SORT_MAP = {
+        'completed_at': 't.completed_at',
+        'created_at': 't.created_at',
+        'title': 't.title',
+        'duration_hours': 't.completed_at',
+    }
     if sort not in ALLOWED_SORT:
         sort = 'completed_at'
     if order not in ALLOWED_ORDER:
@@ -145,7 +153,7 @@ def fetch_task_history(params, db_conn_fn=None):
         # Fetch paginated items with project name and event counts
         # duration_hours is computed in Python; sort by it requires post-processing
         sort_by_duration = sort == 'duration_hours'
-        sql_sort = 'completed_at' if sort_by_duration else sort
+        sql_sort_col = _SORT_MAP.get(sort, 't.completed_at')
         order_sql = order.upper()
 
         # Subquery for attempt count (status_changed events) and review count per task
@@ -161,7 +169,7 @@ def fetch_task_history(params, db_conn_fn=None):
             FROM tasks t
             LEFT JOIN projects p ON t.project_id = p.id
             WHERE {where_sql}
-            ORDER BY t.{sql_sort} {order_sql}
+            ORDER BY {sql_sort_col} {order_sql}
         """
 
         if not sort_by_duration:

@@ -8,7 +8,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Set by _make_deps() from app.py
+# Set by _make_deps() from app.py — must be called before using any function in this module.
+# These module-level mutable globals avoid circular imports but make testing harder.
+# Consider refactoring to a class or explicit parameter passing if testability becomes a concern.
 _db_conn = None
 _now_iso = None
 _WORKSPACE_DELEGATIONS_PATH = None

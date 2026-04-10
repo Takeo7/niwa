@@ -22,7 +22,10 @@ class NiwaHostingHandler(http.server.SimpleHTTPRequestHandler):
             rest = parts[1] if len(parts) > 1 else "index.html"
             project_dir = PROJECTS_DIR / slug
             if project_dir.is_dir():
-                full = project_dir / rest
+                full = (project_dir / rest).resolve()
+                # Prevent directory traversal — resolved path must stay inside PROJECTS_DIR
+                if not str(full).startswith(str(PROJECTS_DIR.resolve())):
+                    return str(PROJECTS_DIR / "index.html")
                 if full.is_dir():
                     full = full / "index.html"
                 return str(full)

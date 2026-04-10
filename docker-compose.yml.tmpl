@@ -160,6 +160,8 @@ services:
         max-file: "2"
 
   terminal:
+    # WARNING: This container has full host access (privileged, host PID/network).
+    # Only expose it over HTTPS with strong credentials.
     # Web terminal — provides a real host shell via the browser.
     # Uses chroot /host to access the host filesystem from inside the container.
     # Protected with the same Niwa username/password (basic auth).

@@ -284,7 +284,7 @@ async function loadDashboard() {
     if (el) el.textContent = count;
     const sub = document.getElementById('kpi-routines-sub');
     if (sub) sub.textContent = count === 1 ? 'activa' : 'activas';
-  });
+  }).catch(e => console.warn('routines KPI fetch failed', e));
 
   // Executor metrics KPIs (non-blocking)
   api('metrics').then(m => {
@@ -585,7 +585,7 @@ async function loadKanban() {
         if (tagEl) tagEl.innerHTML = computeTimeTag(task);
       }
     });
-  });
+  }).catch(e => console.warn('timeline fetch failed', e));
 
   // Populate filter options
   const projects = [...new Set(tasks.map(t => t.project_name).filter(Boolean))].sort();
@@ -1493,7 +1493,7 @@ async function loadSystemOverview() {
     if (el) el.textContent = enabled + '/' + total;
     const sub = document.getElementById('sys-scheduler-sub');
     if (sub) sub.textContent = 'routines activas';
-  });
+  }).catch(e => console.warn('routines fetch failed', e));
 }
 
 async function loadLogs() {
@@ -3037,7 +3037,7 @@ async function niwaUpdate() {
   const btn = document.getElementById('btn-niwa-update');
   if (btn) { btn.disabled = true; btn.textContent = 'Actualizando...'; }
   try {
-    const result = await api('/api/system/update', { method: 'POST', body: '{}' });
+    const result = await api('system/update', { method: 'POST', body: '{}' });
     alert(result.ok ? '\u2705 Actualizaci\u00f3n completada. Recarga la p\u00e1gina.' : '\u274c Error: ' + (result.error || 'unknown'));
   } catch(e) {
     alert('\u274c Error: ' + e.message);
@@ -3646,7 +3646,7 @@ function openRoutineEditor(id) {
       document.getElementById('routine-editor-notify').value = r.notify_channel || 'none';
       document.getElementById('routine-editor-title').textContent = 'Editar rutina';
       toggleRoutineActionFields();
-    });
+    }).catch(e => console.warn('routine load failed', e));
   } else {
     document.getElementById('routine-editor-title').textContent = 'Nueva rutina';
   }

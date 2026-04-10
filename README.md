@@ -198,7 +198,7 @@ niwa/
 ├── INSTALL.md                     # detailed install guide
 ├── niwa                           # CLI wrapper (bash → setup.py)
 ├── setup.py                       # interactive installer (~1500 lines, stdlib only)
-├── docker-compose.yml.tmpl        # template (filled at install time)
+├── docker-compose.yml.tmpl        # template (filled at install time → generates docker-compose.yml)
 ├── niwa.env.example               # example env vars
 ├── caddy/Caddyfile                # reverse proxy config
 ├── bin/

@@ -143,21 +143,7 @@ def _check_workers(result, host, in_docker):
     for wname, pattern in workers:
         try:
             if in_docker:
-                if pattern == 'openclaw gateway':
-                    try:
-                        urllib.request.urlopen(f'http://{host}:18700/health', timeout=3)
-                        running, pid = True, ''
-                    except Exception:
-                        running, pid = False, None
-                elif pattern == 'claude-bridge':
-                    try:
-                        urllib.request.urlopen(f'http://{host}:18800', timeout=3)
-                        running, pid = True, ''
-                    except urllib.error.HTTPError:
-                        running, pid = True, ''
-                    except Exception:
-                        running, pid = False, None
-                elif pattern == 'cloudflared':
+                if pattern == 'cloudflared':
                     running = any(t.get('ok') for t in result['tunnel'])
                     pid = '' if running else None
                 else:

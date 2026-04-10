@@ -80,7 +80,8 @@ _SETTINGS_PATH = (
     / "settings.json"
 )
 _SETTINGS: dict = {}
-# Read from settings.json (legacy, may have been migrated to SQLite)
+# Read from settings.json (legacy fallback — app.py migrates this to SQLite on startup,
+# but the executor may start before the app. Remove once all installs have migrated.)
 if _SETTINGS_PATH.exists():
     try:
         _SETTINGS = json.loads(_SETTINGS_PATH.read_text())
@@ -475,7 +476,8 @@ def _record_event(task_id: str, event_type: str, payload: dict) -> None:
 
 # ────────────────────────── OAuth token helpers ──────────────────────────
 def _parse_jwt_payload(token: str):
-    """Parse JWT payload without verification."""
+    """Parse JWT payload without verification.
+    NOTE: This duplicates oauth.parse_jwt(). Keep in sync."""
     if not token or token.count(".") != 2:
         return None
     try:
@@ -587,7 +589,6 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
     Using pty.openpty() gives it a real terminal to write to, and we
     read the master side to capture the output.
     """
-    global _active_proc
     command = llm_command or LLM_COMMAND
     task_timeout = timeout or TIMEOUT_SECONDS
     if not command:
@@ -969,16 +970,16 @@ def _reload_config():
 
 
 def _check_reload_requested(start_time_iso: str) -> bool:
-    """Check if a config reload has been requested via DB flag."""
+    """Check if a config reload has been requested via DB flag (atomic delete)."""
     try:
         with _conn() as c:
-            row = c.execute("SELECT value FROM settings WHERE key='sys.executor_restart_requested'").fetchone()
-            if row and row["value"]:
-                if row["value"] > start_time_iso:
-                    # Clear the flag
-                    c.execute("DELETE FROM settings WHERE key='sys.executor_restart_requested'")
-                    c.commit()
-                    return True
+            deleted = c.execute(
+                "DELETE FROM settings WHERE key='sys.executor_restart_requested' AND value > ?",
+                (start_time_iso,)
+            ).rowcount
+            if deleted:
+                c.commit()
+                return True
     except Exception:
         pass
     return False

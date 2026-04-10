@@ -19,6 +19,8 @@ DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 def _db():
     c = sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory = sqlite3.Row
+    c.execute('PRAGMA journal_mode=WAL')
+    c.execute('PRAGMA busy_timeout=5000')
     return c
 
 
@@ -152,7 +154,13 @@ def list_deployments():
 
 
 def _reload_caddy():
-    """Reload or start the hosting Caddy instance."""
+    """Reload or start the hosting Caddy instance.
+
+    NOTE: pkill -USR1 may be silently ignored by Caddy unless it was started
+    with --watch. The proper approach is `caddy reload --config <path>` or
+    using the Caddy admin API (POST /load). Kept as-is because the fallback
+    Docker path below handles most production deployments.
+    """
     try:
         # Check if caddy-hosting is running
         r = subprocess.run(["pgrep", "-f", "caddy.*niwa-hosting"], capture_output=True)
@@ -178,7 +186,5 @@ def _reload_caddy():
         except Exception:
             pass
 
-try:
-    _ensure_deployments_table()
-except Exception:
-    pass
+# NOTE: _ensure_deployments_table() removed from module level.
+# The deployments table is created by migration 003_deployments.sql.

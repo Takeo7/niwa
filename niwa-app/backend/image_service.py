@@ -7,11 +7,12 @@ import base64
 import time
 
 
-def generate_image(prompt, provider=None, api_key=None, model=None, size=None):
+def generate_image(prompt, provider=None, api_key=None, model=None, size=None, config=None):
     """Generate an image from a text prompt. Returns dict with url or base64 and metadata."""
     if not provider or not api_key:
-        from app import get_service_config
-        config = get_service_config("image")
+        if config is None:
+            from app import get_service_config
+            config = get_service_config("image")
         provider = provider or config.get("provider", "openai")
         api_key = api_key or config.get("api_key")
         model = model or config.get("model", "dall-e-3")
@@ -227,7 +228,8 @@ def test_connection(provider, api_key):
         except Exception as e:
             return {"ok": False, "message": f"Error de conexión: {e}"}
     elif provider == "fal":
-        # fal.ai doesn't have a simple status endpoint, just validate key format
+        # fal.ai doesn't have a simple status endpoint — format check only (no API call).
+        # A proper validation would hit https://queue.fal.run/ but that requires a model ID.
         if api_key and len(api_key) > 5:
             return {"ok": True, "message": "fal.ai configurado ✓ — API key presente"}
         return {"ok": False, "message": "API key parece inválida."}
