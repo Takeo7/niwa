@@ -13,11 +13,14 @@ COPY backend/ /app/backend/
 COPY db/ /app/db/
 COPY config/ /app/config/
 
-# Copy legacy frontend (fallback)
+# Copy React entry point (used by vite build)
 COPY frontend/index.html /app/frontend/index.html
+
+# Copy legacy frontend (vanilla JS fallback)
+COPY frontend/index-legacy.html /app/frontend/index-legacy.html
 COPY frontend/static/ /app/frontend/static/
 
-# Copy React build output
+# Copy React build output (this is what gets served)
 COPY --from=frontend-build /build/dist/ /app/frontend/dist/
 
 # Defaults — override via env at runtime.

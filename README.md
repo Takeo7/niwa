@@ -106,24 +106,31 @@ The killer feature: **persistent context across LLM conversations**. Create an i
 ## Quick install
 
 You need:
-- macOS or Linux
-- Docker (OrbStack, Docker Desktop, Colima, or rootful Podman work)
+- macOS or Linux (Ubuntu 22.04/24.04 tested)
+- Docker (OrbStack, Docker Desktop, Colima, or rootful Docker/Podman)
 - Python 3.9+
+- Node.js 18+ (for building the React frontend inside Docker — included in the build stage)
 
 ```bash
 git clone https://github.com/yumewagener/niwa
 cd niwa
-./niwa install
+python3 setup.py install    # or: ./niwa install
 ```
 
-The installer asks ~10 questions (instance name, install location, database, ports, restart whitelist, tokens, credentials, optional client registration) and then:
+The installer is a 13-step interactive wizard that asks about: instance name, install location, database, filesystem scope, restart whitelist, tokens, credentials, ports, LLM executor, projects, remote exposure, notifications, and client registration. Then it:
 
-1. Generates `~/.niwa/` with config files and a fresh SQLite DB (or uses an existing one)
-2. Builds 4 Docker images
-3. Starts 5 containers (`docker compose up -d`)
-4. Healthchecks the gateway
-5. Optionally registers itself with Claude Code (via `claude mcp add`) and OpenClaw (via `openclaw mcp set`)
-6. Prints endpoints and tokens
+1. Creates `~/.niwa/` with `config/`, `data/`, `logs/`, `secrets/`, `caddy/`, `bin/`
+2. Generates `secrets/mcp.env` (chmod 600) with all env vars and tokens
+3. Generates `docker-compose.yml` from the template with all values substituted
+4. Generates MCP catalog (`config/niwa-catalog.yaml`) with the user's server names
+5. Bootstraps a fresh SQLite DB from `niwa-app/db/schema.sql` (with kanban columns, default project, and schema_version baseline)
+6. Builds 4 Docker images (`tasks-mcp`, `notes-mcp`, `platform-mcp`, `app`) and pulls `mcp/filesystem`
+7. Starts 6 containers via `docker compose up -d` (socket-proxy, mcp-gateway, mcp-gateway-sse, app, caddy, terminal)
+8. Runs healthchecks on gateway, app, and caddy
+9. Installs the **task executor** as a systemd service (Linux) or launchd agent (macOS) if enabled
+10. Installs the **hosting server** as a systemd service for serving deployed project sites
+11. Optionally registers with Claude Code and/or OpenClaw
+12. Prints endpoints, tokens, and next steps
 
 Total: **3-5 minutes** on a warm cache.
 
@@ -134,6 +141,12 @@ Total: **3-5 minutes** on a warm cache.
 ./niwa status               # show status of an existing install
 ./niwa restart              # docker compose restart
 ./niwa logs [service]       # tail container logs (default: mcp-gateway)
+./niwa logs executor        # tail executor log (host-side)
+./niwa config               # show all configuration
+./niwa config <key> <val>   # update a config value
+./niwa backup               # backup DB with 7-day rotation
+./niwa update               # pull latest, rebuild, restart
+./niwa hosting              # set up web hosting for projects
 ./niwa uninstall            # tear down (containers + images + install dir)
 ./niwa uninstall --keep-data    # keep DB and configs
 ./niwa uninstall -y         # skip confirmation
@@ -267,8 +280,8 @@ niwa/
 
 ## Known limitations
 
-- **No fresh-machine test on Linux** yet. macOS + OrbStack is the validated path. Linux paths (systemd unit, rootless socket detection) are written but unverified end-to-end.
-- **Migraciones de esquema**: soportadas via `bin/niwa migrate` — aplica migraciones SQL pendientes con seguimiento de versión.
+- **Linux fresh-machine install**: audited and fixed for Ubuntu 22.04/24.04 VPS. The installer creates system-level systemd units (executor + hosting server) when running as root, with a dedicated `niwa` user. Rootless Docker paths are detected automatically.
+- **Schema migrations**: supported via `bin/niwa migrate` — applies pending SQL migrations with version tracking. Fresh installs pre-seed `schema_version` with all existing migrations so `migrate` is a no-op on day one.
 - **Imágenes Docker fijadas**: las imágenes base usan versiones específicas (no `:latest`) para reproducibilidad.
 - **No backup or upgrade subcommand** yet. Back up `~/.niwa/data/niwa.sqlite3` yourself; update via `git pull && ./niwa uninstall --keep-data && ./niwa install`.
 - **Token rotation** not exposed as a command. Edit `~/.niwa/secrets/mcp.env` and `niwa restart`.

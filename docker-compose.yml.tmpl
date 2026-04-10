@@ -116,7 +116,7 @@ services:
 
   app:
     # Niwa app — web UI for tasks/projects/notes/system
-    image: ${INSTANCE_NAME}-app:${NIWA_VERSION:-0.1.0}
+    image: ${INSTANCE_NAME}-app:${NIWA_VERSION}
     container_name: ${INSTANCE_NAME}-app
     restart: unless-stopped
     env_file:
@@ -165,11 +165,15 @@ services:
     # Web terminal — provides a real host shell via the browser.
     # Uses chroot /host to access the host filesystem from inside the container.
     # Protected with the same Niwa username/password (basic auth).
+    #
+    # network_mode: host is required for chroot /host to work correctly.
+    # Docker ignores `ports:` with host networking, so we bind ttyd directly
+    # to the configured terminal port.  Use NIWA_TERMINAL_PORT to change it.
     image: tsl0922/ttyd:1.7.7
     container_name: ${INSTANCE_NAME}-terminal
     restart: unless-stopped
     command: >-
-      ttyd -W -p 7681
+      ttyd -W -p ${NIWA_TERMINAL_PORT}
       -c ${NIWA_APP_USERNAME}:${NIWA_APP_PASSWORD}
       chroot /host bash -l
     pid: host
@@ -177,8 +181,6 @@ services:
     network_mode: host
     volumes:
       - /:/host
-    ports:
-      - "${NIWA_BIND_HOST}:${NIWA_TERMINAL_PORT}:7681"
     mem_limit: 128m
     logging:
       driver: json-file

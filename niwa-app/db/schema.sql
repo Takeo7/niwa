@@ -238,3 +238,10 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+-- ── Schema versioning (migration tracking) ──
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER PRIMARY KEY,
+    applied_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    filename    TEXT
+);

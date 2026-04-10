@@ -1122,6 +1122,28 @@ def execute_install(cfg: WizardConfig) -> None:
                 "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
                 ("proj-default", "default", "Default", "proyecto", f"Default project for {cfg.instance_name}", 1, ts, ts),
             )
+            # Create schema_version table and mark all existing migrations as applied.
+            # This prevents `bin/niwa migrate` from re-running them on a fresh DB.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    filename TEXT
+                )
+            """)
+            migrations_dir = REPO_ROOT / "niwa-app" / "db" / "migrations"
+            if migrations_dir.is_dir():
+                import glob as _glob
+                for mfile in sorted(_glob.glob(str(migrations_dir / "*.sql"))):
+                    fname = os.path.basename(mfile)
+                    try:
+                        ver = int(fname.split("_")[0])
+                    except (ValueError, IndexError):
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO schema_version (version, filename) VALUES (?, ?)",
+                        (ver, fname),
+                    )
             conn.commit()
         ok(f"Fresh DB created at {cfg.db_path}")
 
@@ -1213,6 +1235,9 @@ def execute_install(cfg: WizardConfig) -> None:
     # Install task executor (host-side launchd/systemd) if enabled
     if cfg.executor_enabled:
         install_task_executor(cfg)
+
+    # Install hosting server (host-side, always — needed for deploy_web)
+    install_hosting_server(cfg)
 
     # Configure cloudflared if remote mode
     if cfg.mode == "remote" and cfg.cloudflared_tunnel_id:
@@ -1465,10 +1490,10 @@ WantedBy=default.target
             warn(f"Enable manually: systemctl --user enable --now {unit_name}")
 
 
-def _uninstall_task_executor(install_dir: Path, instance: str) -> None:
-    """Stop and remove the launchd agent / systemd unit."""
+def _uninstall_service(install_dir: Path, instance: str, service_type: str) -> None:
+    """Stop and remove the launchd agent / systemd unit for a service type (executor or hosting)."""
     if sys.platform == "darwin":
-        label = f"com.niwa.{instance}.executor"
+        label = f"com.niwa.{instance}.{service_type}"
         plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
         if plist_path.exists():
             uid = os.getuid()
@@ -1476,12 +1501,160 @@ def _uninstall_task_executor(install_dir: Path, instance: str) -> None:
             plist_path.unlink()
             ok(f"Removed launchd agent {label}")
     elif sys.platform.startswith("linux"):
-        unit_name = f"niwa-{instance}-executor.service"
-        unit_path = Path.home() / ".config" / "systemd" / "user" / unit_name
-        if unit_path.exists():
+        unit_name = f"niwa-{instance}-{service_type}.service"
+        # Check system-level first (root installs)
+        system_path = Path("/etc/systemd/system") / unit_name
+        if system_path.exists():
+            subprocess.run(["systemctl", "disable", "--now", unit_name], capture_output=True)
+            system_path.unlink()
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+            ok(f"Removed system systemd unit {unit_name}")
+        # Check user-level
+        user_path = Path.home() / ".config" / "systemd" / "user" / unit_name
+        if user_path.exists():
             subprocess.run(["systemctl", "--user", "disable", "--now", unit_name], capture_output=True)
-            unit_path.unlink()
-            ok(f"Removed systemd unit {unit_name}")
+            user_path.unlink()
+            ok(f"Removed user systemd unit {unit_name}")
+
+
+def _uninstall_task_executor(install_dir: Path, instance: str) -> None:
+    """Stop and remove the executor and hosting server services."""
+    _uninstall_service(install_dir, instance, "executor")
+    _uninstall_service(install_dir, instance, "hosting")
+
+
+def install_hosting_server(cfg: WizardConfig) -> None:
+    """Copy hosting-server.py to the install dir and register it as a service."""
+    src = REPO_ROOT / "bin" / "hosting-server.py"
+    if not src.exists():
+        warn("hosting-server.py not found in repo — skipping hosting server install")
+        return
+    info("Installing hosting server...")
+    bin_dir = cfg.niwa_home / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    dest = bin_dir / "hosting-server.py"
+    shutil.copy(src, dest)
+    dest.chmod(0o755)
+
+    # Create projects directory for hosted sites
+    projects_dir = cfg.niwa_home / "data" / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    ok(f"Copied hosting server to {dest}")
+
+    if sys.platform == "darwin":
+        label = f"com.niwa.{cfg.instance_name}.hosting"
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path = cfg.niwa_home / "logs" / "hosting.log"
+        plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>{dest}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NIWA_DB_PATH</key>
+        <string>{cfg.db_path}</string>
+        <key>NIWA_PROJECTS_DIR</key>
+        <string>{projects_dir}</string>
+        <key>NIWA_HOSTING_PORT</key>
+        <string>8880</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+</dict>
+</plist>
+"""
+        plist_path.write_text(plist)
+        uid = os.getuid()
+        subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
+        result = subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            ok(f"Loaded hosting server launchd agent {label}")
+        else:
+            warn(f"launchctl bootstrap failed for hosting: {result.stderr.strip()[:300]}")
+    elif sys.platform.startswith("linux"):
+        run_as_root = os.getuid() == 0
+        log_path = cfg.niwa_home / "logs" / "hosting.log"
+        unit_name = f"niwa-{cfg.instance_name}-hosting.service"
+
+        if run_as_root:
+            shared_dir = Path("/opt") / cfg.instance_name
+            hosting_projects_dir = shared_dir / "data" / "projects"
+            hosting_projects_dir.mkdir(parents=True, exist_ok=True)
+            unit_dir = Path("/etc/systemd/system")
+            unit = f"""[Unit]
+Description=Niwa hosting server ({cfg.instance_name})
+After=network.target
+
+[Service]
+Type=simple
+User=niwa
+Group=niwa
+Environment="NIWA_DB_PATH={shared_dir / 'data' / 'niwa.sqlite3'}"
+Environment="NIWA_PROJECTS_DIR={hosting_projects_dir}"
+Environment="NIWA_HOSTING_PORT=8880"
+ExecStart=/usr/bin/env python3 {dest}
+StandardOutput=append:{shared_dir / 'logs' / 'hosting.log'}
+StandardError=append:{shared_dir / 'logs' / 'hosting.log'}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"""
+            unit_path = unit_dir / unit_name
+            unit_path.write_text(unit)
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+            result = subprocess.run(["systemctl", "enable", "--now", unit_name], capture_output=True, text=True)
+        else:
+            unit_dir = Path.home() / ".config" / "systemd" / "user"
+            unit_dir.mkdir(parents=True, exist_ok=True)
+            unit = f"""[Unit]
+Description=Niwa hosting server ({cfg.instance_name})
+After=network.target
+
+[Service]
+Type=simple
+Environment="NIWA_DB_PATH={cfg.db_path}"
+Environment="NIWA_PROJECTS_DIR={projects_dir}"
+Environment="NIWA_HOSTING_PORT=8880"
+ExecStart=/usr/bin/env python3 {dest}
+StandardOutput=append:{log_path}
+StandardError=append:{log_path}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"""
+            unit_path = unit_dir / unit_name
+            unit_path.write_text(unit)
+            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+            result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            ok(f"Enabled and started {unit_name}")
+        else:
+            warn(f"Hosting server systemctl enable failed: {result.stderr.strip()[:300]}")
+    else:
+        warn(f"Unknown platform — hosting server copied but not started. Run: python3 {dest}")
 
 
 def configure_cloudflared(cfg: WizardConfig) -> None:
