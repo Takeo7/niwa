@@ -1,0 +1,8 @@
+{
+  "name": "niwa-files",
+  "description": "Registro de tareas y solicitudes de entrada",
+  "tools": [
+    "task_log",
+    "task_request_input"
+  ]
+}

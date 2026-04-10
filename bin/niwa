@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Niwa CLI — comandos de gestión."""
+import argparse
+import glob
+import os
+import sqlite3
+import sys
+
+NIWA_VERSION = "0.1.0"
+
+PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+
+
+def get_db_path():
+    return os.environ.get('NIWA_DB_PATH', os.path.expanduser('~/.niwa/data/niwa.sqlite3'))
+
+
+def cmd_migrate(args):
+    """Ejecuta migraciones pendientes de la base de datos."""
+    db_path = get_db_path()
+    if not os.path.exists(db_path):
+        print(f"Base de datos no encontrada en {db_path}")
+        print("Ejecuta 'niwa install' primero, o configura NIWA_DB_PATH.")
+        sys.exit(1)
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=5000')
+
+    # Asegurar que existe la tabla schema_version
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            filename TEXT
+        )
+    """)
+    conn.commit()
+
+    # Obtener versión actual
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = row[0] if row[0] is not None else 0
+
+    print(f"Versión actual del esquema: {current}")
+
+    # Buscar migraciones
+    migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
+    migrations = sorted(glob.glob(os.path.join(migrations_dir, '*.sql')))
+
+    pending = []
+    for m in migrations:
+        fname = os.path.basename(m)
+        try:
+            ver = int(fname.split('_')[0])
+        except (ValueError, IndexError):
+            continue
+        if ver > current:
+            pending.append((ver, fname, m))
+
+    if not pending:
+        print("No hay migraciones pendientes.")
+        return
+
+    if not args.yes:
+        print(f"\n{len(pending)} migración(es) pendiente(s):")
+        for ver, fname, _ in pending:
+            print(f"  {fname}")
+        resp = input("\n¿Aplicar? [s/N] ")
+        if resp.lower() not in ('s', 'si', 'sí', 'y', 'yes'):
+            print("Abortado.")
+            return
+
+    for ver, fname, path in pending:
+        print(f"  Aplicando {fname}...", end=" ")
+        try:
+            sql = open(path).read()
+            conn.executescript(sql)
+            conn.execute(
+                "INSERT INTO schema_version (version, filename) VALUES (?, ?)",
+                (ver, fname)
+            )
+            conn.commit()
+            print("✓")
+        except Exception as e:
+            print(f"✗ ERROR: {e}")
+            sys.exit(1)
+
+    new_version = max(ver for ver, _, _ in pending)
+    print(f"\nEsquema actualizado: v{current} → v{new_version}")
+    conn.close()
+
+
+def cmd_version(args):
+    """Muestra información de versión."""
+    db_path = get_db_path()
+    print(f"Niwa {NIWA_VERSION}")
+    if os.path.exists(db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+            schema_ver = row[0] if row[0] is not None else "desconocida"
+        except Exception:
+            schema_ver = "desconocida"
+        conn.close()
+        print(f"Esquema: v{schema_ver}")
+        print(f"Base de datos: {db_path}")
+    else:
+        print(f"Base de datos: no encontrada ({db_path})")
+
+
+def cmd_check(args):
+    """Verificación pre-vuelo: comprueba la salud de la instalación."""
+    issues = []
+
+    # Verificar BD
+    db_path = get_db_path()
+    if not os.path.exists(db_path):
+        issues.append(f"Base de datos no encontrada: {db_path}")
+    else:
+        conn = sqlite3.connect(db_path)
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        required = {'tasks', 'projects', 'settings', 'chat_sessions', 'chat_messages', 'oauth_tokens'}
+        missing = required - tables
+        if missing:
+            issues.append(f"Tablas faltantes: {missing}")
+        conn.close()
+
+    # Verificar migraciones
+    migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
+    if not os.path.isdir(migrations_dir):
+        issues.append("Directorio de migraciones no encontrado")
+
+    # Verificar sintaxis Python
+    backend_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'backend')
+    import py_compile
+    for f in os.listdir(backend_dir):
+        if f.endswith('.py'):
+            try:
+                py_compile.compile(os.path.join(backend_dir, f), doraise=True)
+            except py_compile.PyCompileError as e:
+                issues.append(f"Error de sintaxis en {f}: {e}")
+
+    # Verificar catálogos MCP
+    catalog_dir = os.path.join(PROJECT_ROOT, 'config', 'mcp-catalog')
+    if os.path.isdir(catalog_dir):
+        for f in os.listdir(catalog_dir):
+            if f.endswith('.json') and f != 'combined.json':
+                try:
+                    import json
+                    with open(os.path.join(catalog_dir, f)) as fh:
+                        json.load(fh)
+                except Exception as e:
+                    issues.append(f"Catálogo MCP inválido {f}: {e}")
+    else:
+        issues.append("Directorio de catálogos MCP no encontrado")
+
+    if issues:
+        print("⚠ Problemas encontrados:")
+        for i in issues:
+            print(f"  • {i}")
+        sys.exit(1)
+    else:
+        print("✓ Todas las verificaciones pasaron")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=f'Niwa {NIWA_VERSION} — CLI de gestión')
+    sub = parser.add_subparsers(dest='command')
+
+    p_migrate = sub.add_parser('migrate', help='Ejecutar migraciones pendientes de la BD')
+    p_migrate.add_argument('-y', '--yes', action='store_true', help='Saltar confirmación')
+
+    sub.add_parser('version', help='Mostrar versión e información del esquema')
+    sub.add_parser('check', help='Verificación pre-vuelo de la instalación')
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    cmds = {'migrate': cmd_migrate, 'version': cmd_version, 'check': cmd_check}
+    cmds[args.command](args)
+
+
+if __name__ == '__main__':
+    main()

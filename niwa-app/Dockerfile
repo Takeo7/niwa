@@ -1,6 +1,6 @@
 # Niwa app — portable web UI for the Niwa pack.
 # Single-stage Python with no extra deps (uses stdlib only).
-FROM python:3.12-slim
+FROM python:3.12.8-slim
 
 WORKDIR /app
 COPY backend/ /app/backend/

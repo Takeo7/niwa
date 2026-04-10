@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "domains": {
+    "niwa-core": {
+      "name": "niwa-core",
+      "description": "Gestión de tareas, proyectos, memoria y pipeline",
+      "tools": [
+        "task_list",
+        "task_get",
+        "task_create",
+        "task_update",
+        "task_update_status",
+        "project_list",
+        "project_get",
+        "project_create",
+        "project_update",
+        "project_context",
+        "pipeline_status",
+        "memory_store",
+        "memory_search",
+        "memory_list"
+      ]
+    },
+    "niwa-files": {
+      "name": "niwa-files",
+      "description": "Registro de tareas y solicitudes de entrada",
+      "tools": [
+        "task_log",
+        "task_request_input"
+      ]
+    },
+    "niwa-ops": {
+      "name": "niwa-ops",
+      "description": "Búsqueda web, generación de imágenes, despliegue y hosting",
+      "tools": [
+        "web_search",
+        "generate_image",
+        "deploy_web",
+        "undeploy_web",
+        "list_deployments"
+      ]
+    }
+  },
+  "total_tools": 21
+}

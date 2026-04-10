@@ -116,7 +116,7 @@ services:
 
   app:
     # Niwa app — web UI for tasks/projects/notes/system
-    image: ${INSTANCE_NAME}-app:latest
+    image: ${INSTANCE_NAME}-app:${NIWA_VERSION:-0.1.0}
     container_name: ${INSTANCE_NAME}-app
     restart: unless-stopped
     env_file:
@@ -139,7 +139,7 @@ services:
         max-file: "3"
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.9-alpine
     container_name: ${INSTANCE_NAME}-caddy
     restart: unless-stopped
     depends_on:

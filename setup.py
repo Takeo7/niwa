@@ -28,6 +28,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+NIWA_VERSION = "0.1.0"
+
 # ────────────────────────── pretty output ──────────────────────────
 NO_COLOR = os.environ.get("NO_COLOR") or not sys.stdout.isatty()
 RESET = "" if NO_COLOR else "\033[0m"
@@ -389,7 +391,7 @@ registry:
     description: "Read+write access to tasks/projects DB"
     title: "{tasks_name.capitalize()}"
     type: "server"
-    image: "{instance_name}-tasks-mcp:latest"
+    image: "{instance_name}-tasks-mcp:{NIWA_VERSION}"
     tools:
       - name: "task_list"
       - name: "task_get"
@@ -408,7 +410,7 @@ registry:
     description: "Personal notes (typed) and inbox"
     title: "{notes_name.capitalize()}"
     type: "server"
-    image: "{instance_name}-notes-mcp:latest"
+    image: "{instance_name}-notes-mcp:{NIWA_VERSION}"
     tools:
       - name: "note_list"
       - name: "note_get"
@@ -442,7 +444,7 @@ registry:
     description: "Container ops (list, logs, health, restart)"
     title: "{platform_name.capitalize()}"
     type: "server"
-    image: "{instance_name}-platform-mcp:latest"
+    image: "{instance_name}-platform-mcp:{NIWA_VERSION}"
     tools:
       - name: "container_list"
       - name: "container_health"
@@ -461,7 +463,7 @@ registry:
     description: "Filesystem access scoped to workspace and memory"
     title: "{fs_name.capitalize()}"
     type: "server"
-    image: "mcp/filesystem:latest"
+    image: "mcp/filesystem:2025.1"
     command:
       - "/workspace"
       - "/memory"
@@ -1021,6 +1023,7 @@ def execute_install(cfg: WizardConfig) -> None:
 
     # Build env vars dict
     env_vars = {
+        "NIWA_VERSION": NIWA_VERSION,
         "NIWA_MODE": cfg.mode,
         "NIWA_PUBLIC_DOMAIN": cfg.public_domain,
         "NIWA_CLOUDFLARE_TUNNEL_ID": cfg.cloudflared_tunnel_id,
@@ -1125,10 +1128,10 @@ def execute_install(cfg: WizardConfig) -> None:
     # Build images
     header("Step 14b — Building Docker images")
     images = [
-        ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"{cfg.instance_name}-tasks-mcp:latest"),
-        ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"{cfg.instance_name}-notes-mcp:latest"),
-        ("platform-mcp", REPO_ROOT / "servers" / "platform-mcp", f"{cfg.instance_name}-platform-mcp:latest"),
-        ("niwa-app", REPO_ROOT / "niwa-app", f"{cfg.instance_name}-app:latest"),
+        ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"{cfg.instance_name}-tasks-mcp:{NIWA_VERSION}"),
+        ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"{cfg.instance_name}-notes-mcp:{NIWA_VERSION}"),
+        ("platform-mcp", REPO_ROOT / "servers" / "platform-mcp", f"{cfg.instance_name}-platform-mcp:{NIWA_VERSION}"),
+        ("niwa-app", REPO_ROOT / "niwa-app", f"{cfg.instance_name}-app:{NIWA_VERSION}"),
     ]
     for name, ctx, tag in images:
         info(f"Building {name} → {tag}")
@@ -1144,8 +1147,8 @@ def execute_install(cfg: WizardConfig) -> None:
 
     # Pull mcp/filesystem
     info("Pulling mcp/filesystem (official catalog)...")
-    subprocess.run(["docker", "pull", "mcp/filesystem:latest"], check=False, capture_output=True)
-    ok("Pulled mcp/filesystem")
+    subprocess.run(["docker", "pull", "mcp/filesystem:2025.1"], check=False, capture_output=True)
+    ok("Pulled mcp/filesystem:2025.1")
 
     # docker compose up
     header("Step 14c — Starting the stack")
@@ -1706,8 +1709,12 @@ def cmd_uninstall(args) -> None:
     else:
         warn(f"docker compose down had issues: {result.stderr[:300]}")
 
-    # Remove images
+    # Remove images (both versioned and legacy :latest)
     images = [
+        f"{instance}-tasks-mcp:{NIWA_VERSION}",
+        f"{instance}-notes-mcp:{NIWA_VERSION}",
+        f"{instance}-platform-mcp:{NIWA_VERSION}",
+        f"{instance}-app:{NIWA_VERSION}",
         f"{instance}-tasks-mcp:latest",
         f"{instance}-notes-mcp:latest",
         f"{instance}-platform-mcp:latest",

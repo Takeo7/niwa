@@ -141,6 +141,28 @@ Total: **3-5 minutes** on a warm cache.
 
 All commands accept `--dir <path>` to point at a non-default install location.
 
+### Comandos de gestión
+
+```bash
+bin/niwa migrate        # Aplicar migraciones pendientes de la BD
+bin/niwa migrate -y     # Aplicar sin confirmación
+bin/niwa version        # Mostrar versión e información del esquema
+bin/niwa check          # Verificación pre-vuelo de la instalación
+```
+
+### Catálogo MCP
+
+Las 21 herramientas del servidor tasks-mcp están organizadas en 3 dominios:
+
+- **niwa-core** (14 herramientas): tareas, proyectos, memoria, pipeline
+- **niwa-ops** (5 herramientas): búsqueda web, imágenes, despliegue
+- **niwa-files** (2 herramientas): registro de tareas, solicitudes de entrada
+
+Los catálogos se encuentran en `config/mcp-catalog/`. Para validar:
+```bash
+python3 bin/generate-mcp-catalog.py
+```
+
 ## Architecture
 
 ```
@@ -166,7 +188,7 @@ All commands accept `--dir <path>` to point at a non-default install location.
                   ┌───────────┬───────────┬───────────┐
                   │           │           │           │
               tasks-mcp     notes-mcp    platform-mcp  mcp/filesystem
-              (7 tools)    (22 tools)  (4 tools)    (11 tools)
+              (21 tools)   (22 tools)  (4 tools)    (11 tools)
                   │           │           │           │
                   ▼           ▼           ▼           ▼
                 niwa.sqlite3 (RW)    socket-proxy   /workspace + /memory
@@ -202,11 +224,18 @@ niwa/
 ├── niwa.env.example               # example env vars
 ├── caddy/Caddyfile                # reverse proxy config
 ├── bin/
-│   └── task-executor.py           # host-side executor (optional)
+│   ├── task-executor.py           # host-side executor (optional)
+│   ├── niwa                       # CLI de gestión (migrate, version, check)
+│   └── generate-mcp-catalog.py    # validador de catálogo MCP
 ├── servers/
 │   ├── tasks-mcp/                 # tasks/projects MCP (Python + mcp SDK)
 │   ├── notes-mcp/                 # typed notes MCP (decision/idea/research/diary)
 │   └── platform-mcp/              # docker ops MCP
+├── config/
+│   └── mcp-catalog/               # catálogos MCP por dominio (core, ops, files)
+├── tests/
+│   ├── test_smoke.py              # pruebas de humo (esquema, MCP, sintaxis)
+│   └── test_e2e.py                # prueba end-to-end del executor
 ├── niwa-app/                      # web UI (Python stdlib, no framework)
 │   ├── backend/app.py             # all routes + handlers
 │   ├── frontend/                  # vanilla JS SPA, 6 views
@@ -239,8 +268,8 @@ niwa/
 ## Known limitations
 
 - **No fresh-machine test on Linux** yet. macOS + OrbStack is the validated path. Linux paths (systemd unit, rootless socket detection) are written but unverified end-to-end.
-- **Schema migrations**: only "fresh DB" or "use as-is" — no auto-migrate of an old DB to the latest schema.
-- **Image tags use `:latest`** for upstream containers (`docker/mcp-gateway`, `caddy:2-alpine`, `tecnativa/docker-socket-proxy`, `mcp/filesystem`). Bump risk — pin in compose if you need stability.
+- **Migraciones de esquema**: soportadas via `bin/niwa migrate` — aplica migraciones SQL pendientes con seguimiento de versión.
+- **Imágenes Docker fijadas**: las imágenes base usan versiones específicas (no `:latest`) para reproducibilidad.
 - **No backup or upgrade subcommand** yet. Back up `~/.niwa/data/niwa.sqlite3` yourself; update via `git pull && ./niwa uninstall --keep-data && ./niwa install`.
 - **Token rotation** not exposed as a command. Edit `~/.niwa/secrets/mcp.env` and `niwa restart`.
 - Single-user, single-instance per install location.

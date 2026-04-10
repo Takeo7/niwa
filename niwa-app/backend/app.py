@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import html
+import ipaddress
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import re
 import secrets
 import sqlite3
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -44,6 +46,7 @@ NIWA_APP_USERNAME = os.environ.get('NIWA_APP_USERNAME', 'admin')
 NIWA_APP_PASSWORD = os.environ.get('NIWA_APP_PASSWORD', 'change-me')
 NIWA_APP_AUTH_REQUIRED = os.environ.get('NIWA_APP_AUTH_REQUIRED', '1') != '0'
 NIWA_APP_SESSION_SECRET = os.environ.get('NIWA_APP_SESSION_SECRET', 'niwa-dev-secret-change-me')
+NIWA_VERSION = "0.1.0"
 NIWA_APP_SESSION_COOKIE = os.environ.get('NIWA_APP_SESSION_COOKIE', 'niwa_session')
 NIWA_APP_SESSION_TTL_HOURS = int(os.environ.get('NIWA_APP_SESSION_TTL_HOURS', '168'))
 # Cookie Domain attribute. Empty (default) = host-only cookie, works on any domain.
@@ -166,9 +169,35 @@ def is_authenticated(handler) -> bool:
     return bool(morsel and verify_session_token(morsel.value))
 
 
+_TRUSTED_PROXIES_RAW = os.environ.get('NIWA_TRUSTED_PROXIES', '').split(',')
+_TRUSTED_PROXY_NETS = []
+for _p in _TRUSTED_PROXIES_RAW:
+    _p = _p.strip()
+    if _p:
+        try:
+            _TRUSTED_PROXY_NETS.append(ipaddress.ip_network(_p, strict=False))
+        except ValueError:
+            pass
+
+
+def _is_trusted_proxy(addr: str) -> bool:
+    """Verifica si una IP es un proxy confiable (configurado o red Docker interna)."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    # Redes Docker internas (172.16.0.0/12) siempre son confiables
+    if ip in ipaddress.ip_network('172.16.0.0/12'):
+        return True
+    if ip.is_loopback:
+        return True
+    return any(ip in net for net in _TRUSTED_PROXY_NETS)
+
+
 def client_ip(handler) -> str:
+    """Obtiene la IP del cliente, confiando en X-Forwarded-For solo desde proxies conocidos."""
     forwarded = handler.headers.get('X-Forwarded-For', '').split(',')[0].strip()
-    if forwarded:
+    if forwarded and _is_trusted_proxy(handler.client_address[0]):
         return forwarded
     return handler.client_address[0] if handler.client_address else 'unknown'
 
@@ -704,8 +733,51 @@ try:
 except Exception as e:
     logger.warning("Migration runner failed: %s", e)
 
-if NIWA_APP_USERNAME == 'admin' and NIWA_APP_PASSWORD == 'change-me':
-    logger.warning("⚠ SECURITY: Using default credentials. Change NIWA_APP_USERNAME and NIWA_APP_PASSWORD for production.")
+def _security_preflight():
+    """Rechaza arrancar con credenciales inseguras cuando está expuesto a la red."""
+    bind_addr = os.environ.get('NIWA_APP_HOST', '0.0.0.0')
+    is_local = bind_addr in ('127.0.0.1', 'localhost', '::1')
+
+    if not is_local and NIWA_APP_AUTH_REQUIRED:
+        issues = []
+        if NIWA_APP_USERNAME == 'admin':
+            issues.append('NIWA_APP_USERNAME sigue siendo "admin"')
+        if NIWA_APP_PASSWORD in ('change-me', 'testpass123', ''):
+            issues.append('NIWA_APP_PASSWORD es inseguro o por defecto')
+        session_secret = os.environ.get('NIWA_APP_SESSION_SECRET', 'niwa-dev-secret-change-me')
+        if session_secret == 'niwa-dev-secret-change-me':
+            issues.append('NIWA_APP_SESSION_SECRET no ha sido cambiado')
+
+        if issues:
+            msg = (
+                "\n╔══════════════════════════════════════════════════════╗\n"
+                "║  ⛔ NIWA: CREDENCIALES INSEGURAS EN MODO REMOTO     ║\n"
+                "╠══════════════════════════════════════════════════════╣\n"
+            )
+            for issue in issues:
+                msg += f"║  • {issue:<50s} ║\n"
+            msg += (
+                "╠══════════════════════════════════════════════════════╣\n"
+                f"║  Niwa está configurado para escuchar en {bind_addr:<13s}║\n"
+                "║  con credenciales por defecto. Esto es peligroso.   ║\n"
+                "║                                                     ║\n"
+                "║  Configura estas variables de entorno:               ║\n"
+                "║    NIWA_APP_USERNAME, NIWA_APP_PASSWORD,             ║\n"
+                "║    NIWA_APP_SESSION_SECRET                           ║\n"
+                "║                                                     ║\n"
+                "║  O usa NIWA_APP_HOST=127.0.0.1 para modo local.     ║\n"
+                "╚══════════════════════════════════════════════════════╝\n"
+            )
+            logger.critical(msg)
+            sys.exit(1)
+
+    # Aviso si X-Forwarded-For no está configurado en modo remoto
+    if not _TRUSTED_PROXY_NETS and not is_local:
+        logger.warning("⚠ NIWA_TRUSTED_PROXIES no configurado. X-Forwarded-For no será confiable.")
+
+    # Aviso suave para credenciales por defecto en modo local
+    if is_local and NIWA_APP_USERNAME == 'admin' and NIWA_APP_PASSWORD == 'change-me':
+        logger.warning("⚠ SEGURIDAD: Credenciales por defecto. Cambia NIWA_APP_USERNAME y NIWA_APP_PASSWORD para producción.")
 
 
 def get_chat_sessions():
@@ -2918,6 +2990,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_metrics)
         if path == '/api/metrics/executor':
             return self._json(get_executor_metrics())
+        if path == '/api/version':
+            return self._json({'version': NIWA_VERSION, 'name': 'Niwa'})
         if path == '/api/health/full':
             return self._json(fetch_health())
         if path == '/api/stats':
@@ -3351,6 +3425,7 @@ if __name__ == '__main__':
     _scheduler = scheduler.SchedulerThread(db_conn, BASE_DIR.parent)
     _scheduler.start()
     logger.info('Scheduler started (daemon thread)')
+    _security_preflight()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    logger.info(f'Niwa app listening on {HOST}:{PORT}')
+    logger.info(f'Niwa app v{NIWA_VERSION} escuchando en {HOST}:{PORT}')
     server.serve_forever()

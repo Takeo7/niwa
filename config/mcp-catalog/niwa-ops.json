@@ -1,0 +1,11 @@
+{
+  "name": "niwa-ops",
+  "description": "Búsqueda web, generación de imágenes, despliegue y hosting",
+  "tools": [
+    "web_search",
+    "generate_image",
+    "deploy_web",
+    "undeploy_web",
+    "list_deployments"
+  ]
+}
