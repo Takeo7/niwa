@@ -258,6 +258,38 @@ def fetch_projects():
         return [dict(r) for r in rows]
 
 
+def _table_exists(conn, name):
+    return conn.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()[0] > 0
+
+
+def get_executor_metrics():
+    c = db_conn()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    return {
+        "today": {
+            "completed": c.execute("SELECT COUNT(*) FROM tasks WHERE status='hecha' AND date(completed_at)=?", (today,)).fetchone()[0],
+            "failed": c.execute("SELECT COUNT(*) FROM tasks WHERE status='bloqueada' AND date(updated_at)=?", (today,)).fetchone()[0],
+            "pending": c.execute("SELECT COUNT(*) FROM tasks WHERE status='pendiente'").fetchone()[0],
+            "in_progress": c.execute("SELECT COUNT(*) FROM tasks WHERE status='en_progreso'").fetchone()[0],
+        },
+        "week": {
+            "completed": c.execute("SELECT COUNT(*) FROM tasks WHERE status='hecha' AND date(completed_at)>=?", (week_ago,)).fetchone()[0],
+            "failed": c.execute("SELECT COUNT(*) FROM tasks WHERE status='bloqueada' AND date(updated_at)>=?", (week_ago,)).fetchone()[0],
+        },
+        "avg_execution_time_seconds": c.execute(
+            "SELECT AVG(CAST((julianday(completed_at)-julianday(created_at))*86400 AS INTEGER)) "
+            "FROM tasks WHERE status='hecha' AND completed_at IS NOT NULL AND date(completed_at)>=?", (week_ago,)
+        ).fetchone()[0] or 0,
+        "success_rate": round(
+            (c.execute("SELECT COUNT(*) FROM tasks WHERE status='hecha' AND date(completed_at)>=?", (week_ago,)).fetchone()[0] /
+             max(1, c.execute("SELECT COUNT(*) FROM tasks WHERE status IN ('hecha','bloqueada') AND date(updated_at)>=?", (week_ago,)).fetchone()[0])) * 100, 1
+        ),
+        "deployments": c.execute("SELECT COUNT(*) FROM deployments WHERE status='active'").fetchone()[0] if _table_exists(c, "deployments") else 0,
+    }
+
+
 def fetch_stats():
     with db_conn() as conn:
         total = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
@@ -744,7 +776,36 @@ def get_chat_messages(session_id):
             )
             c.commit()
             result.append({'id': msg_id, 'session_id': session_id, 'role': 'assistant', 'content': content, 'task_id': d['id'], 'status': 'done', 'created_at': now})
-    
+
+        # Also check for tasks waiting for input (revision status)
+        waiting = c.execute(
+            "SELECT t.id, t.title, e.payload_json "
+            "FROM tasks t JOIN task_events e ON e.task_id=t.id AND e.type='alerted' "
+            "WHERE t.source='mcp:tasks' AND t.status='revision' "
+            "AND t.created_at >= ? "
+            "AND t.id NOT IN (SELECT task_id FROM chat_messages WHERE session_id=? AND task_id IS NOT NULL) "
+            "ORDER BY e.created_at DESC LIMIT 5",
+            (session_start, session_id),
+        ).fetchall()
+        for w in waiting:
+            w = dict(w)
+            question = ""
+            if w.get("payload_json"):
+                try:
+                    payload = json.loads(w["payload_json"])
+                    question = payload.get("question", "")
+                except Exception:
+                    pass
+            content = f"⏳ La tarea **{w['title']}** necesita tu input:\n\n{question}" if question else f"⏳ La tarea **{w['title']}** est\u00e1 esperando tu input."
+            msg_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+            c.execute(
+                "INSERT INTO chat_messages (id, session_id, role, content, task_id, status, created_at) VALUES (?,?,?,?,?,?,?)",
+                (msg_id, session_id, 'assistant', content, w['id'], 'done', now),
+            )
+            c.commit()
+            result.append({'id': msg_id, 'session_id': session_id, 'role': 'assistant', 'content': content, 'task_id': w['id'], 'status': 'done', 'created_at': now})
+
     return result
 
 
@@ -1665,6 +1726,8 @@ class Handler(BaseHTTPRequestHandler):
                 _metrics['tasks_pending'] = _mc.execute("SELECT count(*) FROM tasks WHERE source != 'chat' AND status='pendiente'").fetchone()[0]
                 _metrics['tasks_blocked'] = _mc.execute("SELECT count(*) FROM tasks WHERE source != 'chat' AND status='bloqueada'").fetchone()[0]
             return self._json(_metrics)
+        if path == '/api/metrics/executor':
+            return self._json(get_executor_metrics())
         if path == '/api/health/full':
             return self._json(fetch_health())
         if path == '/api/stats':

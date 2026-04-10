@@ -77,6 +77,16 @@ This means a task like "research competitors and create 5 research notes" will *
 
 The executor is not a task runner with an LLM. It's an agent runtime where Claude has full access to your Niwa instance.
 
+### Figma Integration
+
+If you use Claude Code with Figma MCP connected, the executor can read Figma designs during task execution. To reference a design in a task:
+
+1. Include the Figma file URL in the task description
+2. Claude will extract components, styles, and layout from the design
+3. Claude can then implement the UI matching the Figma specs
+
+This works automatically when Claude Code has `claude.ai Figma` connected (check via `claude mcp list`).
+
 ### MCP Tools
 
 Any LLM client connected to the gateway can call:

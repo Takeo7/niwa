@@ -7,6 +7,16 @@ Write verbs: task_create, task_update_status
 Backing store: /data/niwa.sqlite3 (mounted RW; reads still use mode=ro URI).
 """
 
+# Hosting module import (optional — gracefully degrades if not available)
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).parent.parent.parent / "niwa-app" / "backend"))
+    from hosting import deploy_project, undeploy_project, list_deployments as _list_deployments
+    _HOSTING_AVAILABLE = True
+except ImportError:
+    _HOSTING_AVAILABLE = False
+
 import asyncio
 import html
 import json
@@ -260,6 +270,32 @@ async def list_tools() -> list[Tool]:
                     "limit": {"type": "integer", "default": 50},
                 },
             },
+        ),
+        Tool(
+            name="deploy_web",
+            description="Deploy a project as a static website. Makes it accessible via URL. Returns the live URL.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "slug": {"type": "string", "description": "URL slug (default: project slug)"},
+                },
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
+            name="undeploy_web",
+            description="Take down a deployed project website.",
+            inputSchema={
+                "type": "object",
+                "properties": {"project_id": {"type": "string"}},
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
+            name="list_deployments",
+            description="List all currently deployed web projects with their URLs.",
+            inputSchema={"type": "object", "properties": {}},
         ),
     ]
 
@@ -664,6 +700,25 @@ def _task_request_input(args):
         c.commit()
     return {"ok": True, "status": "revision", "event_id": eid, "question": question}
 
+def _deploy_web(args):
+    if not _HOSTING_AVAILABLE:
+        return {"error": "Hosting module not available. Install hosting.py in the backend."}
+    return deploy_project(args["project_id"], args.get("slug", ""))
+
+
+def _undeploy_web(args):
+    if not _HOSTING_AVAILABLE:
+        return {"error": "Hosting module not available"}
+    undeploy_project(args["project_id"])
+    return {"ok": True}
+
+
+def _list_deployments_handler(args):
+    if not _HOSTING_AVAILABLE:
+        return {"error": "Hosting module not available"}
+    return _list_deployments()
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
@@ -701,6 +756,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _memory_search(arguments or {})
         elif name == "memory_list":
             payload = _memory_list(arguments or {})
+        elif name == "deploy_web":
+            payload = _deploy_web(arguments or {})
+        elif name == "undeploy_web":
+            payload = _undeploy_web(arguments or {})
+        elif name == "list_deployments":
+            payload = _list_deployments_handler(arguments or {})
         else:
             return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
         return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]
