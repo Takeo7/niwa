@@ -1,299 +1,381 @@
 # Niwa
 
-> Personal MCP gateway with built-in task management, notes, platform ops and filesystem access — installable on any machine with Docker.
+> Personal MCP gateway with a React web app, 13 configurable services, autonomous 3-tier task execution, and 21 MCP tools — installable on any machine with Docker.
 
-**Status:** beta — feature-complete and tested on both macOS (OrbStack) and Linux VPS (Ubuntu 24.04). Autonomous task execution verified end-to-end.
+**Version:** 0.1.0
+**Status:** beta — feature-complete and tested on macOS (OrbStack) and Linux VPS (Ubuntu 24.04). 31 smoke tests pass.
 
 ## What is Niwa
 
 Niwa is a self-contained Docker stack you install on your machine. It gives you:
 
-- **44 MCP tools** that any Claude/LLM client can call to manage your tasks, notes, projects, containers, and files.
-- **A web UI** (Niwa app) with 6 views: dashboard, kanban, projects, notes, history, system (8 sub-tabs: overview, routines, logs, config, stats, KPIs, docs, styles).
-- **Two MCP gateway transports** (streamable HTTP + legacy SSE) so it works with both modern and older MCP clients (Claude Code, OpenClaw, custom builds).
+- **A React 19 web app** (Vite + TypeScript + Mantine v7) with 9 views: Dashboard, Chat, Tasks, Kanban, Projects, Notes, History, Metrics, System.
+- **21 MCP tools** in the tasks-mcp server, organized in 3 domains (core 14, ops 5, files 2).
+- **13 configurable services** with guided setup: 7 LLM providers, 5 image generators, 4 search engines, notifications (Telegram + webhook), hosting, and OpenClaw orchestration.
+- **Two MCP gateway transports** (streamable HTTP + legacy SSE) for both modern and older MCP clients.
+- **3-tier autonomous executor**: Haiku (chat) → Opus (planner) → Sonnet (executor), with automatic retry and heartbeat.
+- **OAuth support**: Anthropic (API key + setup token) and OpenAI (API key + OAuth with PKCE for ChatGPT subscriptions).
 - **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.
-- **Autonomous task executor** (host-side systemd/launchd worker) that runs pending tasks via Claude / GPT (via `llm` CLI) / Gemini / custom command. Supports API key, setup token, and OAuth authentication.
-- **Built-in scheduler** with 7 routines (healthcheck, daily backup, task review, idle project review, morning brief, daily summary, daily improvement).
 - **Web terminal** (ttyd) for server administration from the browser.
-- **Theme customization** with 14 color pickers, font/size/radius controls, and 6 presets.
-- **Integrations config** (Telegram, webhook, LLM provider) configurable from UI, API, or CLI.
-- **Aislamiento Docker** via socket-proxy: only one container ever touches the Docker socket.
+- **Theme customization** with 7 presets, 7 color pickers, font selector, and radius control.
 
-It runs as 6 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`, `terminal`) + spawns ephemeral MCP server containers per tool call. The executor runs on the host as a systemd service (as a dedicated `niwa` user when installed as root).
+It runs as 6 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`, `terminal`) + spawns ephemeral MCP server containers per tool call. The executor runs on the host as a systemd service (Linux) or launchd agent (macOS).
 
-## What you can do with it
+## The 9 Views
 
-Once installed, any LLM client connected to the gateway can:
+| View | Route | Description |
+|------|-------|-------------|
+| **Dashboard** | `/dashboard` | KPI cards, 7-day velocity chart, blocked/overdue items, project progress, activity feed |
+| **Chat** | `/chat` | Conversational AI interface with session management, markdown rendering, inline image display |
+| **Tasks** | `/tasks` | Sortable data table with filters (status, priority, project), task detail with labels/attachments/pipeline |
+| **Kanban** | `/kanban` | Drag-and-drop board via @dnd-kit with project filter |
+| **Projects** | `/projects` | Card grid with progress bars, file tree browser, file uploads |
+| **Notes** | `/notes` | Markdown notes with project association, tags, and edit/preview toggle |
+| **History** | `/history` | Completed task log with search, status filter, pagination, duration stats |
+| **Metrics** | `/metrics` | Executor performance: success rate, completion trends, avg execution time |
+| **System** | `/system` | 6 tabs: Servicios, Agentes, Config, Rutinas, Logs, Estilos |
 
-### Chat (new)
+### System Tabs
 
-The web UI includes a **chat interface** where you talk directly to Claude. It uses a two-tier model:
+1. **Servicios** — Configure all 13 services with dynamic forms, conditional fields, OAuth flows, setup guides, and connection testing.
+2. **Agentes** — Configure the 3-tier LLM agents (Chat/Planner/Executor) with model selection and max turns.
+3. **Config** — Executor settings (poll interval, timeout, idle review) and app language.
+4. **Rutinas** — Scheduled routines with cron expressions, enable/disable, manual trigger.
+5. **Logs** — Color-coded log viewer for App, Executor, MCP, Gateway, and Sync sources.
+6. **Estilos** — Theme customization: 7 presets, color pickers, font family, border radius, live preview.
 
-- **Chat messages → Haiku** (fast, ~10s response) — handles conversation, answers questions, orchestrates
-- **Complex tasks → Opus/Sonnet** (powerful, ~60-90s) — does real work: coding, analysis, file changes
+## 13 Configurable Services
 
-When you ask the chat for something that requires work (e.g., "haz una web que diga hola mundo"), Haiku **creates a task** in the kanban and the executor picks it up automatically with the full model. You see the task progress in real-time on the kanban board.
+All services are configured through the web UI with guided setup wizards and connection testing.
 
-### Memory (new)
+### LLM Providers (7)
 
-Niwa has **persistent memory** across tasks and conversations:
+| Provider | Auth | Models |
+|----------|------|--------|
+| **Anthropic** | API key or Setup Token | Haiku 4.5, Sonnet 4.6, Opus 4.6 |
+| **OpenAI** | API key or OAuth (ChatGPT subscription) | GPT-5.4, GPT-5.4 Mini, GPT-5.4 Pro, o4 Mini, o3 Pro |
+| **Google** | API key | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 2.5 Pro, Gemini 2.5 Flash |
+| **Ollama** | Base URL (local) | Dynamically detected from Ollama API |
+| **Groq** | API key | Llama 3.3 70B, Llama 3.1 8B, Mixtral 8x7B, DeepSeek R1 Distill 70B |
+| **Mistral** | API key | Mistral Large, Medium, Small, Codestral |
+| **DeepSeek** | API key | DeepSeek V3 (chat), DeepSeek R1 (reasoner) |
 
-- `memory_store` — save facts, preferences, decisions, constraints
-- `memory_search` / `memory_list` — recall previous knowledge
-- The executor loads relevant memories into every task prompt automatically
-- Categories: `preference`, `decision`, `constraint`, `pattern`, `general`
-- Scoped per-project or global
+### Image Generation (5 providers)
 
-### Web Search (new)
+OpenAI DALL-E, Stability AI, Replicate, fal.ai, Together AI — all selectable from a single service with dynamic model options.
 
-Claude can search the web during task execution via the `web_search` MCP tool:
+### Web Search (4 providers)
 
-- Uses **SearXNG** if `NIWA_SEARXNG_URL` is configured (self-hosted, private)
-- Falls back to **DuckDuckGo** instant answers (no API key needed)
+DuckDuckGo (free, no key), SearXNG (self-hosted), Tavily, Brave Search.
 
-### Morning Brief (new)
+### Notifications
 
-The `morning-brief` scheduler routine now calls the LLM to generate an **actionable daily brief** in Spanish:
+- **Telegram** — Bot token + chat ID
+- **Webhook** — Generic (Slack, Discord, n8n, Make, etc.)
 
-- Analyzes overdue, blocked, and pending tasks by priority
-- Generates 1-2 sentence summary + 3-5 bullet priorities
-- Sent via Telegram (configure `NIWA_TELEGRAM_BOT_TOKEN` + `NIWA_TELEGRAM_CHAT_ID`)
-- Falls back to SQL stats if no LLM command configured
+### Hosting
 
-### Agentic Execution (the key differentiator)
+Static website hosting on subdomains with guided DNS setup, configurable domain and port.
 
-When the executor runs a task via `claude -p --max-turns 50`, Claude Code operates as a **full agentic loop** — not a one-shot call. During execution, Claude can:
+### OpenClaw
 
-- **Read and write files** in the project directory
-- **Create sub-tasks** via `task_create` MCP tool — breaking complex work into smaller pieces
-- **Log progress** via `task_log` — structured findings/decisions visible in the task timeline  
-- **Search memory** via `memory_search` — recall knowledge from previous tasks
-- **Store learnings** via `memory_store` — persist facts for future tasks
-- **Create notes** via `note_create` — document decisions, research, ideas in the project
-- **Search the web** via `web_search` — look up documentation, APIs, solutions
-- **Request human input** via `task_request_input` — formally pause and ask a question
+Dynamic detection + auto-config. Modes: disabled, MCP client, bidirectional. Configures gateway URL, token, and exposed domains.
 
-This means a task like "research competitors and create 5 research notes" will **actually create those 5 notes in your database**. A task like "refactor the auth module" can create sub-tasks, log its progress, and store architectural decisions — all within a single execution.
+## 3-Tier Autonomous Executor
 
-The executor is not a task runner with an LLM. It's an agent runtime where Claude has full access to your Niwa instance.
+The task executor (`bin/task-executor.py`) runs on the host and polls the database for pending tasks. It uses a 3-tier LLM system:
 
-### Figma Integration
+| Tier | Role | Default Model | Timeout |
+|------|------|---------------|---------|
+| **Tier 1: Chat** | Fast conversational responses | Haiku | 120s |
+| **Tier 2: Planner** | Analyzes complexity, splits complex tasks into subtasks | Opus | 300s |
+| **Tier 3: Executor** | Implements code, writes files, does real work | Sonnet | 1800s |
 
-If you use Claude Code with Figma MCP connected, the executor can read Figma designs during task execution. To reference a design in a task:
+**How it works:**
 
-1. Include the Figma file URL in the task description
-2. Claude will extract components, styles, and layout from the design
-3. Claude can then implement the UI matching the Figma specs
+1. **Chat tasks** (from the web UI) go directly to Tier 1 (Haiku). Simple questions get answered immediately; work requests create a new auto-assigned task.
+2. **Regular tasks** go to Tier 2 (Opus) for analysis. The planner chooses:
+   - **Execute directly** — simple task, proceed to Tier 3.
+   - **Split into subtasks** — complex task, creates 2-5 subtasks that execute independently.
+3. **Tier 3** (Sonnet) receives a rich prompt with project context, active tasks, recent completions, architectural decisions, notes, and memories. It implements the actual work.
 
-This works automatically when Claude Code has `claude.ai Figma` connected (check via `claude mcp list`).
+**Additional features:**
+- Concurrent execution with configurable max workers (default 3)
+- Automatic retry with enriched error context on first failure
+- Heartbeat thread prevents stale task detection
+- Hot reload of configuration without restart
+- Consecutive failure protection (pauses after 3 failures)
 
-### MCP Tools
+## 21 MCP Tools
 
-Any LLM client connected to the gateway can call:
+Organized in 3 domains (`config/mcp-catalog/`):
 
-- `task_list / task_create / task_update_status / project_context / pipeline_status` — task management + full project context in one call
-- `note_list / note_create / decision_create / idea_create / research_create / diary_append_today` — typed notes with bidirectional task↔idea links
-- `memory_store / memory_search / memory_list` — persistent cross-task knowledge
-- `web_search` — search the web (SearXNG or DuckDuckGo)
-- `task_log` — structured progress logging without polluting task notes
-- `task_request_input` — formally pause and ask the human a specific question
-- `container_list / container_logs / container_health / container_restart` — Docker ops on a whitelisted set of containers
-- `read_file / write_file / list_directory / search_files ...` — filesystem access scoped to two paths you pick
-- Full list: see [docs/TOOL-REFERENCE.md](./docs/TOOL-REFERENCE.md) (coming)
+### niwa-core (14 tools) — Tasks, projects, memory, pipeline
 
-The killer feature: **persistent context across LLM conversations**. Create an idea today, ask Claude to refine it next week, and it has the full history.
+| Tool | Description |
+|------|-------------|
+| `task_list` | List tasks with filters (status, area, project, limit) |
+| `task_get` | Get a single task by ID |
+| `task_create` | Create a task (auto-execute with `assigned_to_claude=true`) |
+| `task_update` | Update task fields |
+| `task_update_status` | Change task status |
+| `project_list` | List all projects |
+| `project_get` | Get project details |
+| `project_create` | Create a new project |
+| `project_update` | Update project fields |
+| `project_context` | Full project context in one call (tasks, notes, decisions) |
+| `pipeline_status` | Aggregate task counts by status |
+| `memory_store` | Persist facts/preferences (global or per-project) |
+| `memory_search` | Search long-term memory by text |
+| `memory_list` | List all memories |
 
-## Quick install
+### niwa-ops (5 tools) — Search, images, deployment
 
-You need:
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web (SearXNG or DuckDuckGo fallback) |
+| `generate_image` | Generate images from text (DALL-E, Stability, etc.) |
+| `deploy_web` | Deploy a project as a static website |
+| `undeploy_web` | Take down a deployed site |
+| `list_deployments` | List all active deployments |
+
+### niwa-files (2 tools) — Logging and human interaction
+
+| Tool | Description |
+|------|-------------|
+| `task_log` | Record findings/progress on a task |
+| `task_request_input` | Pause and ask the human a question |
+
+## Authentication
+
+### Web UI Login
+
+Session-based authentication with HMAC-SHA256 signed cookies. Configurable credentials, 7-day session TTL, login rate limiting (5 attempts per 15 minutes).
+
+### OAuth (OpenAI)
+
+Full PKCE OAuth flow for ChatGPT subscription authentication. The web UI provides a guided flow: click "Sign in with OpenAI" → authorize in popup → tokens stored automatically. Includes automatic token refresh.
+
+### ForwardAuth
+
+`/auth/check` endpoint for Traefik integration — enables SSO across subdomains.
+
+## Quick Install
+
+**Requirements:**
 - macOS or Linux (Ubuntu 22.04/24.04 tested)
-- Docker (OrbStack, Docker Desktop, Colima, or rootful Docker/Podman)
-- Python 3.9+
-- Node.js 18+ (for building the React frontend inside Docker — included in the build stage)
+- Docker (OrbStack, Docker Desktop, Colima, or rootful Docker)
+- Python 3.10+
+- Node.js 22+ (used in the Docker multi-stage build for the React frontend)
 
 ```bash
 git clone https://github.com/yumewagener/niwa
 cd niwa
-python3 setup.py install    # or: ./niwa install
+python3 setup.py install
 ```
 
-The installer is a 13-step interactive wizard that asks about: instance name, install location, database, filesystem scope, restart whitelist, tokens, credentials, ports, LLM executor, projects, remote exposure, notifications, and client registration. Then it:
+The installer is a **14-step interactive wizard** that configures: instance name, install location, database, filesystem scope, restart whitelist, tokens, credentials, ports, LLM executor, projects, remote exposure, notifications, and MCP client registration.
 
-1. Creates `~/.niwa/` with `config/`, `data/`, `logs/`, `secrets/`, `caddy/`, `bin/`
-2. Generates `secrets/mcp.env` (chmod 600) with all env vars and tokens
-3. Generates `docker-compose.yml` from the template with all values substituted
-4. Generates MCP catalog (`config/niwa-catalog.yaml`) with the user's server names
-5. Bootstraps a fresh SQLite DB from `niwa-app/db/schema.sql` (with kanban columns, default project, and schema_version baseline)
-6. Builds 4 Docker images (`tasks-mcp`, `notes-mcp`, `platform-mcp`, `app`) and pulls `mcp/filesystem`
-7. Starts 6 containers via `docker compose up -d` (socket-proxy, mcp-gateway, mcp-gateway-sse, app, caddy, terminal)
-8. Runs healthchecks on gateway, app, and caddy
-9. Installs the **task executor** as a systemd service (Linux) or launchd agent (macOS) if enabled
-10. Installs the **hosting server** as a systemd service for serving deployed project sites
-11. Optionally registers with Claude Code and/or OpenClaw
-12. Prints endpoints, tokens, and next steps
+**During install, `setup.py` offers to automatically install:**
+- Claude CLI (via npm)
+- OpenClaw (via npm)
 
-Total: **3-5 minutes** on a warm cache.
+**What gets created:**
 
-## CLI commands
+1. `~/.niwa/` directory with `config/`, `data/`, `logs/`, `secrets/`, `caddy/`, `bin/`
+2. `secrets/mcp.env` (chmod 600) with all env vars and tokens
+3. `docker-compose.yml` generated from template
+4. MCP catalog YAML with 4 server registrations (tasks, notes, platform, filesystem)
+5. Fresh SQLite DB with schema, kanban columns, default project, and version tracking
+6. 4 custom Docker images built (`tasks-mcp`, `notes-mcp`, `platform-mcp`, `niwa-app`) + `mcp/filesystem:2025.1` pulled
+7. 6 containers started via `docker compose up -d`
+8. Task executor installed as systemd unit (Linux) or launchd agent (macOS)
+9. Hosting server installed as a system service
+10. Optional: MCP client registration with Claude Code and/or OpenClaw
+
+## CLI Commands
+
+### setup.py commands
 
 ```bash
-./niwa install              # interactive install (default)
-./niwa status               # show status of an existing install
-./niwa restart              # docker compose restart
-./niwa logs [service]       # tail container logs (default: mcp-gateway)
-./niwa logs executor        # tail executor log (host-side)
-./niwa config               # show all configuration
-./niwa config <key> <val>   # update a config value
-./niwa backup               # backup DB with 7-day rotation
-./niwa update               # pull latest, rebuild, restart
-./niwa hosting              # set up web hosting for projects
-./niwa uninstall            # tear down (containers + images + install dir)
-./niwa uninstall --keep-data    # keep DB and configs
-./niwa uninstall -y         # skip confirmation
+python3 setup.py install        # interactive 14-step wizard (default)
+python3 setup.py status         # show running status (container health, endpoints)
+python3 setup.py restart        # restart all Docker containers
+python3 setup.py logs [service] # tail container or executor logs
+python3 setup.py config         # view or update configuration
+python3 setup.py backup         # online SQLite backup with 7-day rotation
+python3 setup.py update         # git pull, rebuild, restart (preserves data)
+python3 setup.py hosting        # set up web hosting with Caddy
+python3 setup.py uninstall      # tear down (containers + images + install dir)
 ```
 
-All commands accept `--dir <path>` to point at a non-default install location.
-
-### Comandos de gestión
+### bin/niwa management commands
 
 ```bash
-bin/niwa migrate        # Aplicar migraciones pendientes de la BD
-bin/niwa migrate -y     # Aplicar sin confirmación
-bin/niwa version        # Mostrar versión e información del esquema
-bin/niwa check          # Verificación pre-vuelo de la instalación
+bin/niwa migrate            # apply pending DB migrations
+bin/niwa migrate -y         # apply without confirmation
+bin/niwa version            # show version and schema info
+bin/niwa check              # pre-flight health verification
 ```
 
-### Catálogo MCP
-
-Las 21 herramientas del servidor tasks-mcp están organizadas en 3 dominios:
-
-- **niwa-core** (14 herramientas): tareas, proyectos, memoria, pipeline
-- **niwa-ops** (5 herramientas): búsqueda web, imágenes, despliegue
-- **niwa-files** (2 herramientas): registro de tareas, solicitudes de entrada
-
-Los catálogos se encuentran en `config/mcp-catalog/`. Para validar:
-```bash
-python3 bin/generate-mcp-catalog.py
-```
+`check` verifies: database tables exist, migrations directory present, Python syntax valid, MCP catalog JSON valid.
 
 ## Architecture
 
 ```
-                          Local clients
-                          (Claude Code, OpenClaw, n8n, custom)
-                                  │
-                       ┌──────────┴──────────┐
-                       │                     │
-                       ▼                     ▼
-            127.0.0.1:18810/mcp    127.0.0.1:18812/sse
-            (streaming HTTP)        (SSE legacy)
-                       │                     │
-                       └──────────┬──────────┘
-                                  │
-                          mcp-gateway (×2 twin)
-                                  │
-                                  │  DOCKER_HOST=tcp://socket-proxy:2375
-                                  ▼
-                        socket-proxy (only container with /var/run/docker.sock)
-                                  │
-                                  │  spawn on-demand (--rm)
-                                  ▼
-                  ┌───────────┬───────────┬───────────┐
-                  │           │           │           │
-              tasks-mcp     notes-mcp    platform-mcp  mcp/filesystem
-              (21 tools)   (22 tools)  (4 tools)    (11 tools)
-                  │           │           │           │
-                  ▼           ▼           ▼           ▼
-                niwa.sqlite3 (RW)    socket-proxy   /workspace + /memory
-                                                    (scoped paths)
+                      Local clients
+                      (Claude Code, OpenClaw, n8n, custom)
+                              │
+                   ┌──────────┴──────────┐
+                   │                     │
+                   ▼                     ▼
+        127.0.0.1:18810/mcp    127.0.0.1:18812/sse
+        (streaming HTTP)        (SSE legacy)
+                   │                     │
+                   └──────────┬──────────┘
+                              │
+                      mcp-gateway (×2 twin instances)
+                              │
+                              │  DOCKER_HOST=tcp://socket-proxy:2375
+                              ▼
+                    socket-proxy (only container with Docker socket)
+                              │
+                              │  spawn on-demand (--rm)
+                              ▼
+              ┌───────────┬───────────┬───────────┐
+              │           │           │           │
+          tasks-mcp    notes-mcp  platform-mcp  mcp/filesystem
+          (21 tools)   (notes)    (Docker ops)  (filesystem)
+              │           │           │           │
+              ▼           ▼           ▼           ▼
+            niwa.sqlite3 (RW)    socket-proxy   /workspace + /memory
 
 
-            niwa-app (web UI, port 8080)   caddy (reverse proxy, bearer auth)
-            ─────────────────────────       ─────────────────────────────────
-            <instance>-app:latest           caddy:2-alpine
-            backend/app.py                  fronts mcp-gateway for public access
-            frontend (vanilla JS SPA)       validates Authorization: Bearer
+        niwa-app (React 19 + Python backend, port 8080)
+        ────────────────────────────────────────────────
+        Multi-stage Docker build:
+          Stage 1: Node 22 → npm ci && npm run build (Vite)
+          Stage 2: Python 3.12 → serves React SPA + API
 
-            task-executor (host-side, optional, launchd/systemd)
-            ────────────────────────────────────────────────────
-            bin/task-executor.py
-            polls niwa.sqlite3 for status='pendiente' tasks
-            dispatches via configured LLM CLI (claude/llm/gemini/custom)
+        caddy (reverse proxy, bearer auth, port 18811)
+        terminal (ttyd web shell, port 7681)
+
+        task-executor (host-side, systemd/launchd)
+        ────────────────────────────────────────────
+        bin/task-executor.py
+        3-tier: Haiku (chat) → Opus (planner) → Sonnet (executor)
+        polls niwa.sqlite3 for pending tasks
 ```
 
-## Renameable
+## Docker Setup
 
-The 4 MCP servers are nameable per install. Defaults: `tasks`, `notes`, `platform`, `filesystem`. You can rename them in the wizard. The instance name (default `niwa`) prefixes container/image/network names so multiple installs can coexist on the same machine.
+**Multi-stage Dockerfile** (`niwa-app/Dockerfile`):
+- **Stage 1** (`node:22-slim`): `npm ci` + `npm run build` produces the React production bundle
+- **Stage 2** (`python:3.12.8-slim`): copies backend (pure stdlib Python, no pip), React build output, and legacy fallback. Serves on port 8080.
 
-## Project structure
+**6 containers** defined in `docker-compose.yml.tmpl`:
+
+| Container | Image | Purpose | Memory |
+|-----------|-------|---------|--------|
+| `socket-proxy` | `tecnativa/docker-socket-proxy:0.3.0` | Filtered Docker socket proxy | 64 MB |
+| `mcp-gateway` | `docker/mcp-gateway:0.1` | Streamable HTTP transport | 256 MB |
+| `mcp-gateway-sse` | `docker/mcp-gateway:0.1` | Legacy SSE transport | 256 MB |
+| `app` | `<instance>-app:<version>` | Niwa web app | 256 MB |
+| `caddy` | `caddy:2.9-alpine` | Reverse proxy with bearer auth | 64 MB |
+| `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal | 128 MB |
+
+All images use pinned versions (no `:latest`).
+
+## MCP Catalog
+
+The 21 tasks-mcp tools are organized in 3 domain catalogs at `config/mcp-catalog/`:
+
+- **niwa-core.json** (14 tools): task management, project management, memory, pipeline
+- **niwa-ops.json** (5 tools): web search, image generation, deployment/hosting
+- **niwa-files.json** (2 tools): task logging, human input requests
+- **combined.json**: master catalog referencing all 3 domains
+
+## Project Structure
 
 ```
 niwa/
 ├── README.md                      # this file
-├── INSTALL.md                     # detailed install guide
-├── niwa                           # CLI wrapper (bash → setup.py)
-├── setup.py                       # interactive installer (~1500 lines, stdlib only)
-├── docker-compose.yml.tmpl        # template (filled at install time → generates docker-compose.yml)
-├── niwa.env.example               # example env vars
-├── caddy/Caddyfile                # reverse proxy config
+├── setup.py                       # interactive installer (14 steps, stdlib only)
+├── docker-compose.yml.tmpl        # template (setup.py generates docker-compose.yml)
 ├── bin/
-│   ├── task-executor.py           # host-side executor (optional)
-│   ├── niwa                       # CLI de gestión (migrate, version, check)
-│   └── generate-mcp-catalog.py    # validador de catálogo MCP
+│   ├── task-executor.py           # host-side 3-tier executor (systemd/launchd)
+│   └── niwa                       # CLI: migrate, version, check
 ├── servers/
-│   ├── tasks-mcp/                 # tasks/projects MCP (Python + mcp SDK)
-│   ├── notes-mcp/                 # typed notes MCP (decision/idea/research/diary)
-│   └── platform-mcp/              # docker ops MCP
+│   └── tasks-mcp/
+│       └── server.py              # 21 MCP tools (Python + mcp SDK)
 ├── config/
-│   └── mcp-catalog/               # catálogos MCP por dominio (core, ops, files)
+│   └── mcp-catalog/               # 3 domain catalogs + combined.json
 ├── tests/
-│   ├── test_smoke.py              # pruebas de humo (esquema, MCP, sintaxis)
-│   └── test_e2e.py                # prueba end-to-end del executor
-├── niwa-app/                      # web UI (Python stdlib, no framework)
-│   ├── backend/app.py             # all routes + handlers
-│   ├── frontend/                  # vanilla JS SPA, 6 views
-│   ├── db/schema.sql              # authoritative schema
-│   └── Dockerfile
-└── docs/
-    ├── PORTABILITY-PLAN.md        # internal: design history
-    └── ISU-AUDIT.md               # internal: strip plan
+│   └── test_smoke.py              # 31 smoke tests (schema, MCP, syntax, services)
+├── niwa-app/
+│   ├── Dockerfile                 # multi-stage: Node 22 build → Python 3.12 runtime
+│   ├── backend/
+│   │   └── app.py                 # HTTP server (stdlib), 70+ API endpoints
+│   ├── frontend/
+│   │   ├── package.json           # React 19, Vite 8, Mantine 7, TypeScript 6
+│   │   └── src/                   # 43 TypeScript files
+│   │       ├── main.tsx           # entrypoint
+│   │       ├── app/               # App, Router, theme
+│   │       ├── shared/            # API client, queries, AppShell, types, Zustand store
+│   │       └── features/          # chat, dashboard, history, kanban, metrics, notes, projects, system, tasks
+│   └── db/
+│       ├── schema.sql             # authoritative schema (18 tables)
+│       └── migrations/            # versioned SQL migrations
+├── caddy/
+│   └── Caddyfile                  # reverse proxy config
+└── docs/                          # internal documentation
 ```
 
-## What's in / out of the install
+## Tests
 
-**Installed by default:**
-- 4 MCP servers (44 tools)
-- Niwa app web UI on port 8080 (configurable)
-- Caddy reverse proxy on port 18811
-- Two MCP gateway twins (streaming + SSE) on 18810/18812
+31 smoke tests across 10 test classes:
 
-**Not installed (optional, ask in the wizard):**
-- Cloudflare Tunnel for public exposure (needs cloudflared + a tunnel ID)
-- Task executor (needs an LLM CLI: claude / llm / gemini / custom command)
-- GitHub MCP catalog server (needs PAT, currently skipped)
-- Auto-registration with Claude Code or OpenClaw (only if detected and you say yes)
+```bash
+pytest tests/test_smoke.py -v
+```
 
-**Excluded entirely from the portable version:**
-- The 5 legacy views removed during the port: calendar, email, agents, connections, terminal
-- Google/Outlook OAuth flows
-- The full original Yume agent ecosystem (this pack ships the schema and the web UI; the agents themselves stay in your other systems)
+| Class | Tests | What it verifies |
+|-------|-------|------------------|
+| `TestInstalacionLimpia` | 4 | Schema creates all 18 tables, migrations are idempotent |
+| `TestAutenticacion` | 2 | Default credentials detected as insecure |
+| `TestSuperficieMCP` | 3 | Catalog files exist, tools match server, no duplicates across domains |
+| `TestSintaxisPython` | 3 | All Python files compile without errors |
+| `TestHosting` | 4 | Hosting service registered, prefix map, test action, deploy config |
+| `TestImageGeneration` | 6 | Image service exists, MCP tool present, catalog entry, config from DB |
+| `TestOpenClaw` | 5 | OpenClaw in registry, detect/config endpoints, prefix map, test action |
+| `TestAllEndpoints` | 1 | 17 critical API endpoint strings exist in app.py |
+| `TestFrontendBuild` | 3 | package.json exists, all versions pinned, 18 component files exist |
 
-## Known limitations
+All tests are structural — they verify file existence, SQL schema correctness, string presence, and Python syntax without starting any server.
 
-- **Linux fresh-machine install**: audited and fixed for Ubuntu 22.04/24.04 VPS. The installer creates system-level systemd units (executor + hosting server) when running as root, with a dedicated `niwa` user. Rootless Docker paths are detected automatically.
-- **Schema migrations**: supported via `bin/niwa migrate` — applies pending SQL migrations with version tracking. Fresh installs pre-seed `schema_version` with all existing migrations so `migrate` is a no-op on day one.
-- **Imágenes Docker fijadas**: las imágenes base usan versiones específicas (no `:latest`) para reproducibilidad.
-- **No backup or upgrade subcommand** yet. Back up `~/.niwa/data/niwa.sqlite3` yourself; update via `git pull && ./niwa uninstall --keep-data && ./niwa install`.
-- **Token rotation** not exposed as a command. Edit `~/.niwa/secrets/mcp.env` and `niwa restart`.
+## Security
+
+- **Default bind**: all ports on `127.0.0.1`. Not publicly reachable until you opt in.
+- **Fail-fast**: the server refuses to start if bound to a non-local address with default credentials.
+- **Tokens**: 256-bit (`secrets.token_hex(32)`), stored in `~/.niwa/secrets/mcp.env` (chmod 600).
+- **Session security**: HMAC-SHA256 signed cookies, constant-time comparison, configurable TTL.
+- **Login rate limiting**: 5 attempts per 15-minute window per IP, with lockout.
+- **Trusted proxy validation**: `X-Forwarded-For` only trusted from configured proxy networks.
+- **Path traversal protection**: all static file serving validates resolved paths.
+- **SQL injection prevention**: parameterized queries throughout, LIKE wildcards escaped.
+- **Sensitive data masking**: API keys, tokens, and secrets masked in API responses.
+- **Prompt injection mitigation**: chat messages wrapped in untrusted-input delimiters.
+- **Docker isolation**: only `socket-proxy` touches the Docker socket; all other containers go through the filtered proxy.
+
+## Renameable
+
+The 4 MCP servers are nameable per install (defaults: `tasks`, `notes`, `platform`, `filesystem`). The instance name (default `niwa`) prefixes container/image/network names so multiple installs can coexist on the same machine.
+
+## Known Limitations
+
 - Single-user, single-instance per install location.
-
-## Security model
-
-- All ports bind to `127.0.0.1` by default. Niwa is **not** publicly reachable until you opt in.
-- Tokens are 256-bit (`secrets.token_hex(32)`), stored in `~/.niwa/secrets/mcp.env` (chmod 600, dir chmod 700).
-- The gateway disables its own bearer-auth in container mode (limitation of `docker/mcp-gateway`); Caddy is the enforcement layer for any future remote exposure.
-- `platform-mcp` cannot restart containers in the Niwa stack itself (chicken-and-egg protection — hardcoded suffix exclusions in the wizard).
-- Read-only DB access is enforced in 3 layers: SQLite URI mode, helper functions, and tool input schemas.
+- Token rotation not exposed as a command — edit `~/.niwa/secrets/mcp.env` and restart.
+- The backend uses Python stdlib only (no framework) — works well for the current scope but may need a framework for significant feature additions.
 
 ## License
 
@@ -306,8 +388,10 @@ Built on top of:
 - [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) — socket isolation
 - [Caddy](https://caddyserver.com/) — reverse proxy
 - [@modelcontextprotocol/server-filesystem](https://hub.docker.com/r/mcp/filesystem) — filesystem MCP
-- The web app is a stripped-down derivative of a personal kanban app, ported and parameterized for portability.
+- [Mantine](https://mantine.dev/) — React component library
+- [TanStack Query](https://tanstack.com/query) — data fetching
+- [Vite](https://vite.dev/) — frontend build tool
 
 ---
 
-🌿 *Niwa* (庭) means "garden" in Japanese — the place where the personal system grows.
+*Niwa* (庭) means "garden" in Japanese — the place where the personal system grows.
