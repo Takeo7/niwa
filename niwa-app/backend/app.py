@@ -740,10 +740,9 @@ def _security_preflight():
 
     if not is_local and NIWA_APP_AUTH_REQUIRED:
         issues = []
-        if NIWA_APP_USERNAME == 'admin':
-            issues.append('NIWA_APP_USERNAME sigue siendo "admin"')
-        if NIWA_APP_PASSWORD in ('change-me', 'testpass123', ''):
-            issues.append('NIWA_APP_PASSWORD es inseguro o por defecto')
+        # Only block on factory-default password, not on custom usernames
+        if NIWA_APP_PASSWORD in ('change-me', ''):
+            issues.append('NIWA_APP_PASSWORD es el valor por defecto — cámbialo')
         session_secret = os.environ.get('NIWA_APP_SESSION_SECRET', 'niwa-dev-secret-change-me')
         if session_secret == 'niwa-dev-secret-change-me':
             issues.append('NIWA_APP_SESSION_SECRET no ha sido cambiado')

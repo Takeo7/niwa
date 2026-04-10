@@ -11,3 +11,4 @@ data/project-uploads/
 __pycache__/
 *.pyc
 data/settings.json
+frontend/dist
