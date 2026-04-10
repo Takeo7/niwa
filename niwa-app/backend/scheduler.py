@@ -444,13 +444,70 @@ BUILTIN_ROUTINES = [
     {
         "id": "morning-brief",
         "name": "Morning brief",
-        "description": "Morning overview of pending tasks, overdue items, and today's focus.",
+        "description": "LLM-generated morning overview: analyzes your tasks, priorities, and context to produce an actionable daily brief.",
         "schedule": "0 8 * * 1-5",
         "enabled": False,
         "action": "script",
         "action_config": {
-            "command": "python3 -c \"\nimport sqlite3, os\ndb = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')\nc = sqlite3.connect(db)\npending = c.execute(\\\"SELECT COUNT(*) FROM tasks WHERE status='pendiente'\\\").fetchone()[0]\nblocked = c.execute(\\\"SELECT COUNT(*) FROM tasks WHERE status='bloqueada'\\\").fetchone()[0]\noverdue = c.execute(\\\"SELECT COUNT(*) FROM tasks WHERE due_at IS NOT NULL AND date(due_at)<date('now') AND status NOT IN ('hecha','archivada')\\\").fetchone()[0]\nlines = ['*Morning Brief*', f'  Pending: {pending}', f'  Blocked: {blocked}', f'  Overdue: {overdue}']\ntop = c.execute(\\\"SELECT title FROM tasks WHERE status='pendiente' ORDER BY priority DESC LIMIT 3\\\").fetchall()\nif top:\n    lines.append('  Top tasks:')\n    for t in top:\n        lines.append(f'    - {t[0]}')\nprint(chr(10).join(lines))\n\"",
-            "timeout": 30,
+            "command": """python3 -c "
+import sqlite3, os, json, subprocess, shlex, sys
+db = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')
+llm = os.environ.get('NIWA_LLM_COMMAND', '').strip()
+c = sqlite3.connect(db)
+c.row_factory = sqlite3.Row
+
+# Build context
+pending = c.execute(\"SELECT title, priority, area, due_at FROM tasks WHERE status='pendiente' ORDER BY CASE priority WHEN 'critica' THEN 4 WHEN 'alta' THEN 3 WHEN 'media' THEN 2 ELSE 1 END DESC LIMIT 15\").fetchall()
+blocked = c.execute(\"SELECT title FROM tasks WHERE status='bloqueada' LIMIT 5\").fetchall()
+done_today = c.execute(\"SELECT COUNT(*) FROM tasks WHERE status='hecha' AND date(completed_at)=date('now')\").fetchone()[0]
+overdue = c.execute(\"SELECT title FROM tasks WHERE due_at IS NOT NULL AND date(due_at)<date('now') AND status NOT IN ('hecha','archivada') LIMIT 5\").fetchall()
+
+if not pending and not blocked:
+    print('No pending or blocked tasks. Have a great day!')
+    sys.exit(0)
+
+if not llm:
+    # Fallback: simple text summary
+    lines = ['*Morning Brief*']
+    if overdue:
+        lines.append('OVERDUE:')
+        for t in overdue: lines.append(f'  ! {t[0]}')
+    if blocked:
+        lines.append('BLOCKED:')
+        for t in blocked: lines.append(f'  x {t[0]}')
+    lines.append('PENDING (top 5):')
+    for t in list(pending)[:5]: lines.append(f'  o [{t[1]}] {t[0]}')
+    if done_today: lines.append(f'Done today: {done_today}')
+    print('\\n'.join(lines))
+    sys.exit(0)
+
+# LLM-generated brief
+ctx_lines = []
+if overdue:
+    ctx_lines.append('OVERDUE TASKS:')
+    for t in overdue: ctx_lines.append(f'  - {t[0]}')
+if blocked:
+    ctx_lines.append('BLOCKED TASKS:')
+    for t in blocked: ctx_lines.append(f'  - {t[0]}')
+ctx_lines.append(f'PENDING TASKS ({len(pending)} total, showing top 15):')
+for t in pending:
+    due = f' [due {t[3][:10]}]' if t[3] else ''
+    ctx_lines.append(f'  [{t[1]}] {t[0]} ({t[2]}){due}')
+if done_today:
+    ctx_lines.append(f'Completed today: {done_today} tasks')
+
+prompt = '''You are a personal assistant generating a morning brief.\nAnalyze the task list and write a concise, actionable morning brief in Spanish.\nFormat: 1-2 sentence summary, then 3-5 bullet points with priorities for today.\nBe specific, not generic. Highlight anything urgent or overdue.\n\n''' + '\\n'.join(ctx_lines)
+
+try:
+    cmd = shlex.split(llm) + [prompt]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    output = result.stdout.strip() or result.stderr.strip()
+    print(output or 'Brief not generated.')
+except Exception as e:
+    # Fallback to simple summary
+    print('*Morning Brief*\\n' + '\\n'.join(ctx_lines[:10]))
+""",
+            "timeout": 150,
         },
         "notify_channel": "telegram",
     },

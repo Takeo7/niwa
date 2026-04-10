@@ -179,6 +179,24 @@ def _resolve_project_dir(project_id: Optional[str]) -> Optional[Path]:
 
 
 # ────────────────────────── project context loader ──────────────────────────
+def _load_memories(project_id: Optional[str]) -> list[dict]:
+    """Load global + project-scoped memories to include in the prompt."""
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                """
+                SELECT key, value, category, project_id FROM memories
+                WHERE project_id IS NULL OR project_id = ?
+                ORDER BY category, updated_at DESC
+                LIMIT 30
+                """,
+                (project_id or "",),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []  # table may not exist in older installs
+
+
 def _load_project_context(project_id: Optional[str], current_task_id: str) -> dict:
     """Load rich context about the project to enrich the executor prompt."""
     ctx: dict = {
@@ -326,6 +344,20 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
             parts.append(f"  [{n.get('type', 'note')}] {n.get('title', '')}")
             if content:
                 parts.append(f"    {content}")
+
+    # Memories
+    memories = _load_memories(task["project_id"])
+    if memories:
+        parts.append("")
+        parts.append("MEMORY (persistent knowledge from previous tasks):")
+        by_cat: dict[str, list] = {}
+        for m in memories:
+            by_cat.setdefault(m.get("category", "general"), []).append(m)
+        for cat, items in by_cat.items():
+            parts.append(f"  [{cat}]")
+            for m in items[:10]:
+                scope = " (this project)" if m.get("project_id") else " (global)"
+                parts.append(f"    {m['key']}: {m['value']}{scope}")
 
     # Instructions
     parts.append("")

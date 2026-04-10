@@ -8,9 +8,12 @@ Backing store: /data/niwa.sqlite3 (mounted RW; reads still use mode=ro URI).
 """
 
 import asyncio
+import html
 import json
 import os
 import sqlite3
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -147,6 +150,68 @@ async def list_tools() -> list[Tool]:
             description="Formally ask the human a question before proceeding. Sets task to revision status. Use instead of just blocking.",
             inputSchema={"type": "object", "properties": {"task_id": {"type": "string"}, "question": {"type": "string"}, "context": {"type": "string"}}, "required": ["task_id", "question"]},
         ),
+        Tool(
+            name="web_search",
+            description=(
+                "Search the web for information. Uses SearXNG if configured (NIWA_SEARXNG_URL), "
+                "otherwise DuckDuckGo instant answers. Returns titles, URLs, and snippets."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="memory_store",
+            description=(
+                "Persist a fact or preference to long-term memory. Use for cross-task knowledge: "
+                "user preferences, architectural decisions, recurring patterns, learned constraints. "
+                "Overwrites if same key + project_id already exists."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Short identifier, e.g. 'prefers-typescript'"},
+                    "value": {"type": "string", "description": "The fact or preference to remember"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["preference", "decision", "constraint", "pattern", "general"],
+                        "default": "general",
+                    },
+                    "project_id": {"type": "string", "description": "Scope to a project (omit for global)"},
+                },
+                "required": ["key", "value"],
+            },
+        ),
+        Tool(
+            name="memory_search",
+            description="Search long-term memory by text. Returns matching memories ordered by recency.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Text to search in keys and values"},
+                    "category": {"type": "string", "enum": ["preference", "decision", "constraint", "pattern", "general"]},
+                    "project_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        ),
+        Tool(
+            name="memory_list",
+            description="List all memories, optionally filtered by category or project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "enum": ["preference", "decision", "constraint", "pattern", "general"]},
+                    "project_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 50},
+                },
+            },
+        ),
     ]
 
 
@@ -256,6 +321,164 @@ def _task_update_status(args: dict[str, Any]) -> dict[str, Any]:
 
 
 
+# ── web search ──
+
+_SEARXNG_URL = os.environ.get("NIWA_SEARXNG_URL", "").rstrip("/")
+
+
+def _web_search(args: dict) -> dict:
+    query = args.get("query", "").strip()
+    max_results = min(int(args.get("max_results", 5)), 10)
+    if not query:
+        raise ValueError("query cannot be empty")
+
+    # Try SearXNG first (self-hosted, if configured)
+    if _SEARXNG_URL:
+        try:
+            url = f"{_SEARXNG_URL}/search?q={urllib.parse.quote(query)}&format=json&categories=general"
+            req = urllib.request.Request(url, headers={"User-Agent": "niwa-mcp/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode())
+            results = [
+                {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+                for r in data.get("results", [])[:max_results]
+            ]
+            return {"query": query, "results": results, "source": "searxng"}
+        except Exception:
+            pass  # fall through to DuckDuckGo
+
+    # Fallback: DuckDuckGo instant answers API
+    try:
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(query)}&format=json&no_html=1&skip_disambig=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "niwa-mcp/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode())
+        results = []
+        # AbstractText is the main answer
+        if data.get("AbstractText"):
+            results.append({
+                "title": data.get("Heading", query),
+                "url": data.get("AbstractURL", ""),
+                "snippet": data["AbstractText"],
+            })
+        # RelatedTopics for more results
+        for topic in data.get("RelatedTopics", [])[:max_results - len(results)]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                results.append({
+                    "title": topic.get("Text", "")[:80],
+                    "url": topic.get("FirstURL", ""),
+                    "snippet": topic.get("Text", ""),
+                })
+        if not results:
+            results.append({"title": "No instant answer", "url": f"https://duckduckgo.com/?q={urllib.parse.quote(query)}", "snippet": "Try the search URL directly for full results."})
+        return {"query": query, "results": results, "source": "duckduckgo"}
+    except Exception as e:
+        return {"query": query, "results": [], "error": str(e)}
+
+
+# ── memories ──
+
+_MEMORIES_DDL = """
+CREATE TABLE IF NOT EXISTS memories (
+    id          TEXT PRIMARY KEY,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT 'general',
+    project_id  TEXT,
+    source      TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_key
+    ON memories(key, COALESCE(project_id,''));
+CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
+CREATE INDEX IF NOT EXISTS idx_memories_project   ON memories(project_id);
+"""
+
+
+def _ensure_memories_table() -> None:
+    with _rw_conn() as c:
+        c.executescript(_MEMORIES_DDL)
+
+
+try:
+    _ensure_memories_table()
+except Exception:
+    pass
+
+
+def _memory_store(args: dict) -> dict:
+    key = args.get("key", "").strip()
+    value = args.get("value", "").strip()
+    category = args.get("category", "general").strip() or "general"
+    project_id = args.get("project_id") or None
+    source = args.get("source", "claude").strip()
+    if not key:
+        raise ValueError("key cannot be empty")
+    if not value:
+        raise ValueError("value cannot be empty")
+    now = _now_iso()
+    mem_id = str(uuid.uuid4())
+    with _rw_conn() as c:
+        c.execute(
+            """
+            INSERT INTO memories (id, key, value, category, project_id, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(key, COALESCE(project_id,'')) DO UPDATE
+            SET value=excluded.value, category=excluded.category,
+                source=excluded.source, updated_at=excluded.updated_at
+            """,
+            (mem_id, key, value, category, project_id, source, now, now),
+        )
+        c.commit()
+    return {"ok": True, "key": key, "category": category}
+
+
+def _memory_search(args: dict) -> list:
+    q = args.get("query", "").strip().lower()
+    category = args.get("category") or None
+    project_id = args.get("project_id") or None
+    limit = min(int(args.get("limit", 20)), 50)
+    with _ro_conn() as c:
+        parts, params = [], []
+        if q:
+            parts.append("(lower(key) LIKE ? OR lower(value) LIKE ?)")
+            like = f"%{q}%"
+            params.extend([like, like])
+        if category:
+            parts.append("category = ?")
+            params.append(category)
+        if project_id:
+            parts.append("(project_id = ? OR project_id IS NULL)")
+            params.append(project_id)
+        where = ("WHERE " + " AND ".join(parts)) if parts else ""
+        rows = c.execute(
+            f"SELECT * FROM memories {where} ORDER BY updated_at DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def _memory_list(args: dict) -> list:
+    category = args.get("category") or None
+    project_id = args.get("project_id") or None
+    limit = min(int(args.get("limit", 50)), 200)
+    with _ro_conn() as c:
+        parts, params = [], []
+        if category:
+            parts.append("category = ?")
+            params.append(category)
+        if project_id:
+            parts.append("(project_id = ? OR project_id IS NULL)")
+            params.append(project_id)
+        where = ("WHERE " + " AND ".join(parts)) if parts else ""
+        rows = c.execute(
+            f"SELECT * FROM memories {where} ORDER BY category, key LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 def _project_context(args):
     project_id = args["project_id"]
     include_done = args.get("include_done", False)
@@ -340,6 +563,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _task_log(arguments or {})
         elif name == "task_request_input":
             payload = _task_request_input(arguments or {})
+        elif name == "web_search":
+            payload = _web_search(arguments or {})
+        elif name == "memory_store":
+            payload = _memory_store(arguments or {})
+        elif name == "memory_search":
+            payload = _memory_search(arguments or {})
+        elif name == "memory_list":
+            payload = _memory_list(arguments or {})
         else:
             return [TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
         return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]
