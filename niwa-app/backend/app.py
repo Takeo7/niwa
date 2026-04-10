@@ -1433,14 +1433,29 @@ def _get_service_status(service_id):
     svc_def = next((s for s in SERVICES_REGISTRY if s['id'] == service_id), None)
     if not svc_def:
         return {"status": "unknown", "message": "Servicio no encontrado"}
-    # Check required fields
+    # Legacy key fallback mapping (for services migrated from Config tab)
+    _LEGACY_FALLBACK = {
+        'svc.notify.telegram.bot_token': ['int.telegram_bot_token', 'NIWA_TELEGRAM_BOT_TOKEN'],
+        'svc.notify.telegram.chat_id': ['int.telegram_chat_id', 'NIWA_TELEGRAM_CHAT_ID'],
+        'svc.notify.webhook.url': ['int.webhook_url', 'NIWA_WEBHOOK_URL'],
+    }
+    # Check required fields (with legacy fallback)
     for field in svc_def['fields']:
         if field.get('required'):
             val = settings.get(field['key'], '')
             if not val:
+                # Check legacy keys
+                for legacy_key in _LEGACY_FALLBACK.get(field['key'], []):
+                    val = settings.get(legacy_key, '') or os.environ.get(legacy_key, '')
+                    if val:
+                        break
+            if not val:
                 return {"status": "not_configured", "message": f"Falta: {field['label']}"}
     # Has at least some config
     has_any = any(k.startswith(prefix) and v for k, v in settings.items())
+    # Also check legacy keys
+    if not has_any and service_id in ('notify_telegram', 'notify_webhook'):
+        has_any = any(settings.get(legacy, '') or os.environ.get(legacy, '') for legacy_keys in _LEGACY_FALLBACK.values() for legacy in legacy_keys)
     if has_any:
         return {"status": "configured", "message": "Configurado ✓"}
     return {"status": "not_configured", "message": "No configurado"}
@@ -1568,8 +1583,8 @@ def _test_service(service_id):
 
     # ── Notification services ──
     if service_id == "notify_telegram":
-        bot_token = settings.get("svc.notify.telegram.bot_token", "")
-        chat_id = settings.get("svc.notify.telegram.chat_id", "")
+        bot_token = settings.get("svc.notify.telegram.bot_token", "") or settings.get("int.telegram_bot_token", "") or os.environ.get("NIWA_TELEGRAM_BOT_TOKEN", "")
+        chat_id = settings.get("svc.notify.telegram.chat_id", "") or settings.get("int.telegram_chat_id", "") or os.environ.get("NIWA_TELEGRAM_CHAT_ID", "")
         if not bot_token:
             return {"ok": False, "message": "Falta el Bot Token."}
         if not chat_id:
