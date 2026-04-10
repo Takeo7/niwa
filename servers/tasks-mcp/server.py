@@ -269,7 +269,7 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
     area = args["area"]
     if area not in VALID_AREAS:
         raise ValueError(f"invalid area: {area}")
-    status = args.get("status", "inbox")
+    status = args.get("status", "pendiente")
     if status not in VALID_STATUSES:
         raise ValueError(f"invalid status: {status}")
     priority = args.get("priority", "media")

@@ -3280,8 +3280,8 @@ function renderChatMessages(messages) {
   el.innerHTML = messages.map(m => {
     const isUser = m.role === 'user';
     const align = isUser ? 'items-end' : 'items-start';
-    const bg = isUser ? 'var(--c-primary-container)' : 'var(--c-surface-container)';
-    const color = isUser ? 'var(--c-on-primary-container)' : 'var(--c-on-surface)';
+    const bg = isUser ? 'var(--c-primary-cont)' : 'var(--c-surface-cont)';
+    const color = isUser ? 'var(--c-on-primary-cont)' : 'var(--c-on-surface)';
     let content = (m.content || '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\[>[0-9]*m/g, '').replace(/\[<[a-z]/g, '').trim();
     content = escHtml(content);
     // Simple markdown: bold, code blocks, line breaks
