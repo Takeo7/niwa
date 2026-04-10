@@ -1580,12 +1580,16 @@ def _get_service_status(service_id):
         return {"status": "unknown", "message": "Servicio no encontrado"}
     # Special case: llm_anthropic with Setup Token doesn't need API key
     if service_id == "llm_anthropic":
-        auth_method = settings.get("svc.llm.anthropic.auth_method", "api_key")
+        auth_method = settings.get("svc.llm.anthropic.auth_method", "") or settings.get("int.llm_auth_method", "api_key")
         if auth_method == "setup_token":
             token = settings.get("svc.llm.anthropic.setup_token", "") or settings.get("int.llm_setup_token", "")
             if token:
                 return {"status": "configured", "message": "Setup Token configurado ✓"}
             return {"status": "not_configured", "message": "Falta el Setup Token"}
+        # Also check if legacy setup token exists even without explicit auth_method
+        legacy_token = settings.get("int.llm_setup_token", "")
+        if legacy_token and settings.get("int.llm_provider", "") in ("claude", "anthropic", ""):
+            return {"status": "configured", "message": "Setup Token configurado ✓ (legacy)"}
     # Special case: llm_openai with OAuth doesn't need API key
     if service_id == "llm_openai":
         auth_method = settings.get("svc.llm.openai.auth_method", "api_key")
