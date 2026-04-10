@@ -22,6 +22,8 @@ import health_service
 import scheduler
 import notifier
 import image_service
+import oauth
+import time as _time
 
 _scheduler: scheduler.SchedulerThread | None = None
 from http.cookies import SimpleCookie
@@ -1073,7 +1075,7 @@ def fetch_config():
     return result
 
 
-_SETTINGS_SENSITIVE_KEYS = {'int.llm_api_key', 'int.llm_setup_token', 'int.telegram_bot_token'}
+_SETTINGS_SENSITIVE_KEYS = {'int.llm_api_key', 'int.llm_setup_token', 'int.telegram_bot_token', 'svc.llm.anthropic.setup_token'}
 
 
 def _is_sensitive_key(key):
@@ -1127,12 +1129,20 @@ SERVICES_REGISTRY = [
     {
         "id": "llm_anthropic",
         "name": "Anthropic (Claude)",
-        "description": "Modelos Claude para razonamiento, código y análisis. Haiku (rápido), Sonnet (equilibrado), Opus (potente).",
+        "description": "Modelos Claude para razonamiento, código y análisis. API key (pago por uso) o Setup Token (suscripción Pro/Max).",
         "icon": "🧠",
         "category": "llm",
         "fields": [
-            {"key": "svc.llm.anthropic.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
-             "help": "Obtén tu API key en https://console.anthropic.com/settings/keys"},
+            {"key": "svc.llm.anthropic.auth_method", "type": "select", "label": "Método de autenticación", "options": [
+                {"value": "api_key", "label": "API Key (pago por uso)"},
+                {"value": "setup_token", "label": "Setup Token (Claude Pro/Max)"},
+            ], "default": "api_key", "help": "API Key: pagas por tokens consumidos. Setup Token: usa tu suscripción Claude Pro/Max."},
+            {"key": "svc.llm.anthropic.api_key", "type": "password", "label": "API Key", "required": False, "sensitive": True,
+             "help": "Obtén tu API key en https://console.anthropic.com/settings/keys",
+             "show_when": {"field": "svc.llm.anthropic.auth_method", "value": "api_key"}},
+            {"key": "svc.llm.anthropic.setup_token", "type": "password", "label": "Setup Token", "required": False, "sensitive": True,
+             "help": "Ejecuta 'claude setup-token' en tu terminal para obtenerlo. Formato: sk-ant-oat01-...",
+             "show_when": {"field": "svc.llm.anthropic.auth_method", "value": "setup_token"}},
             {"key": "svc.llm.anthropic.default_model", "type": "select", "label": "Modelo por defecto", "options": [
                 {"value": "claude-haiku-4-5", "label": "Claude Haiku 4.5 (rápido, económico)"},
                 {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (equilibrado)"},
@@ -1141,36 +1151,41 @@ SERVICES_REGISTRY = [
         ],
         "test_action": "test_llm_anthropic",
         "setup_guide": [
-            "1. Ve a https://console.anthropic.com/settings/keys",
-            "2. Crea una API key nueva",
-            "3. Pégala aquí y dale a Guardar",
-            "4. Pulsa 'Probar' para verificar la conexión"
+            "Opción A — API Key: ve a https://console.anthropic.com/settings/keys",
+            "Opción B — Setup Token: ejecuta 'claude setup-token' en tu terminal y pega el token aquí.",
+            "El Setup Token usa tu suscripción Pro/Max (sin coste por tokens)."
         ]
     },
     {
         "id": "llm_openai",
         "name": "OpenAI (GPT)",
-        "description": "Modelos GPT-4o, o1, o3 para conversación, código y razonamiento. También incluye DALL-E para imágenes.",
+        "description": "Modelos GPT-5.4, o4, o3. Puedes usar API key (pago por uso) o tu suscripción ChatGPT Plus/Pro.",
         "icon": "💬",
         "category": "llm",
         "fields": [
-            {"key": "svc.llm.openai.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
-             "help": "Obtén tu API key en https://platform.openai.com/api-keys"},
+            {"key": "svc.llm.openai.auth_method", "type": "select", "label": "Método de autenticación", "options": [
+                {"value": "api_key", "label": "API Key (pago por uso)"},
+                {"value": "oauth", "label": "Suscripción ChatGPT (Plus/Pro/Team)"},
+            ], "default": "api_key", "help": "API Key: pagas por tokens. Suscripción: usa tu plan ChatGPT sin coste extra."},
+            {"key": "svc.llm.openai.api_key", "type": "password", "label": "API Key", "required": False, "sensitive": True,
+             "help": "Obtén tu API key en https://platform.openai.com/api-keys",
+             "show_when": {"field": "svc.llm.openai.auth_method", "value": "api_key"}},
             {"key": "svc.llm.openai.default_model", "type": "select", "label": "Modelo por defecto", "options": [
-                {"value": "gpt-4o", "label": "GPT-4o (rápido, multimodal)"},
-                {"value": "gpt-4o-mini", "label": "GPT-4o Mini (económico)"},
-                {"value": "o1", "label": "o1 (razonamiento avanzado)"},
-                {"value": "o3-mini", "label": "o3 Mini (razonamiento eficiente)"},
-            ], "default": "gpt-4o"},
+                {"value": "gpt-5.4", "label": "GPT-5.4 (flagship, marzo 2026)"},
+                {"value": "gpt-5.4-mini", "label": "GPT-5.4 Mini (económico, rápido)"},
+                {"value": "gpt-5.4-pro", "label": "GPT-5.4 Pro (máximo rendimiento)"},
+                {"value": "o4-mini", "label": "o4 Mini (razonamiento eficiente)"},
+                {"value": "o3-pro", "label": "o3 Pro (razonamiento profundo)"},
+            ], "default": "gpt-5.4"},
             {"key": "svc.llm.openai.organization_id", "type": "text", "label": "Organization ID", "required": False,
-             "help": "Opcional. Solo si perteneces a una organización."},
+             "help": "Opcional. Solo si perteneces a una organización.",
+             "show_when": {"field": "svc.llm.openai.auth_method", "value": "api_key"}},
         ],
         "test_action": "test_llm_openai",
+        "oauth_provider": "openai",
         "setup_guide": [
-            "1. Ve a https://platform.openai.com/api-keys",
-            "2. Crea una API key nueva",
-            "3. Pégala aquí y dale a Guardar",
-            "4. Pulsa 'Probar' para verificar la conexión"
+            "Opción A — API Key: ve a https://platform.openai.com/api-keys y crea una key.",
+            "Opción B — Suscripción: selecciona 'Suscripción ChatGPT' arriba e inicia sesión con tu cuenta de OpenAI.",
         ]
     },
     {
@@ -1183,9 +1198,12 @@ SERVICES_REGISTRY = [
             {"key": "svc.llm.google.api_key", "type": "password", "label": "API Key", "required": True, "sensitive": True,
              "help": "Obtén tu API key en https://aistudio.google.com/apikey"},
             {"key": "svc.llm.google.default_model", "type": "select", "label": "Modelo por defecto", "options": [
-                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (potente)"},
+                {"value": "gemini-3.1-pro", "label": "Gemini 3.1 Pro (último, razonamiento)"},
+                {"value": "gemini-3-flash", "label": "Gemini 3 Flash (agéntico, código)"},
+                {"value": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash-Lite (coste mínimo)"},
+                {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (estable)"},
                 {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (rápido)"},
-            ], "default": "gemini-2.5-flash"},
+            ], "default": "gemini-3.1-pro"},
         ],
         "test_action": "test_llm_google",
         "setup_guide": [
@@ -1229,6 +1247,7 @@ SERVICES_REGISTRY = [
                 {"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (ultrarrápido)"},
                 {"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B (contexto largo)"},
                 {"value": "gemma2-9b-it", "label": "Gemma 2 9B"},
+                {"value": "deepseek-r1-distill-llama-70b", "label": "DeepSeek R1 Distill 70B"},
             ], "default": "llama-3.3-70b-versatile"},
         ],
         "test_action": "test_llm_groq",
@@ -1425,6 +1444,132 @@ def _get_service_prefix(service_id):
     return _SERVICE_PREFIX_MAP.get(service_id, f"svc.{service_id}.")
 
 
+# ── OAuth helpers ──
+_pending_oauth_flows = {}
+
+
+def _cleanup_old_flows():
+    """Remove OAuth flows older than 10 minutes."""
+    now = _time.time()
+    expired = [s for s, f in _pending_oauth_flows.items() if now - f.get('created_at', 0) > 600]
+    for s in expired:
+        _pending_oauth_flows.pop(s, None)
+
+
+def start_oauth_flow(provider, base_url):
+    """Start an OAuth flow. Returns {auth_url, state}."""
+    _cleanup_old_flows()
+    code_verifier, code_challenge = oauth.generate_pkce()
+    state = oauth.generate_state()
+    redirect_uri = f"{base_url.rstrip('/')}/api/auth/oauth/callback"
+    auth_url = oauth.build_auth_url(provider, redirect_uri, state, code_challenge)
+    _pending_oauth_flows[state] = {
+        'code_verifier': code_verifier,
+        'provider': provider,
+        'redirect_uri': redirect_uri,
+        'created_at': _time.time(),
+    }
+    return {"auth_url": auth_url, "state": state}
+
+
+def complete_oauth_flow(code, state):
+    """Complete an OAuth flow by exchanging the code for tokens."""
+    flow = _pending_oauth_flows.pop(state, None)
+    if not flow:
+        return {"error": "Flujo OAuth expirado o inválido. Inténtalo de nuevo."}
+    result = oauth.exchange_code_for_tokens(
+        flow['provider'], code, flow['code_verifier'], flow['redirect_uri']
+    )
+    if result.get('error'):
+        return result
+    _save_oauth_tokens(flow['provider'], result)
+    return result
+
+
+def _save_oauth_tokens(provider, tokens):
+    """Save OAuth tokens to the database."""
+    now = now_iso()
+    with db_conn() as conn:
+        conn.execute('''
+            INSERT INTO oauth_tokens (provider, access_token, refresh_token, id_token, expires_at, email, account_id, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider) DO UPDATE SET
+                access_token=excluded.access_token,
+                refresh_token=COALESCE(excluded.refresh_token, oauth_tokens.refresh_token),
+                id_token=excluded.id_token,
+                expires_at=excluded.expires_at,
+                email=excluded.email,
+                account_id=excluded.account_id,
+                updated_at=excluded.updated_at
+        ''', (
+            provider,
+            tokens.get('access_token', ''),
+            tokens.get('refresh_token', ''),
+            tokens.get('id_token', ''),
+            tokens.get('expires_at', 0),
+            tokens.get('email', ''),
+            tokens.get('account_id', ''),
+            json.dumps(tokens.get('metadata', {})),
+            now, now,
+        ))
+        conn.commit()
+
+
+def get_oauth_status(provider):
+    """Get current OAuth status for a provider."""
+    with db_conn() as conn:
+        row = conn.execute('SELECT * FROM oauth_tokens WHERE provider=?', (provider,)).fetchone()
+    if not row:
+        return {"authenticated": False, "provider": provider, "message": "No autenticado"}
+    expires_at = row['expires_at'] or 0
+    is_expired = oauth.is_token_expired(expires_at)
+    result = {
+        "authenticated": True,
+        "provider": provider,
+        "email": row['email'] or "",
+        "account_id": row['account_id'] or "",
+        "expires_at": expires_at,
+        "expired": is_expired,
+        "updated_at": row['updated_at'],
+    }
+    if is_expired and row['refresh_token']:
+        refresh_result = oauth.refresh_access_token(provider, row['refresh_token'])
+        if not refresh_result.get('error'):
+            _save_oauth_tokens(provider, refresh_result)
+            result['expired'] = False
+            result['expires_at'] = refresh_result.get('expires_at', 0)
+            result['message'] = "Token refrescado automáticamente"
+        else:
+            result['message'] = "Token expirado — necesita re-autenticación"
+    elif not is_expired:
+        result['message'] = f"Autenticado como {row['email']}" if row['email'] else "Autenticado"
+    return result
+
+
+def revoke_oauth(provider):
+    """Remove stored OAuth tokens for a provider."""
+    with db_conn() as conn:
+        conn.execute('DELETE FROM oauth_tokens WHERE provider=?', (provider,))
+        conn.commit()
+    return {"ok": True, "message": "Sesión cerrada"}
+
+
+def get_fresh_oauth_token(provider):
+    """Get a fresh (non-expired) access token, refreshing if needed."""
+    with db_conn() as conn:
+        row = conn.execute('SELECT * FROM oauth_tokens WHERE provider=?', (provider,)).fetchone()
+    if not row or not row['access_token']:
+        return None
+    if oauth.is_token_expired(row['expires_at'] or 0):
+        if row['refresh_token']:
+            result = oauth.refresh_access_token(provider, row['refresh_token'])
+            if not result.get('error'):
+                _save_oauth_tokens(provider, result)
+                return result['access_token']
+        return None
+    return row['access_token']
+
+
 def _get_service_status(service_id):
     """Check service status: configured, not_configured, or error."""
     prefix = _get_service_prefix(service_id)
@@ -1433,6 +1578,22 @@ def _get_service_status(service_id):
     svc_def = next((s for s in SERVICES_REGISTRY if s['id'] == service_id), None)
     if not svc_def:
         return {"status": "unknown", "message": "Servicio no encontrado"}
+    # Special case: llm_anthropic with Setup Token doesn't need API key
+    if service_id == "llm_anthropic":
+        auth_method = settings.get("svc.llm.anthropic.auth_method", "api_key")
+        if auth_method == "setup_token":
+            token = settings.get("svc.llm.anthropic.setup_token", "") or settings.get("int.llm_setup_token", "")
+            if token:
+                return {"status": "configured", "message": "Setup Token configurado ✓"}
+            return {"status": "not_configured", "message": "Falta el Setup Token"}
+    # Special case: llm_openai with OAuth doesn't need API key
+    if service_id == "llm_openai":
+        auth_method = settings.get("svc.llm.openai.auth_method", "api_key")
+        if auth_method == "oauth":
+            oauth_status = get_oauth_status("openai")
+            if oauth_status.get("authenticated") and not oauth_status.get("expired"):
+                return {"status": "configured", "message": f"Autenticado via ChatGPT ({oauth_status.get('email', '')})"}
+            return {"status": "not_configured", "message": "OAuth no completado — inicia sesión"}
     # Legacy key fallback mapping (for services migrated from Config tab)
     _LEGACY_FALLBACK = {
         'svc.notify.telegram.bot_token': ['int.telegram_bot_token', 'NIWA_TELEGRAM_BOT_TOKEN'],
@@ -1467,25 +1628,45 @@ def _test_service(service_id):
 
     # ── LLM providers ──
     if service_id == "llm_anthropic":
-        api_key = settings.get("svc.llm.anthropic.api_key", "")
-        if not api_key:
-            return {"ok": False, "message": "No hay API key configurada."}
-        try:
-            req = urllib.request.Request("https://api.anthropic.com/v1/messages",
-                data=json.dumps({"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "Hi"}]}).encode(),
-                headers={"x-api-key": api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return {"ok": True, "message": "Anthropic conectado ✓ — Claude disponible"}
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                return {"ok": False, "message": "API key inválida."}
-            if e.code == 429:
-                return {"ok": True, "message": "Anthropic conectado ✓ (rate limited, pero la key funciona)"}
-            return {"ok": False, "message": f"Error HTTP {e.code}"}
-        except Exception as e:
-            return {"ok": False, "message": f"Error: {e}"}
+        auth_method = settings.get("svc.llm.anthropic.auth_method", "api_key")
+        if auth_method == "setup_token":
+            token = settings.get("svc.llm.anthropic.setup_token", "")
+            if not token:
+                # Check legacy key
+                token = settings.get("int.llm_setup_token", "")
+            if not token:
+                return {"ok": False, "message": "No hay Setup Token configurado."}
+            if token.startswith("sk-ant-"):
+                return {"ok": True, "message": "Setup Token configurado ✓ (formato válido)"}
+            return {"ok": False, "message": "El Setup Token debe empezar con 'sk-ant-'. Ejecuta 'claude setup-token' para obtenerlo."}
+        else:
+            api_key = settings.get("svc.llm.anthropic.api_key", "")
+            if not api_key:
+                return {"ok": False, "message": "No hay API key configurada."}
+            try:
+                req = urllib.request.Request("https://api.anthropic.com/v1/messages",
+                    data=json.dumps({"model": "claude-haiku-4-5", "max_tokens": 10, "messages": [{"role": "user", "content": "Hi"}]}).encode(),
+                    headers={"x-api-key": api_key, "Content-Type": "application/json", "anthropic-version": "2023-06-01"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return {"ok": True, "message": "Anthropic conectado ✓ — Claude disponible"}
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    return {"ok": False, "message": "API key inválida."}
+                if e.code == 429:
+                    return {"ok": True, "message": "Anthropic conectado ✓ (rate limited, pero la key funciona)"}
+                return {"ok": False, "message": f"Error HTTP {e.code}"}
+            except Exception as e:
+                return {"ok": False, "message": f"Error: {e}"}
 
     if service_id == "llm_openai":
+        auth_method = settings.get("svc.llm.openai.auth_method", "api_key")
+        if auth_method == "oauth":
+            status = get_oauth_status("openai")
+            if status.get("authenticated") and not status.get("expired"):
+                return {"ok": True, "message": f"OpenAI conectado via ChatGPT — {status.get('email', '')}"}
+            elif status.get("authenticated") and status.get("expired"):
+                return {"ok": False, "message": "Token expirado. Re-autentícate."}
+            return {"ok": False, "message": "No autenticado. Pulsa 'Iniciar sesión con ChatGPT'."}
         api_key = settings.get("svc.llm.openai.api_key", "")
         if not api_key:
             return {"ok": False, "message": "No hay API key configurada."}
@@ -1794,10 +1975,22 @@ def apply_setup_token(token: str) -> dict:
     token = token.strip()
     if not token.startswith('sk-ant-'):
         return {'ok': False, 'error': 'Invalid token format — should start with sk-ant-oat01-'}
-    # Store it in settings so the executor can read it
+    # Store in both legacy and new service key for backward compat
     save_setting('int.llm_setup_token', token)
+    save_setting('svc.llm.anthropic.setup_token', token)
+    save_setting('svc.llm.anthropic.auth_method', 'setup_token')
     return {'ok': True, 'message': 'Token saved — the executor will use it as CLAUDE_CODE_OAUTH_TOKEN'}
 
+
+
+def _has_oauth(provider):
+    """Check if valid OAuth tokens exist for a provider."""
+    try:
+        with db_conn() as conn:
+            row = conn.execute('SELECT expires_at FROM oauth_tokens WHERE provider=?', (provider,)).fetchone()
+            return bool(row)
+    except Exception:
+        return False
 
 
 def get_available_models():
@@ -1806,7 +1999,7 @@ def get_available_models():
     models = []
 
     # Check each new-style LLM service
-    if settings.get("svc.llm.anthropic.api_key"):
+    if settings.get("svc.llm.anthropic.api_key") or settings.get("svc.llm.anthropic.setup_token") or settings.get("int.llm_setup_token"):
         models.extend([
             {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
              "description": "Rápido y económico. Ideal para chat."},
@@ -1815,23 +2008,31 @@ def get_available_models():
             {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
              "description": "Máxima capacidad. Ideal para planificación."},
         ])
-    if settings.get("svc.llm.openai.api_key"):
+    if settings.get("svc.llm.openai.api_key") or _has_oauth("openai"):
         models.extend([
-            {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium",
-             "description": "Multimodal y rápido."},
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low",
-             "description": "Económico."},
-            {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high",
-             "description": "Razonamiento avanzado."},
-            {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium",
+            {"id": "gpt-5.4", "name": "GPT-5.4", "provider": "openai", "speed": "medium", "cost": "medium",
+             "description": "Flagship. Código, razonamiento y uso de ordenador."},
+            {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini", "provider": "openai", "speed": "fast", "cost": "low",
+             "description": "Económico y rápido."},
+            {"id": "gpt-5.4-pro", "name": "GPT-5.4 Pro", "provider": "openai", "speed": "slow", "cost": "high",
+             "description": "Máximo rendimiento en tareas complejas."},
+            {"id": "o4-mini", "name": "o4 Mini", "provider": "openai", "speed": "medium", "cost": "medium",
              "description": "Razonamiento eficiente."},
+            {"id": "o3-pro", "name": "o3 Pro", "provider": "openai", "speed": "slow", "cost": "high",
+             "description": "Razonamiento profundo (Pro/Team)."},
         ])
     if settings.get("svc.llm.google.api_key"):
         models.extend([
+            {"id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "provider": "google", "speed": "medium", "cost": "medium",
+             "description": "Último modelo de razonamiento de Google."},
+            {"id": "gemini-3-flash", "name": "Gemini 3 Flash", "provider": "google", "speed": "fast", "cost": "low",
+             "description": "Agéntico y código. Near-zero thinking."},
+            {"id": "gemini-3.1-flash-lite", "name": "Gemini 3.1 Flash-Lite", "provider": "google", "speed": "fast", "cost": "low",
+             "description": "Máxima eficiencia de coste."},
             {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "google", "speed": "medium", "cost": "medium",
-             "description": "Potente y multimodal."},
+             "description": "Razonamiento complejo, 1M contexto."},
             {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "google", "speed": "fast", "cost": "low",
-             "description": "Rápido y económico."},
+             "description": "Equilibrio velocidad/inteligencia."},
         ])
     if settings.get("svc.llm.ollama.base_url"):
         ollama_models = _fetch_ollama_models(settings)
@@ -1844,6 +2045,8 @@ def get_available_models():
              "description": "Instantáneo."},
             {"id": "mixtral-8x7b-32768", "name": "Mixtral 8x7B", "provider": "groq", "speed": "fast", "cost": "low",
              "description": "Contexto largo."},
+            {"id": "deepseek-r1-distill-llama-70b", "name": "DeepSeek R1 Distill 70B", "provider": "groq", "speed": "fast", "cost": "low",
+             "description": "Razonamiento vía Groq."},
         ])
     if settings.get("svc.llm.mistral.api_key"):
         models.extend([
@@ -1876,14 +2079,17 @@ def get_available_models():
             ]
         elif provider in ('llm', 'openai'):
             models = [
-                {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Multimodal."},
-                {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "speed": "fast", "cost": "low", "description": "Económico."},
-                {"id": "o1", "name": "o1", "provider": "openai", "speed": "slow", "cost": "high", "description": "Razonamiento avanzado."},
-                {"id": "o3-mini", "name": "o3 Mini", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Razonamiento eficiente."},
+                {"id": "gpt-5.4", "name": "GPT-5.4", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Flagship."},
+                {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini", "provider": "openai", "speed": "fast", "cost": "low", "description": "Económico."},
+                {"id": "gpt-5.4-pro", "name": "GPT-5.4 Pro", "provider": "openai", "speed": "slow", "cost": "high", "description": "Máximo rendimiento."},
+                {"id": "o4-mini", "name": "o4 Mini", "provider": "openai", "speed": "medium", "cost": "medium", "description": "Razonamiento eficiente."},
+                {"id": "o3-pro", "name": "o3 Pro", "provider": "openai", "speed": "slow", "cost": "high", "description": "Razonamiento profundo."},
             ]
         elif provider == 'gemini':
             models = [
-                {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini", "speed": "medium", "cost": "medium", "description": "Potente."},
+                {"id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "provider": "gemini", "speed": "medium", "cost": "medium", "description": "Último modelo."},
+                {"id": "gemini-3-flash", "name": "Gemini 3 Flash", "provider": "gemini", "speed": "fast", "cost": "low", "description": "Agéntico."},
+                {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini", "speed": "medium", "cost": "medium", "description": "Estable."},
                 {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "gemini", "speed": "fast", "cost": "low", "description": "Rápido."},
             ]
         elif provider == 'ollama':
@@ -2012,7 +2218,7 @@ def check_llm_status() -> dict:
     provider = settings.get('int.llm_provider') or os.environ.get('NIWA_LLM_PROVIDER', '')
     auth_method = settings.get('int.llm_auth_method') or os.environ.get('NIWA_LLM_AUTH_METHOD', 'api_key')
     api_key = settings.get('int.llm_api_key') or os.environ.get('NIWA_LLM_API_KEY', '')
-    setup_token = settings.get('int.llm_setup_token') or ''
+    setup_token = settings.get('svc.llm.anthropic.setup_token') or settings.get('int.llm_setup_token') or ''
     command = settings.get('int.llm_command') or os.environ.get('NIWA_LLM_COMMAND', '')
 
     result = {'provider': provider, 'auth_method': auth_method, 'command': command,
@@ -2453,8 +2659,55 @@ class Handler(BaseHTTPRequestHandler):
             _redirect_html = f'<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={_login_url}"></head><body>Redirecting to login...</body></html>'
             self.wfile.write(_redirect_html.encode('utf-8'))
             return
+        # ── OAuth callback (unauthenticated — OpenAI redirects here) ──
+        if path == '/api/auth/oauth/callback':
+            code = qs.get('code', [None])[0]
+            state = qs.get('state', [None])[0]
+            error = qs.get('error', [None])[0]
+            if error:
+                error_desc = qs.get('error_description', [''])[0]
+                return self._html(f'''<!DOCTYPE html><html><head><title>Error</title></head><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1a1a2e;color:#fff;">
+                    <div style="text-align:center;max-width:500px;">
+                        <h1 style="font-size:2rem;">Error de autenticación</h1>
+                        <p style="color:#ff6b6b;">{error_desc or error}</p>
+                        <p style="color:#888;">Puedes cerrar esta ventana e intentarlo de nuevo.</p>
+                    </div></body></html>''')
+            if not code or not state:
+                return self._html('<!DOCTYPE html><html><body><p>Faltan parámetros. Cierra esta ventana e inténtalo de nuevo.</p></body></html>', 400)
+            result = complete_oauth_flow(code, state)
+            if result.get('error'):
+                return self._html(f'''<!DOCTYPE html><html><head><title>Error</title></head><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1a1a2e;color:#fff;">
+                    <div style="text-align:center;max-width:500px;">
+                        <h1 style="font-size:2rem;">Error</h1>
+                        <p style="color:#ff6b6b;">{result["error"]}</p>
+                        <p style="color:#888;">Cierra esta ventana e inténtalo de nuevo.</p>
+                    </div></body></html>''')
+            email = result.get('email', '')
+            return self._html(f'''<!DOCTYPE html><html><head><title>Autenticado</title></head><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1a1a2e;color:#fff;">
+                <div style="text-align:center;max-width:500px;">
+                    <h1 style="font-size:2rem;">Autenticado con OpenAI</h1>
+                    {f'<p style="color:#4ecdc4;">Conectado como {email}</p>' if email else ''}
+                    <p style="color:#888;">Puedes cerrar esta ventana y volver a Niwa.</p>
+                    <script>setTimeout(function(){{ window.close(); }}, 3000);</script>
+                </div></body></html>''')
         if path.startswith('/api/') and self._require_auth():
             return
+        # ── OAuth endpoints (authenticated) ──
+        if path == '/api/auth/oauth/start':
+            provider = qs.get('provider', [None])[0]
+            if not provider:
+                return self._json({'error': 'Falta el parámetro provider'}, 400)
+            base_url = NIWA_APP_PUBLIC_BASE_URL
+            if not base_url or base_url.startswith('http://127.0.0.1'):
+                host = self.headers.get('Host', 'localhost:8080')
+                proto = self.headers.get('X-Forwarded-Proto', 'http')
+                base_url = f"{proto}://{host}"
+            return self._json(start_oauth_flow(provider, base_url))
+        if path == '/api/auth/oauth/status':
+            provider = qs.get('provider', [None])[0]
+            if not provider:
+                return self._json({'error': 'Falta el parámetro provider'}, 400)
+            return self._json(get_oauth_status(provider))
         if path == '/api/dashboard':
             return self._json(dashboard_data())
         if path == '/api/tasks':
@@ -2811,6 +3064,46 @@ class Handler(BaseHTTPRequestHandler):
             return self._html(render_login_page('Usuario o contraseña incorrectos.'), 401)
         if path.startswith('/api/') and self._require_auth():
             return
+        # ── OAuth POST endpoints ──
+        if path == '/api/auth/oauth/revoke':
+            provider = payload.get('provider', '')
+            if not provider:
+                return self._json({'error': 'Falta provider'}, 400)
+            return self._json(revoke_oauth(provider))
+        if path == '/api/auth/oauth/import':
+            provider = payload.get('provider', 'openai')
+            auth_json = payload.get('auth_json', '')
+            if not auth_json:
+                return self._json({'error': 'Falta auth_json'}, 400)
+            try:
+                auth_data = json.loads(auth_json) if isinstance(auth_json, str) else auth_json
+                tokens = auth_data.get('tokens', auth_data)
+                access_token = tokens.get('access_token', tokens.get('access', ''))
+                refresh_token = tokens.get('refresh_token', tokens.get('refresh', ''))
+                if not access_token:
+                    return self._json({'error': 'No se encontró access_token en el JSON proporcionado'}, 400)
+                claims = oauth.parse_jwt(access_token)
+                expires_at = claims.get('exp', 0) if claims else 0
+                email = ''
+                id_token = tokens.get('id_token', '')
+                if id_token:
+                    id_claims = oauth.parse_jwt(id_token)
+                    email = (id_claims or {}).get('email', '')
+                token_data = {
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                    'id_token': id_token,
+                    'expires_at': expires_at,
+                    'email': email,
+                    'account_id': '',
+                }
+                _save_oauth_tokens(provider, token_data)
+                status = get_oauth_status(provider)
+                return self._json({'ok': True, 'status': status})
+            except json.JSONDecodeError:
+                return self._json({'error': 'JSON inválido'}, 400)
+            except Exception as e:
+                return self._json({'error': f'Error importando tokens: {e}'}, 500)
         if path == '/api/tasks':
             task_id = create_task(payload)
             return self._json({'ok': True, 'id': task_id}, 201)

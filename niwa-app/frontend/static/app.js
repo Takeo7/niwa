@@ -1637,6 +1637,10 @@ function renderServices() {
 
   // Initialize conditional field visibility for each service
   _servicesData.forEach(svc => onServiceFieldChange(svc.id));
+  // Check OAuth status for services with oauth_provider
+  _servicesData.forEach(svc => {
+    if (svc.oauth_provider) checkOAuthStatus(svc.oauth_provider, svc.id);
+  });
 }
 
 function renderServiceCard(svc) {
@@ -1755,12 +1759,57 @@ function renderServiceBody(svc) {
     </div>`;
   }).join('');
 
+  // OAuth section (only for services with oauth_provider)
+  let oauthHtml = '';
+  if (svc.oauth_provider) {
+    oauthHtml = `
+      <div class="svc-oauth-section mt-4 pt-4 border-t border-outline-variant/20 svc-conditional"
+           data-show-field="${svc.fields.find(f => f.key.endsWith('.auth_method'))?.key || ''}" data-show-value="oauth"
+           id="svc-oauth-${svc.id}">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-[10px] text-on-surface-variant uppercase tracking-widest">Sesión OAuth</span>
+          <span id="oauth-status-${svc.id}" class="text-[10px]"></span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="startOAuth('${svc.oauth_provider}', '${svc.id}')"
+            class="px-4 py-2 bg-green-600 text-white text-xs font-bold rounded-lg hover:bg-green-700 flex items-center gap-1.5"
+            id="oauth-login-btn-${svc.id}">
+            <span class="material-symbols-outlined text-sm">login</span> Iniciar sesión con ChatGPT
+          </button>
+          <button onclick="revokeOAuth('${svc.oauth_provider}', '${svc.id}')"
+            class="px-3 py-2 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high hidden"
+            id="oauth-revoke-btn-${svc.id}">
+            Cerrar sesión
+          </button>
+        </div>
+        <div class="mt-3">
+          <details class="text-xs">
+            <summary class="cursor-pointer text-on-surface-variant hover:text-on-surface">Método alternativo (VPS/servidor sin navegador)</summary>
+            <div class="mt-2 space-y-2">
+              <p class="text-on-surface-variant">Si Niwa corre en un servidor sin navegador, puedes importar tu sesión de Codex CLI:</p>
+              <ol class="list-decimal list-inside text-on-surface-variant space-y-1">
+                <li>En tu ordenador local: <code class="bg-surface-dim px-1 rounded">codex login</code></li>
+                <li>Copia el contenido de <code class="bg-surface-dim px-1 rounded">~/.codex/auth.json</code></li>
+                <li>Pégalo aquí abajo</li>
+              </ol>
+              <textarea id="oauth-import-json-${svc.id}" rows="4" class="w-full bg-[var(--c-input-bg)] border border-outline-variant/30 rounded-lg p-2 text-xs font-mono text-on-surface" placeholder="Pega aquí el contenido de auth.json"></textarea>
+              <button onclick="importOAuthJson('${svc.oauth_provider}', '${svc.id}')"
+                class="px-3 py-1.5 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">
+                Importar sesión
+              </button>
+            </div>
+          </details>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="p-5 space-y-4">
       ${guideHtml}
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${fieldsHtml}
       </div>
+      ${oauthHtml}
       <div class="flex gap-2 items-center pt-2">
         <button onclick="saveService('${svc.id}')" class="px-4 py-2 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">Guardar</button>
         ${svc.test_action ? `<button onclick="testService('${svc.id}')" class="px-4 py-2 bg-surface-bright text-on-surface-variant text-xs font-medium rounded-lg hover:bg-surface-container-high">Probar</button>` : ''}
@@ -1876,6 +1925,110 @@ async function testService(serviceId) {
   }
   // Auto-clear after 10s
   setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 10000);
+}
+
+// ── OAuth functions ──
+let _oauthPollTimer = null;
+
+async function startOAuth(provider, serviceId) {
+  const btn = document.getElementById('oauth-login-btn-' + serviceId);
+  if (btn) btn.textContent = 'Abriendo...';
+  try {
+    const res = await api('auth/oauth/start?provider=' + provider);
+    if (res && res.auth_url) {
+      window.open(res.auth_url, 'niwa-oauth', 'width=600,height=700');
+      pollOAuthStatus(provider, serviceId);
+    } else {
+      toast('Error iniciando OAuth', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.innerHTML = '<span class="material-symbols-outlined text-sm">login</span> Iniciar sesión con ChatGPT';
+  }
+}
+
+function pollOAuthStatus(provider, serviceId) {
+  if (_oauthPollTimer) clearInterval(_oauthPollTimer);
+  const statusEl = document.getElementById('oauth-status-' + serviceId);
+  if (statusEl) statusEl.innerHTML = '<span class="text-amber-500">Esperando autenticación...</span>';
+  let attempts = 0;
+  _oauthPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > 60) {
+      clearInterval(_oauthPollTimer);
+      _oauthPollTimer = null;
+      if (statusEl) statusEl.innerHTML = '<span class="text-red-500">Tiempo agotado</span>';
+      return;
+    }
+    try {
+      const status = await api('auth/oauth/status?provider=' + provider);
+      if (status && status.authenticated && !status.expired) {
+        clearInterval(_oauthPollTimer);
+        _oauthPollTimer = null;
+        updateOAuthUI(serviceId, status);
+        toast('Autenticado con ' + (status.email || 'OpenAI'), 'success');
+        loadServices();
+      }
+    } catch(e) {}
+  }, 5000);
+}
+
+function updateOAuthUI(serviceId, status) {
+  const statusEl = document.getElementById('oauth-status-' + serviceId);
+  const loginBtn = document.getElementById('oauth-login-btn-' + serviceId);
+  const revokeBtn = document.getElementById('oauth-revoke-btn-' + serviceId);
+  if (status && status.authenticated && !status.expired) {
+    if (statusEl) statusEl.innerHTML = '<span class="text-green-500">' + escHtml(status.email || 'Autenticado') + '</span>';
+    if (loginBtn) loginBtn.classList.add('hidden');
+    if (revokeBtn) revokeBtn.classList.remove('hidden');
+  } else {
+    if (statusEl) statusEl.innerHTML = status && status.message ? '<span class="text-amber-500">' + escHtml(status.message) + '</span>' : '';
+    if (loginBtn) loginBtn.classList.remove('hidden');
+    if (revokeBtn) revokeBtn.classList.add('hidden');
+  }
+}
+
+async function checkOAuthStatus(provider, serviceId) {
+  try {
+    const status = await api('auth/oauth/status?provider=' + provider);
+    updateOAuthUI(serviceId, status);
+  } catch(e) {}
+}
+
+async function revokeOAuth(provider, serviceId) {
+  try {
+    await api('auth/oauth/revoke', { method: 'POST', body: JSON.stringify({ provider }) });
+    updateOAuthUI(serviceId, { authenticated: false });
+    toast('Sesión cerrada', 'success');
+    loadServices();
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function importOAuthJson(provider, serviceId) {
+  const textarea = document.getElementById('oauth-import-json-' + serviceId);
+  if (!textarea || !textarea.value.trim()) {
+    toast('Pega el contenido de auth.json', 'error');
+    return;
+  }
+  try {
+    const res = await api('auth/oauth/import', {
+      method: 'POST',
+      body: JSON.stringify({ provider: provider, auth_json: textarea.value.trim() })
+    });
+    if (res && res.ok) {
+      toast('Sesión importada', 'success');
+      textarea.value = '';
+      if (res.status) updateOAuthUI(serviceId, res.status);
+      loadServices();
+    } else {
+      toast(res && res.error ? res.error : 'Error importando', 'error');
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 

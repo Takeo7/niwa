@@ -20,6 +20,7 @@ Zero external dependencies. Python stdlib only.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -30,6 +31,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
+import urllib.error
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timezone
@@ -114,7 +118,8 @@ LLM_COMMAND_EXECUTOR = _cfg("llm_command_executor", "NIWA_LLM_COMMAND_EXECUTOR")
 PLANNER_TIMEOUT = int(ENV.get("NIWA_EXECUTOR_PLANNER_TIMEOUT_SECONDS", "300"))
 PLANNER_MAX_TURNS = int(ENV.get("NIWA_EXECUTOR_PLANNER_MAX_TURNS", "10"))
 LLM_API_KEY = _cfg("llm_api_key", "NIWA_LLM_API_KEY")
-LLM_SETUP_TOKEN = _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
+# Read setup token from new service key OR legacy key
+LLM_SETUP_TOKEN = (_SETTINGS.get("svc.llm.anthropic.setup_token") or _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN"))
 POLL_SECONDS = int(_cfg("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
 CHAT_POLL_SECONDS = int(ENV.get("NIWA_EXECUTOR_CHAT_POLL_SECONDS", "5"))
 TIMEOUT_SECONDS = int(_cfg("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
@@ -468,6 +473,83 @@ def _record_event(task_id: str, event_type: str, payload: dict) -> None:
         c.commit()
 
 
+# ────────────────────────── OAuth token helpers ──────────────────────────
+def _parse_jwt_payload(token: str):
+    """Parse JWT payload without verification."""
+    if not token or token.count(".") != 2:
+        return None
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (4 - len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return None
+
+
+def _refresh_openai_token(refresh_token: str):
+    """Refresh OpenAI access token using refresh token."""
+    try:
+        data = urllib.parse.urlencode({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+        }).encode()
+        req = urllib.request.Request("https://auth.openai.com/oauth/token", data=data, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            token_data = json.loads(resp.read())
+            new_access = token_data.get("access_token", "")
+            new_refresh = token_data.get("refresh_token", refresh_token)
+            claims = _parse_jwt_payload(new_access)
+            expires = claims.get("exp", 0) if claims else 0
+            with _conn() as c:
+                c.execute(
+                    'UPDATE oauth_tokens SET access_token=?, refresh_token=?, expires_at=?, updated_at=? WHERE provider=?',
+                    (new_access, new_refresh, expires, _now_iso(), 'openai')
+                )
+                c.commit()
+            return new_access
+    except Exception as e:
+        log.warning("Failed to refresh OpenAI token: %s", e)
+        return None
+
+
+def _get_openai_oauth_token():
+    """Read fresh OpenAI OAuth token from DB, refreshing if needed."""
+    try:
+        with _conn() as c:
+            row = c.execute(
+                'SELECT access_token, refresh_token, expires_at FROM oauth_tokens WHERE provider=?',
+                ('openai',)
+            ).fetchone()
+            if not row or not row['access_token']:
+                return None
+            expires = row['expires_at'] or 0
+            if time.time() + 300 >= expires and row['refresh_token']:
+                refreshed = _refresh_openai_token(row['refresh_token'])
+                if refreshed:
+                    return refreshed
+                return None
+            if time.time() + 300 >= expires:
+                return None
+            return row['access_token']
+    except Exception:
+        return None
+
+
+def _get_openai_refresh_token():
+    """Read OpenAI refresh token from DB."""
+    try:
+        with _conn() as c:
+            row = c.execute(
+                'SELECT refresh_token FROM oauth_tokens WHERE provider=?', ('openai',)
+            ).fetchone()
+            return row['refresh_token'] if row else None
+    except Exception:
+        return None
+
+
 # ────────────────────────── task completion ──────────────────────────
 def _finish_task(task_id: str, status: str, output: str) -> None:
     """
@@ -531,6 +613,26 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
                 run_env[key_name] = LLM_API_KEY
     if LLM_SETUP_TOKEN:
         run_env["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
+    # Inject OpenAI OAuth token if available (for Codex CLI or direct API use)
+    _codex_tmp_home = None
+    openai_token = _get_openai_oauth_token()
+    if openai_token:
+        run_env["OPENAI_ACCESS_TOKEN"] = openai_token
+        # Write temporary auth.json for Codex CLI compatibility
+        import tempfile as _tmpfile
+        _codex_tmp_home = _tmpfile.mkdtemp(prefix="niwa-codex-")
+        auth_json = {
+            "auth_mode": "chatgpt_oauth",
+            "tokens": {
+                "access_token": openai_token,
+                "refresh_token": _get_openai_refresh_token() or "",
+                "id_token": "",
+            },
+            "last_refresh": _now_iso(),
+        }
+        with open(os.path.join(_codex_tmp_home, "auth.json"), "w") as _af:
+            json.dump(auth_json, _af)
+        run_env["CODEX_HOME"] = _codex_tmp_home
     try:
         master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(
@@ -590,6 +692,13 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
             os.unlink(prompt_file.name)
         except Exception:
             pass
+        # Clean up temporary Codex home dir
+        if _codex_tmp_home:
+            import shutil as _shutil
+            try:
+                _shutil.rmtree(_codex_tmp_home, ignore_errors=True)
+            except Exception:
+                pass
 
 
 # ────────────────────────── main loop ──────────────────────────
@@ -850,7 +959,8 @@ def _reload_config():
     LLM_COMMAND_PLANNER = _cfg_reload("llm_command_planner", "NIWA_LLM_COMMAND_PLANNER") or ""
     LLM_COMMAND_EXECUTOR = _cfg_reload("llm_command_executor", "NIWA_LLM_COMMAND_EXECUTOR") or ""
     LLM_API_KEY = _cfg_reload("llm_api_key", "NIWA_LLM_API_KEY")
-    LLM_SETUP_TOKEN = _cfg_reload("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
+    # Read setup token from new service key OR legacy key
+    LLM_SETUP_TOKEN = (merged.get("svc.llm.anthropic.setup_token") or _cfg_reload("llm_setup_token", "NIWA_LLM_SETUP_TOKEN"))
     POLL_SECONDS = int(_cfg_reload("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
     TIMEOUT_SECONDS = int(_cfg_reload("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
 
