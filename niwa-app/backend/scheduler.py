@@ -512,6 +512,50 @@ except Exception as e:
         "notify_channel": "telegram",
     },
     {
+        "id": "inbox-processor",
+        "name": "Inbox processor",
+        "description": "Auto-triage inbox items: creates tasks from unprocessed inbox entries.",
+        "schedule": "*/5 * * * *",
+        "enabled": False,
+        "action": "script",
+        "action_config": {
+            "command": """python3 -c "
+import sqlite3, os, json
+db = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')
+c = sqlite3.connect(db)
+c.row_factory = sqlite3.Row
+
+# Get unprocessed inbox items
+items = c.execute(\"SELECT * FROM inbox_items WHERE triaged=0 ORDER BY created_at ASC LIMIT 10\").fetchall()
+if not items:
+    print('No inbox items to process')
+    exit(0)
+
+processed = 0
+for item in items:
+    item = dict(item)
+    title = (item.get('title') or item.get('body', ''))[:100].strip()
+    if not title:
+        continue
+    # Create task from inbox item
+    import uuid
+    task_id = f'inbox-{uuid.uuid4().hex[:12]}'
+    now = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+    c.execute(
+        'INSERT INTO tasks (id, title, description, area, status, priority, source, created_at, updated_at, assigned_to_yume, assigned_to_claude) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        (task_id, title, item.get('body',''), item.get('area','personal'), 'pendiente', 'media', 'inbox', now, now, 1, 0)
+    )
+    c.execute('UPDATE inbox_items SET triaged=1 WHERE id=?', (item['id'],))
+    processed += 1
+
+c.commit()
+print(f'Processed {processed} inbox items into tasks')
+""",
+            "timeout": 30,
+        },
+        "notify_channel": "none",
+    },
+    {
         "id": "task-review",
         "name": "Stuck/blocked task review",
         "description": "Every 15 minutes, checks for tasks stuck in en_progreso (>30 min no update) or bloqueada. Notifies if found.",

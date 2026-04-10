@@ -31,6 +31,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -98,6 +99,8 @@ CHAT_TIMEOUT_SECONDS = int(ENV.get("NIWA_EXECUTOR_CHAT_TIMEOUT_SECONDS", "120"))
 MAX_OUTPUT_CHARS = int(ENV.get("NIWA_EXECUTOR_MAX_OUTPUT", "10000"))
 HEARTBEAT_SECONDS = int(ENV.get("NIWA_EXECUTOR_HEARTBEAT_SECONDS", "60"))
 MAX_CONSECUTIVE_FAILURES = int(ENV.get("NIWA_EXECUTOR_MAX_FAILURES", "3"))
+MAX_WORKERS = int(ENV.get("NIWA_EXECUTOR_MAX_WORKERS", "3"))
+PUBLIC_URL = ENV.get("NIWA_PUBLIC_URL", "").strip()
 
 # Context limits — keep prompts reasonable
 MAX_CONTEXT_TASKS = int(ENV.get("NIWA_EXECUTOR_CONTEXT_TASKS", "20"))
@@ -302,6 +305,9 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
 
     if project_dir:
         parts.append(f"WORKING DIRECTORY: {project_dir}")
+    if PUBLIC_URL:
+        parts.append(f"PUBLIC URL: {PUBLIC_URL}")
+        parts.append("When deploying web servers, use this as the base URL instead of localhost.")
 
     # Current task
     parts.append("")
@@ -375,12 +381,15 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
         parts.append("   refactoring, building, analysis, scripts, web pages, etc.):")
         parts.append("   a) Use the task_create MCP tool to create a task with a clear title and description")
         parts.append("   b) Set assigned_to_claude=1 so it gets auto-executed by the main model")
+        parts.append("   b2) If working within a project context, pass project_id to task_create")
         parts.append("   c) Tell the user: 'He creado la tarea [title]. Se ejecutara automaticamente.'")
         parts.append("   d) STOP. Do NOT attempt the work yourself. Do NOT read/write files.")
         parts.append("   e) Do NOT ask follow-up questions about the task. Just create it and confirm.")
         parts.append("3. Use memory_store to save important facts the user mentions.")
         parts.append("4. Be brief. Max 2-3 sentences for simple responses.")
         parts.append("5. Reply in the same language the user writes in.")
+        if PUBLIC_URL:
+            parts.append(f"Note: The server's public URL is {PUBLIC_URL}. Use this for project URLs, not localhost.")
     else:
         parts.append("INSTRUCTIONS:")
         parts.append("1. Read any files relevant to understanding the task.")
@@ -464,7 +473,6 @@ def _finish_task(task_id: str, status: str, output: str) -> None:
 
 
 # ────────────────────────── LLM runner ──────────────────────────
-_active_proc: Optional[subprocess.Popen] = None
 
 
 def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) -> tuple[bool, str]:
@@ -508,7 +516,6 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
             close_fds=True,
         )
         os.close(slave_fd)
-        _active_proc = proc
         # Read output from master until process exits or timeout
         chunks: list[bytes] = []
         import time as _t
@@ -570,9 +577,6 @@ def _shutdown(signum, frame):
     global _running
     log.info("Received signal %d, shutting down...", signum)
     _running = False
-    if _active_proc and _active_proc.poll() is None:
-        log.info("Terminating active subprocess (pid %d)...", _active_proc.pid)
-        _active_proc.terminate()
 
 
 def _claim_next_chat_task() -> Optional[sqlite3.Row]:
@@ -639,11 +643,44 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
         heartbeat.join(timeout=2)
 
 
+def _handle_task_result(task_id: str, success: bool, output: str, was_retry: bool, task_row) -> tuple[bool, int]:
+    """Process a completed task result. Returns (task_done, failure_delta)."""
+    if success:
+        _finish_task(task_id, "hecha", output)
+        _record_event(task_id, "completed", {"executor": "niwa-executor"})
+        log.info("task %s done", task_id)
+        return True, -1  # success, reset failures
+    else:
+        is_chat = dict(task_row).get("source") == "chat"
+        if not is_chat and not was_retry:
+            log.warning("task %s failed, retrying with error context...", task_id)
+            _record_event(task_id, "comment", {
+                "author": "executor",
+                "kind": "warning",
+                "message": f"First attempt failed: {output[:500]}. Retrying..."
+            })
+            retry_prompt = _build_retry_prompt(task_row, _resolve_project_dir(task_row["project_id"]), output)
+            success2, output2 = _execute_task(task_row, retry_prompt=retry_prompt)
+            if success2:
+                _finish_task(task_id, "hecha", output2)
+                _record_event(task_id, "completed", {"executor": "niwa-executor", "retry": True})
+                log.info("task %s done (after retry)", task_id)
+                return True, -1
+            output = f"[attempt 1]\n{output}\n\n[attempt 2]\n{output2}"
+
+        _finish_task(task_id, "bloqueada", output)
+        _record_event(
+            task_id, "status_changed",
+            {"to": "bloqueada", "reason": "executor failure"},
+        )
+        log.warning("task %s blocked: %s", task_id, output[:200])
+        return False, 1  # failure, increment counter
+
+
 def main() -> None:
-    global _active_proc
     log.info(
-        "Niwa executor starting (db=%s, poll=%ds, chat_poll=%ds)",
-        DB_PATH, POLL_SECONDS, CHAT_POLL_SECONDS,
+        "Niwa executor starting (workers=%d, db=%s, poll=%ds, chat_poll=%ds)",
+        MAX_WORKERS, DB_PATH, POLL_SECONDS, CHAT_POLL_SECONDS,
     )
     if not LLM_COMMAND:
         log.error(
@@ -652,6 +689,8 @@ def main() -> None:
         )
     log.info("LLM command (tasks): %s", LLM_COMMAND or "(none)")
     log.info("LLM command (chat):  %s", LLM_COMMAND_CHAT or "(same as tasks)")
+    if PUBLIC_URL:
+        log.info("Public URL: %s", PUBLIC_URL)
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
@@ -659,71 +698,64 @@ def main() -> None:
     consecutive_failures = 0
     last_poll = 0.0
 
+    executor_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    active_futures: dict[str, Future] = {}  # task_id -> future
+    active_tasks: dict[str, object] = {}    # task_id -> task row (for result handling)
+
     while _running:
         try:
-            # Fast path: check for chat tasks every CHAT_POLL_SECONDS
+            # Clean completed futures
+            done_ids = [tid for tid, f in active_futures.items() if f.done()]
+            for tid in done_ids:
+                try:
+                    success, output = active_futures.pop(tid).result()
+                    task_row = active_tasks.pop(tid, None)
+                    if task_row is not None:
+                        done, delta = _handle_task_result(tid, success, output, False, task_row)
+                        if delta == -1:
+                            consecutive_failures = 0
+                        elif delta == 1:
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                log.error(
+                                    "Pausing: %d consecutive failures. Sleeping %ds.",
+                                    consecutive_failures, POLL_SECONDS * 10,
+                                )
+                                time.sleep(POLL_SECONDS * 10)
+                                consecutive_failures = 0
+                except Exception as e:
+                    log.exception("task %s raised: %s", tid, e)
+                    active_tasks.pop(tid, None)
+
+            # Don't spawn new tasks if at capacity
+            if len(active_futures) >= MAX_WORKERS:
+                time.sleep(CHAT_POLL_SECONDS)
+                continue
+
+            # Try to claim a task (chat first, then regular)
             task = _claim_next_chat_task()
-            if task is None:
-                # Slow path: check for regular tasks every POLL_SECONDS
+            if not task:
                 now = time.time()
                 if now - last_poll >= POLL_SECONDS:
                     task = _claim_next_task()
                     last_poll = now
 
-            if task is None:
-                time.sleep(CHAT_POLL_SECONDS)
-                continue
-
-            log.info("task %s: %s [source=%s]", task["id"], task["title"], dict(task).get("source", "manual"))
-            success, output = _execute_task(task)
-            _active_proc = None
-            was_retry = False
-
-            if success:
-                _finish_task(task["id"], "hecha", output)
-                _record_event(task["id"], "completed", {"executor": "niwa-executor"})
-                log.info("task %s done", task["id"])
-                consecutive_failures = 0
+            if task:
+                task_id = task["id"]
+                log.info("task %s: %s [source=%s]", task_id, task["title"], dict(task).get("source", "manual"))
+                future = executor_pool.submit(_execute_task, task)
+                active_futures[task_id] = future
+                active_tasks[task_id] = task
             else:
-                # Chat tasks don't retry (fast path, user can resend)
-                is_chat = dict(task).get("source") == "chat"
-                if not is_chat and not was_retry:
-                    log.warning("task %s failed, retrying with error context...", task["id"])
-                    _record_event(task["id"], "comment", {
-                        "author": "executor",
-                        "kind": "warning",
-                        "message": f"First attempt failed: {output[:500]}. Retrying..."
-                    })
-                    retry_prompt = _build_retry_prompt(task, _resolve_project_dir(task["project_id"]), output)
-                    success2, output2 = _execute_task(task, retry_prompt=retry_prompt)
-                    _active_proc = None
-                    if success2:
-                        _finish_task(task["id"], "hecha", output2)
-                        _record_event(task["id"], "completed", {"executor": "niwa-executor", "retry": True})
-                        log.info("task %s done (after retry)", task["id"])
-                        consecutive_failures = 0
-                        continue
-                    output = f"[attempt 1]\n{output}\n\n[attempt 2]\n{output2}"
+                time.sleep(CHAT_POLL_SECONDS)
 
-                _finish_task(task["id"], "bloqueada", output)
-                _record_event(
-                    task["id"], "status_changed",
-                    {"to": "bloqueada", "reason": "executor failure"},
-                )
-                log.warning("task %s blocked: %s", task["id"], output[:200])
-                consecutive_failures += 1
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    log.error(
-                        "Pausing: %d consecutive failures. Sleeping %ds.",
-                        consecutive_failures, POLL_SECONDS * 10,
-                    )
-                    time.sleep(POLL_SECONDS * 10)
-                    consecutive_failures = 0
         except KeyboardInterrupt:
             break
         except Exception as e:
             log.exception("executor loop error: %s", e)
             time.sleep(CHAT_POLL_SECONDS)
+
+    executor_pool.shutdown(wait=True)
 
 
 if __name__ == "__main__":
