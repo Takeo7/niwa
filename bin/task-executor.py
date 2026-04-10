@@ -811,6 +811,11 @@ def main() -> None:
     log.info("LLM command (chat):     %s", LLM_COMMAND_CHAT or "(same as tasks)")
     log.info("LLM command (planner):  %s", LLM_COMMAND_PLANNER or "(not set)")
     log.info("LLM command (executor): %s", LLM_COMMAND_EXECUTOR or "(same as tasks)")
+    log.info("Models: chat=%s, planner=%s, executor=%s",
+        LLM_COMMAND_CHAT.split("--model ")[-1].split(" ")[0] if "--model" in (LLM_COMMAND_CHAT or "") else "default",
+        LLM_COMMAND_PLANNER.split("--model ")[-1].split(" ")[0] if "--model" in (LLM_COMMAND_PLANNER or "") else "none",
+        LLM_COMMAND_EXECUTOR.split("--model ")[-1].split(" ")[0] if "--model" in (LLM_COMMAND_EXECUTOR or "") else "default",
+    )
     if PUBLIC_URL:
         log.info("Public URL: %s", PUBLIC_URL)
 

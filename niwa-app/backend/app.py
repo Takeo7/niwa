@@ -1223,6 +1223,85 @@ def apply_setup_token(token: str) -> dict:
     return {'ok': True, 'message': 'Token saved — the executor will use it as CLAUDE_CODE_OAUTH_TOKEN'}
 
 
+
+def get_available_models():
+    """Return list of available LLM models."""
+    models = [
+        {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "provider": "anthropic", "speed": "fast", "cost": "low",
+         "description": "Rápido y económico. Ideal para chat y triaje."},
+        {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "provider": "anthropic", "speed": "medium", "cost": "medium",
+         "description": "Balance entre velocidad y capacidad. Ideal para implementar código."},
+        {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "provider": "anthropic", "speed": "slow", "cost": "high",
+         "description": "Máxima capacidad. Ideal para planificación y análisis complejo."},
+        {"id": "auto", "name": "Auto (el planner decide)", "provider": "auto", "speed": "varies", "cost": "optimized",
+         "description": "El planner elige el modelo según la complejidad de cada tarea."},
+    ]
+    # TODO: detect Ollama models if OLLAMA_URL is configured
+    return models
+
+
+def get_agents_config():
+    """Return the 3 agent configurations."""
+    c = db_conn()
+    settings = {}
+    for row in c.execute("SELECT key, value FROM settings WHERE key LIKE 'agent.%'").fetchall():
+        settings[row['key']] = row['value']
+
+    import json
+    default_agents = {
+        "chat": {"model": "claude-haiku-4-5", "max_turns": 10, "description": "Responde en el chat. Rápido y conversacional. Delega tareas complejas."},
+        "planner": {"model": "claude-opus-4-6", "max_turns": 10, "description": "Analiza tareas complejas y las divide en subtareas más pequeñas."},
+        "executor": {"model": "claude-sonnet-4-6", "max_turns": 50, "description": "Implementa código, crea archivos, ejecuta las tareas reales."},
+    }
+
+    agents = {}
+    for role in ("chat", "planner", "executor"):
+        stored = settings.get(f"agent.{role}")
+        if stored:
+            try:
+                agents[role] = json.loads(stored)
+            except Exception:
+                agents[role] = default_agents[role]
+        else:
+            agents[role] = default_agents[role]
+
+    return agents
+
+
+def save_agents_config(data):
+    """Save agent configurations. data = {"chat": {...}, "planner": {...}, "executor": {...}}"""
+    import json
+    c = db_conn()
+    for role in ("chat", "planner", "executor"):
+        if role in data:
+            config = data[role]
+            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                      (f"agent.{role}", json.dumps(config)))
+    c.commit()
+
+    # Also update the old-style LLM_COMMAND settings for backward compat
+    agents = get_agents_config()
+    model_to_cmd = {
+        "claude-haiku-4-5": "claude -p --model claude-haiku-4-5",
+        "claude-sonnet-4-6": "claude -p --model claude-sonnet-4-6",
+        "claude-opus-4-6": "claude -p --model claude-opus-4-6",
+    }
+
+    base_flags = " --dangerously-skip-permissions"
+
+    for role, setting_key in [("chat", "int.llm_command_chat"), ("planner", "int.llm_command_planner"), ("executor", "int.llm_command_executor")]:
+        agent = agents.get(role, {})
+        model_id = agent.get("model", "")
+        max_turns = agent.get("max_turns", 10 if role != "executor" else 50)
+        if model_id and model_id != "auto":
+            cmd = model_to_cmd.get(model_id, f"claude -p --model {model_id}")
+            cmd += f" --max-turns {max_turns}{base_flags}"
+            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (setting_key, cmd))
+
+    c.commit()
+    return {"ok": True}
+
+
 def check_llm_status() -> dict:
     """Check configured LLM status based on settings (not container CLI checks).
 
@@ -1788,6 +1867,10 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/chat/sessions/') and path.endswith('/messages'):
             session_id = path.split('/')[4]
             return self._json(get_chat_messages(session_id))
+        if path == '/api/models':
+            return self._json(get_available_models())
+        if path == '/api/agents':
+            return self._json(get_agents_config())
         return self._json({'error': 'not_found'}, 404)
 
     def do_POST(self):
@@ -1921,6 +2004,9 @@ class Handler(BaseHTTPRequestHandler):
                 import threading as _thr
                 _thr.Thread(target=_scheduler._execute_routine, args=(routine,), daemon=True).start()
             return self._json({'ok': True, 'message': f'Routine {rid} queued'})
+        if path == '/api/agents':
+            result = save_agents_config(payload)
+            return self._json(result)
         return self._json({'error': 'not_found'}, 404)
 
     def do_PATCH(self):

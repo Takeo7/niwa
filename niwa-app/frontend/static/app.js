@@ -1725,41 +1725,19 @@ async function loadConfig() {
       ${_renderSettingToggle(_t('settings.idle_review'), isAuto ? _t('sys.auto_mode') : _t('sys.manual_mode'), isAuto, 'toggleIdleReviewMode()')}
     </div>`;
 
-  const modelsHtml = `
-    <div class="niwa-card rounded-lg p-6 mb-4">
-      <div class="flex items-center gap-3 mb-4">
-        <span class="material-symbols-outlined text-secondary">model_training</span>
-        <h3 class="text-sm font-semibold uppercase tracking-wider">Modelos LLM</h3>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Chat (Haiku — rápido)</label>
-          <input id="model-chat" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
-                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
-                 placeholder="claude -p --model claude-haiku-4-5 --max-turns 10">
-        </div>
-        <div>
-          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Planner (Opus — analiza y divide)</label>
-          <input id="model-planner" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
-                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
-                 placeholder="claude -p --model claude-opus-4-6 --max-turns 10">
-        </div>
-        <div>
-          <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Executor (Sonnet — implementa)</label>
-          <input id="model-executor" type="text" class="w-full rounded-lg px-3 py-2 text-sm"
-                 style="background:var(--c-surface);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);"
-                 placeholder="claude -p --model claude-sonnet-4-6 --max-turns 50">
-        </div>
-      </div>
-      <div class="flex items-center gap-3 mt-3">
-        <button onclick="saveModels()" class="px-3 py-1.5 bg-primary text-on-primary text-xs font-bold rounded-lg hover:opacity-90">
-          Guardar modelos
-        </button>
-        <span id="model-save-status" class="text-xs" style="color:var(--c-on-surface-variant);"></span>
-      </div>
+  const agentsPanelHtml = `
+    <div class="mt-6 rounded-2xl p-5" style="background:var(--c-surface-cont);" id="agents-panel">
+      <h3 class="text-lg font-bold mb-1" style="color:var(--c-on-surface);">Agentes</h3>
+      <p class="text-xs mb-4" style="color:var(--c-on-surface-variant);">Configura qué modelo usa cada agente del sistema.</p>
+      <div id="agents-grid" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+      <button onclick="saveAgents()" class="mt-4 px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
+              style="background:var(--c-primary);color:var(--c-on-primary);">
+        Guardar configuración
+      </button>
+      <span id="agents-save-status" class="ml-2 text-xs" style="color:var(--c-on-surface-variant);"></span>
     </div>`;
 
-  box.innerHTML = integrationsHtml + settingsHtml + modelsHtml + (data ? Object.entries(data).map(([key, val]) => `
+  box.innerHTML = integrationsHtml + settingsHtml + agentsPanelHtml + (data ? Object.entries(data).map(([key, val]) => `
     <div class="niwa-card rounded-lg p-6 mb-4">
       <div class="flex items-center gap-3 mb-4">
         <span class="material-symbols-outlined text-primary">settings</span>
@@ -1770,8 +1748,8 @@ async function loadConfig() {
     </div>`).join('') : '');
   // Initialize contextual help
   updateLlmHelp();
-  // Load current model settings
-  loadModels();
+  // Load agents config
+  loadAgents();
 }
 
 function _renderSettingToggle(label, desc, isOn, onclickExpr, opts) {
@@ -1798,30 +1776,89 @@ function _renderNotifyToggle(settings, key, label, desc, isMaster) {
   });
 }
 
-async function loadModels() {
+// ── Agents management ──────────────────────────────────
+let _agentsModels = [];
+let _agentsConfig = {};
+
+const AGENT_META = {
+  chat: { icon: 'chat_bubble', label: 'Chat', color: '#4CAF50', hint: 'Responde en el chat. Rápido y conversacional.' },
+  planner: { icon: 'psychology', label: 'Planner', color: '#FF9800', hint: 'Analiza tareas complejas y las divide en subtareas.' },
+  executor: { icon: 'code', label: 'Executor', color: '#2196F3', hint: 'Implementa código y ejecuta las tareas reales.' },
+};
+
+async function loadAgents() {
   try {
-    const s = await api('settings');
-    const chat = document.getElementById('model-chat');
-    const planner = document.getElementById('model-planner');
-    const executor = document.getElementById('model-executor');
-    if (chat) chat.value = s['int.llm_command_chat'] || '';
-    if (planner) planner.value = s['int.llm_command_planner'] || '';
-    if (executor) executor.value = s['int.llm_command_executor'] || s['int.llm_command'] || '';
-  } catch(e) {}
+    const [models, agents] = await Promise.all([
+      api('models'),
+      api('agents'),
+    ]);
+    _agentsModels = models || [];
+    _agentsConfig = agents || {};
+    renderAgents();
+  } catch(e) { console.error('loadAgents error', e); }
 }
 
-async function saveModels() {
-  const chat = document.getElementById('model-chat')?.value.trim();
-  const planner = document.getElementById('model-planner')?.value.trim();
-  const executor = document.getElementById('model-executor')?.value.trim();
-  const status = document.getElementById('model-save-status');
+function renderAgents() {
+  const grid = document.getElementById('agents-grid');
+  if (!grid) return;
+
+  grid.innerHTML = ['chat', 'planner', 'executor'].map(role => {
+    const meta = AGENT_META[role];
+    const config = _agentsConfig[role] || {};
+    const currentModel = config.model || '';
+    const maxTurns = config.max_turns || (role === 'executor' ? 50 : 10);
+
+    const options = _agentsModels
+      .filter(m => {
+        if (m.id === 'auto' && role !== 'executor') return false;
+        return true;
+      })
+      .map(m => {
+        const selected = m.id === currentModel ? 'selected' : '';
+        const badge = m.speed === 'fast' ? '⚡' : m.speed === 'slow' ? '🧠' : '⚖️';
+        return `<option value="${m.id}" ${selected}>${badge} ${m.name}</option>`;
+      }).join('');
+
+    return `
+      <div class="rounded-xl p-4" style="background:var(--c-surface);border:1px solid var(--c-outline-variant);">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-xl" style="color:${meta.color};">${meta.icon}</span>
+          <span class="font-bold text-sm" style="color:var(--c-on-surface);">${meta.label}</span>
+        </div>
+        <p class="text-xs mb-3" style="color:var(--c-on-surface-variant);">${meta.hint}</p>
+        <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Modelo</label>
+        <select id="agent-${role}-model" class="w-full rounded-lg px-3 py-2 text-sm mb-2"
+                style="background:var(--c-surface-cont);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);">
+          ${options}
+        </select>
+        <label class="text-xs font-semibold block mb-1" style="color:var(--c-on-surface-variant);">Max turns</label>
+        <input id="agent-${role}-turns" type="number" min="1" max="100" value="${maxTurns}"
+               class="w-full rounded-lg px-3 py-2 text-sm"
+               style="background:var(--c-surface-cont);color:var(--c-on-surface);border:1px solid var(--c-outline-variant);">
+      </div>
+    `;
+  }).join('');
+}
+
+async function saveAgents() {
+  const status = document.getElementById('agents-save-status');
+  const data = {};
+  for (const role of ['chat', 'planner', 'executor']) {
+    const modelEl = document.getElementById(`agent-${role}-model`);
+    const turnsEl = document.getElementById(`agent-${role}-turns`);
+    if (modelEl && turnsEl) {
+      data[role] = {
+        model: modelEl.value,
+        max_turns: parseInt(turnsEl.value) || 10,
+        description: (AGENT_META[role] || {}).hint || '',
+      };
+    }
+  }
   try {
-    if (chat !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_chat', value: chat }) });
-    if (planner !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_planner', value: planner }) });
-    if (executor !== undefined) await api('settings', { method: 'POST', body: JSON.stringify({ key: 'int.llm_command_executor', value: executor }) });
-    if (status) { status.textContent = '\u2713 Guardado. Reinicia el executor para aplicar.'; setTimeout(() => status.textContent = '', 5000); }
+    await api('agents', { method: 'POST', body: JSON.stringify(data) });
+    if (status) { status.textContent = '✓ Guardado. Reinicia el executor para aplicar.'; setTimeout(() => status.textContent = '', 5000); }
   } catch(e) {
-    if (status) status.textContent = '\u2717 Error: ' + e.message;
+    if (status) status.textContent = '✗ Error: ' + e.message;
   }
 }
 
