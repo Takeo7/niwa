@@ -233,7 +233,7 @@ function handleHashRoute() {
   if (S._skipHashRoute) { S._skipHashRoute = false; return; }
   const raw = window.location.hash.replace('#/', '').replace('#', '') || 'dashboard';
   const parts = raw.split('/');
-  const validViews = ['dashboard','kanban','projects','notes','history','system'];
+  const validViews = ['dashboard','kanban','projects','notes','history','system','chat'];
   const view = validViews.includes(parts[0]) ? parts[0] : 'dashboard';
   // Restore system sub-tab from hash (e.g. #/system/logs)
   if (view === 'system' && parts[1]) {
@@ -258,6 +258,7 @@ async function loadViewData(view) {
     case 'system': await loadSystem(); break;
     case 'history': await loadHistory(); break;
     case 'notes': await loadNotes(); break;
+    case 'chat': loadChatSessions(); break;
   }
 }
 
@@ -3197,4 +3198,169 @@ async function loadMyDay() {
 })().catch(err => {
   console.error('Init failed:', err);
   toast(_t('error.loading_dashboard'), 'error');
+});
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+let chatState = { sessions: [], activeSession: null, polling: null };
+
+async function loadChatSessions() {
+  try {
+    const sessions = await api('chat/sessions');
+    chatState.sessions = sessions || [];
+    renderChatSessions();
+  } catch(e) { console.error('chat sessions error', e); }
+}
+
+function renderChatSessions() {
+  const el = document.getElementById('chat-sessions-list');
+  if (!el) return;
+  if (!chatState.sessions.length) {
+    el.innerHTML = '<div class="text-xs text-center p-4" style="color:var(--c-on-surface-variant)">Sin conversaciones</div>';
+    return;
+  }
+  el.innerHTML = chatState.sessions.map(s => {
+    const active = chatState.activeSession && chatState.activeSession.id === s.id;
+    const bg = active ? 'var(--c-primary-container)' : 'transparent';
+    const color = active ? 'var(--c-on-primary-container)' : 'var(--c-on-surface)';
+    return `<div onclick="selectChatSession('${escJsAttr(s.id)}')" class="flex items-center justify-between gap-2 px-3 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-all" style="background:${bg}; color:${color};">
+      <span class="text-xs truncate flex-1">${escHtml(s.title)}</span>
+      <button onclick="event.stopPropagation();deleteChatSession('${escJsAttr(s.id)}')" class="opacity-50 hover:opacity-100">
+        <span class="material-symbols-outlined text-sm">close</span>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+async function createChatSession() {
+  try {
+    const session = await api('chat/sessions', { method: 'POST', body: JSON.stringify({}) });
+    if (!session) return;
+    chatState.sessions.unshift(session);
+    renderChatSessions();
+    selectChatSession(session.id);
+  } catch(e) { console.error('create session error', e); }
+}
+
+async function selectChatSession(sessionId) {
+  const session = chatState.sessions.find(s => s.id === sessionId);
+  if (!session) return;
+  chatState.activeSession = session;
+  renderChatSessions();
+  await loadChatMessages(sessionId);
+  startChatPolling();
+}
+
+async function deleteChatSession(sessionId) {
+  try {
+    await api(`chat/sessions/${sessionId}/delete`, { method: 'POST', body: '{}' });
+    chatState.sessions = chatState.sessions.filter(s => s.id !== sessionId);
+    if (chatState.activeSession && chatState.activeSession.id === sessionId) {
+      chatState.activeSession = null;
+      const el = document.getElementById('chat-messages');
+      if (el) el.innerHTML = '';
+    }
+    renderChatSessions();
+  } catch(e) { console.error('delete session error', e); }
+}
+
+async function loadChatMessages(sessionId) {
+  try {
+    const messages = await api(`chat/sessions/${sessionId}/messages`);
+    renderChatMessages(messages);
+  } catch(e) { console.error('load messages error', e); }
+}
+
+function renderChatMessages(messages) {
+  const el = document.getElementById('chat-messages');
+  if (!el) return;
+  if (!messages || !messages.length) {
+    el.innerHTML = '<div class="flex-1 flex items-center justify-center"><span class="text-sm" style="color:var(--c-on-surface-variant)">Escribe un mensaje para empezar</span></div>';
+    return;
+  }
+  el.innerHTML = messages.map(m => {
+    const isUser = m.role === 'user';
+    const align = isUser ? 'items-end' : 'items-start';
+    const bg = isUser ? 'var(--c-primary-container)' : 'var(--c-surface-container)';
+    const color = isUser ? 'var(--c-on-primary-container)' : 'var(--c-on-surface)';
+    let content = escHtml(m.content || '');
+    // Simple markdown: bold, code blocks, line breaks
+    content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    content = content.replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded text-xs" style="background:var(--c-surface-variant)">$1</code>');
+    content = content.replace(/\n/g, '<br>');
+
+    if (m.status === 'pending') {
+      content = '<div class="flex items-center gap-2"><div class="animate-pulse flex gap-1"><span class="w-2 h-2 rounded-full" style="background:var(--c-primary)"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.2s"></span><span class="w-2 h-2 rounded-full" style="background:var(--c-primary);animation-delay:0.4s"></span></div><span class="text-xs" style="color:var(--c-on-surface-variant)">Pensando...</span></div>';
+    }
+
+    return `<div class="flex flex-col ${align} max-w-[80%] ${isUser ? 'self-end' : 'self-start'}">
+      <div class="rounded-2xl px-4 py-2 text-sm" style="background:${bg}; color:${color}; white-space:pre-wrap; word-break:break-word;">
+        ${content}
+      </div>
+      <span class="text-xs mt-1" style="color:var(--c-on-surface-variant)">${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+    </div>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const content = (input ? input.value : '').trim();
+  if (!content) return;
+
+  // Create session if none active
+  if (!chatState.activeSession) {
+    await createChatSession();
+  }
+  if (!chatState.activeSession) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+  const btn = document.getElementById('chat-send-btn');
+  if (btn) btn.disabled = true;
+
+  try {
+    await api('chat/send', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: chatState.activeSession.id, content })
+    });
+    // Immediately show user message + pending assistant
+    await loadChatMessages(chatState.activeSession.id);
+    startChatPolling();
+  } catch(e) {
+    console.error('send error', e);
+  }
+  if (btn) btn.disabled = false;
+}
+
+function startChatPolling() {
+  stopChatPolling();
+  chatState.polling = setInterval(async () => {
+    if (!chatState.activeSession) return;
+    try {
+      const messages = await api(`chat/sessions/${chatState.activeSession.id}/messages`);
+      if (!messages) return;
+      const hasPending = messages.some(m => m.status === 'pending');
+      renderChatMessages(messages);
+      if (!hasPending) {
+        stopChatPolling();
+        // Reload sessions to update titles
+        loadChatSessions();
+      }
+    } catch(e) { console.error('poll error', e); }
+  }, 2000);
+}
+
+function stopChatPolling() {
+  if (chatState.polling) {
+    clearInterval(chatState.polling);
+    chatState.polling = null;
+  }
+}
+
+// Auto-resize textarea
+document.addEventListener('input', function(e) {
+  if (e.target && e.target.id === 'chat-input') {
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+  }
 });

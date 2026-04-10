@@ -120,6 +120,9 @@ tailwind.config = {
     </div>
   </div>
   <nav class="flex-1 flex flex-col items-center gap-1" id="nav-links">
+    <a data-view="chat" class="nav-link w-10 h-10 rounded-xl flex items-center justify-center transition-colors duration-200 cursor-pointer" title="Chat" aria-label="Chat">
+      <span class="material-symbols-outlined text-xl">chat_bubble</span>
+    </a>
     <a data-view="dashboard" class="nav-link nav-active w-10 h-10 rounded-xl flex items-center justify-center transition-colors duration-200 cursor-pointer" title="Dashboard" aria-label="Dashboard">
       <span class="material-symbols-outlined text-xl">dashboard</span>
     </a>
@@ -912,6 +915,37 @@ tailwind.config = {
 </div>
 
 </div>
+
+<section id="view-chat" class="view-section">
+    <div class="flex h-full" style="height: calc(100vh - 2rem);">
+        <!-- Sessions panel -->
+        <div id="chat-sessions-panel" class="w-64 border-r flex flex-col" style="border-color: var(--c-border);">
+            <div class="p-3 flex items-center justify-between" style="border-bottom: 1px solid var(--c-border);">
+                <span class="font-semibold text-sm" style="color: var(--c-on-surface);">Conversaciones</span>
+                <button onclick="createChatSession()" class="w-7 h-7 rounded-lg flex items-center justify-center hover:opacity-80 transition-all" style="background: var(--c-primary); color: white;">
+                    <span class="material-symbols-outlined text-sm">add</span>
+                </button>
+            </div>
+            <div id="chat-sessions-list" class="flex-1 overflow-y-auto p-2 flex flex-col gap-1"></div>
+        </div>
+        <!-- Chat panel -->
+        <div class="flex-1 flex flex-col">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 flex flex-col gap-3"></div>
+            <div class="p-3 flex gap-2" style="border-top: 1px solid var(--c-border);">
+                <textarea id="chat-input" rows="1" placeholder="Escribe un mensaje..."
+                    class="flex-1 rounded-xl px-4 py-2 text-sm resize-none"
+                    style="background: var(--c-surface-container); color: var(--c-on-surface); border: 1px solid var(--c-border); max-height: 120px;"
+                    onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendChatMessage();}"></textarea>
+                <button onclick="sendChatMessage()" id="chat-send-btn"
+                    class="w-10 h-10 rounded-xl flex items-center justify-center transition-all hover:opacity-80"
+                    style="background: var(--c-primary); color: white;">
+                    <span class="material-symbols-outlined text-xl">send</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</section>
+
 </main>
 
 <!-- ============ TASK EDIT MODAL ============ -->

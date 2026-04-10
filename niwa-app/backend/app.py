@@ -604,6 +604,174 @@ from tasks_service import (
 )
 
 
+# ── Chat CRUD ──
+
+def _ensure_chat_tables():
+    """Create chat tables if they don't exist."""
+    with db_conn() as c:
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Nueva conversaci\u00f3n',
+                model_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+            );
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                content TEXT NOT NULL DEFAULT '', task_id TEXT,
+                status TEXT NOT NULL DEFAULT 'done',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
+        """)
+        c.commit()
+
+# Call it once at module level
+try:
+    _ensure_chat_tables()
+except Exception:
+    pass
+
+
+def get_chat_sessions():
+    with db_conn() as c:
+        rows = c.execute("SELECT * FROM chat_sessions ORDER BY updated_at DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_chat_session(data):
+    sid = str(uuid.uuid4())
+    title = data.get('title', 'Nueva conversaci\u00f3n')
+    now = now_iso()
+    with db_conn() as c:
+        c.execute("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (?,?,?,?)",
+                  (sid, title, now, now))
+        c.commit()
+    return {'id': sid, 'title': title, 'created_at': now}
+
+
+def get_chat_messages(session_id):
+    with db_conn() as c:
+        rows = c.execute("SELECT * FROM chat_messages WHERE session_id=? ORDER BY created_at ASC",
+                         (session_id,)).fetchall()
+        result = []
+        for r in rows:
+            msg = dict(r)
+            # If assistant message is pending, check if the task completed
+            if msg['role'] == 'assistant' and msg['status'] == 'pending' and msg.get('task_id'):
+                task = c.execute("SELECT status FROM tasks WHERE id=?", (msg['task_id'],)).fetchone()
+                if task and task['status'] in ('hecha', 'bloqueada'):
+                    # Get the output from task_events
+                    evt = c.execute(
+                        "SELECT payload_json FROM task_events WHERE task_id=? AND type='comment' ORDER BY created_at DESC LIMIT 1",
+                        (msg['task_id'],)).fetchone()
+                    content = ''
+                    if evt:
+                        try:
+                            payload = json.loads(evt['payload_json'])
+                            content = payload.get('output', '') or ''
+                        except Exception:
+                            content = ''
+                    if not content and task['status'] == 'bloqueada':
+                        content = '[La tarea fue bloqueada. Revisa los logs para m\u00e1s detalles.]'
+                    elif not content:
+                        content = '[Sin respuesta]'
+                    # Clean ANSI escape codes from content
+                    content = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[\??[0-9;]*[a-zA-Z]|\x1b[<>][\w]', '', content).strip()
+                    c.execute("UPDATE chat_messages SET content=?, status='done' WHERE id=?", (content, msg['id']))
+                    c.commit()
+                    msg['content'] = content
+                    msg['status'] = 'done'
+            result.append(msg)
+    return result
+
+
+def send_chat_message(data):
+    session_id = data.get('session_id')
+    content = data.get('content', '').strip()
+    if not session_id or not content:
+        raise ValueError('session_id and content required')
+
+    now = now_iso()
+    with db_conn() as c:
+        # Create user message
+        user_msg_id = str(uuid.uuid4())
+        c.execute("INSERT INTO chat_messages (id, session_id, role, content, status, created_at) VALUES (?,?,?,?,?,?)",
+                  (user_msg_id, session_id, 'user', content, 'done', now))
+
+        # Build conversation history for the task description
+        history = c.execute(
+            "SELECT role, content FROM chat_messages WHERE session_id=? AND status='done' AND content!='' ORDER BY created_at ASC",
+            (session_id,)).fetchall()
+
+        # Compress history: last 8 messages verbatim, older ones truncated
+        history_list = [dict(h) for h in history]
+        context_parts = []
+        if len(history_list) > 8:
+            old = history_list[:-8]
+            compressed = []
+            for m in old:
+                role = 'Usuario' if m['role'] == 'user' else 'Asistente'
+                text = m['content'][:150]
+                if len(m['content']) > 150:
+                    text += '...'
+                compressed.append(f'{role}: {text}')
+            context_parts.append('[Contexto anterior]\n' + '\n'.join(compressed))
+            recent = history_list[-8:]
+        else:
+            recent = history_list
+
+        if recent:
+            lines = []
+            for m in recent:
+                role = 'Usuario' if m['role'] == 'user' else 'Asistente'
+                lines.append(f'{role}: {m["content"]}')
+            context_parts.append('[Conversaci\u00f3n reciente]\n' + '\n'.join(lines))
+
+        context_parts.append(f'[Mensaje actual]\n{content}')
+        task_description = '\n\n'.join(context_parts)
+
+        # Create internal task for the executor
+        task_id = f'chat-{uuid.uuid4().hex[:12]}'
+        task_title = content[:60] + ('...' if len(content) > 60 else '')
+        c.execute(
+            """INSERT INTO tasks (id, title, description, area, status, priority, source,
+               notes, created_at, updated_at, assigned_to_yume, assigned_to_claude)
+               VALUES (?,?,?,?,?,?,?,?,?,?,0,1)""",
+            (task_id, task_title, task_description, 'sistema', 'pendiente', 'alta',
+             'chat', '', now, now))
+
+        # Create assistant placeholder message
+        assistant_msg_id = str(uuid.uuid4())
+        c.execute("INSERT INTO chat_messages (id, session_id, role, content, task_id, status, created_at) VALUES (?,?,?,?,?,?,?)",
+                  (assistant_msg_id, session_id, 'assistant', '', task_id, 'pending', now))
+
+        # Update session title from first message
+        first = c.execute("SELECT COUNT(*) as cnt FROM chat_messages WHERE session_id=? AND role='user'",
+                          (session_id,)).fetchone()
+        if first and first['cnt'] <= 1:
+            c.execute("UPDATE chat_sessions SET title=?, updated_at=? WHERE id=?",
+                      (task_title, now, session_id))
+        else:
+            c.execute("UPDATE chat_sessions SET updated_at=? WHERE id=?", (now, session_id))
+
+        c.commit()
+
+    return {
+        'user_message': {'id': user_msg_id, 'role': 'user', 'content': content},
+        'assistant_message': {'id': assistant_msg_id, 'role': 'assistant', 'task_id': task_id, 'status': 'pending'},
+    }
+
+
+def delete_chat_session(session_id):
+    with db_conn() as c:
+        c.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+        c.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
+        c.commit()
+
+
 # ── Notes CRUD ──
 
 def fetch_notes(project_id=None, search=None):
@@ -1478,6 +1646,11 @@ class Handler(BaseHTTPRequestHandler):
             if not note:
                 return self._json({'error': 'not_found'}, 404)
             return self._json(note)
+        if path == '/api/chat/sessions':
+            return self._json(get_chat_sessions())
+        if path.startswith('/api/chat/sessions/') and path.endswith('/messages'):
+            session_id = path.split('/')[4]
+            return self._json(get_chat_messages(session_id))
         return self._json({'error': 'not_found'}, 404)
 
     def do_POST(self):
@@ -1586,6 +1759,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/notes':
             note_id = create_note(payload)
             return self._json({'ok': True, 'id': note_id}, 201)
+        if path == '/api/chat/sessions':
+            session = create_chat_session(payload)
+            return self._json(session, 201)
+        if path == '/api/chat/send':
+            result = send_chat_message(payload)
+            return self._json(result, 201)
+        if path.startswith('/api/chat/sessions/') and path.endswith('/delete'):
+            session_id = path.split('/')[4]
+            delete_chat_session(session_id)
+            return self._json({'ok': True})
         if path == '/api/routines':
             rid = scheduler.create_routine(db_conn, payload)
             return self._json({'ok': True, 'id': rid}, 201)
