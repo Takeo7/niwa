@@ -46,10 +46,15 @@ def test_executor():
     print(f"{'PASS' if passed else 'FAIL'}: output contains {'E2E_PASS' if passed else repr(output[:100])}")
     
     # Cleanup
-    db().execute("DELETE FROM tasks WHERE id=?", (task_id,))
-    db().execute("DELETE FROM task_events WHERE task_id=?", (task_id,))
-    db().commit()
-    
+    try:
+        conn = db()
+        conn.execute("DELETE FROM task_events WHERE task_id=?", (task_id,))
+        conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        conn.commit()
+        conn.close()
+    except Exception as cleanup_err:
+        print(f"  (cleanup warning: {cleanup_err})")
+
     return passed
 
 if __name__ == "__main__":
