@@ -1,9 +1,10 @@
-import { Box, Title, Badge, Paper, Stack, ScrollArea } from '@mantine/core';
+import { Box, Title, Badge, Paper, Stack, ScrollArea, Button } from '@mantine/core';
 import { useDroppable } from '@dnd-kit/core';
 import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
+import { IconPlus } from '@tabler/icons-react';
 import { KanbanCard } from './KanbanCard';
 import type { Task, KanbanColumn as KanbanColumnType } from '../../../shared/types';
 
@@ -11,9 +12,10 @@ interface Props {
   column: KanbanColumnType;
   tasks: Task[];
   onTaskClick: (taskId: string) => void;
+  onAddTask?: () => void;
 }
 
-export function KanbanColumn({ column, tasks, onTaskClick }: Props) {
+export function KanbanColumn({ column, tasks, onTaskClick, onAddTask }: Props) {
   const { setNodeRef, isOver } = useDroppable({
     id: column.status,
   });
@@ -43,7 +45,7 @@ export function KanbanColumn({ column, tasks, onTaskClick }: Props) {
             h={10}
             style={{
               borderRadius: '50%',
-              backgroundColor: column.color,
+              backgroundColor: column.color || 'var(--mantine-color-gray-5)',
               flexShrink: 0,
             }}
           />
@@ -53,7 +55,7 @@ export function KanbanColumn({ column, tasks, onTaskClick }: Props) {
           </Badge>
         </Title>
       </Box>
-      <ScrollArea.Autosize mah="calc(100vh - 230px)" offsetScrollbars>
+      <ScrollArea.Autosize mah="calc(100vh - 280px)" offsetScrollbars>
         <SortableContext
           items={tasks.map((t) => t.id)}
           strategy={verticalListSortingStrategy}
@@ -69,6 +71,18 @@ export function KanbanColumn({ column, tasks, onTaskClick }: Props) {
           </Stack>
         </SortableContext>
       </ScrollArea.Autosize>
+      {onAddTask && (
+        <Button
+          variant="subtle"
+          size="xs"
+          fullWidth
+          mt="xs"
+          leftSection={<IconPlus size={14} />}
+          onClick={onAddTask}
+        >
+          Agregar tarea
+        </Button>
+      )}
     </Paper>
   );
 }

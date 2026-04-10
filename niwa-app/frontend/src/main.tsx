@@ -12,6 +12,7 @@ import '@mantine/charts/styles.css';
 import '@mantine/dates/styles.css';
 import '@mantine/code-highlight/styles.css';
 import '@mantine/dropzone/styles.css';
+import '@mantine/spotlight/styles.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -7,11 +7,15 @@ import { ProjectDetail } from '../features/projects/components/ProjectDetail';
 import { SystemView } from '../features/system/components/SystemView';
 import { MetricsDashboard } from '../features/metrics/components/MetricsDashboard';
 import { NotesList } from '../features/notes/components/NotesList';
+import { DashboardView } from '../features/dashboard/components/DashboardView';
+import { HistoryView } from '../features/history/components/HistoryView';
 
 export function AppRouter() {
   return (
     <Routes>
-      <Route path="/" element={<ChatView />} />
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/dashboard" element={<DashboardView />} />
+      <Route path="/chat" element={<ChatView />} />
       <Route path="/tasks" element={<TaskList />} />
       <Route path="/kanban" element={<KanbanBoard />} />
       <Route path="/projects" element={<ProjectList />} />
@@ -19,7 +23,8 @@ export function AppRouter() {
       <Route path="/system" element={<SystemView />} />
       <Route path="/metrics" element={<MetricsDashboard />} />
       <Route path="/notes" element={<NotesList />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/history" element={<HistoryView />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

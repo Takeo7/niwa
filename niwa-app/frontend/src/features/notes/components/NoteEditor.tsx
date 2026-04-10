@@ -3,6 +3,7 @@ import {
   Modal,
   TextInput,
   Textarea,
+  Select,
   Button,
   Stack,
   Group,
@@ -12,7 +13,7 @@ import {
 } from '@mantine/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useCreateNote, useUpdateNote } from '../../../shared/api/queries';
+import { useCreateNote, useUpdateNote, useProjects } from '../../../shared/api/queries';
 import type { Note } from '../../../shared/types';
 
 interface Props {
@@ -24,27 +25,45 @@ interface Props {
 export function NoteEditor({ opened, onClose, note }: Props) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [tags, setTags] = useState('');
   const [view, setView] = useState('edit');
   const createNote = useCreateNote();
   const updateNote = useUpdateNote();
+  const { data: projects } = useProjects();
   const isEditing = !!note;
+
+  const projectOptions = (projects || []).map((p) => ({
+    value: String(p.id),
+    label: p.name,
+  }));
 
   useEffect(() => {
     if (note) {
       setTitle(note.title);
       setContent(note.content || '');
+      setProjectId(note.project_id ? String(note.project_id) : null);
+      setTags(note.tags || '');
     } else {
       setTitle('');
       setContent('');
+      setProjectId(null);
+      setTags('');
     }
     setView('edit');
   }, [note, opened]);
 
   const handleSave = async () => {
+    const data = {
+      title,
+      content,
+      project_id: projectId,
+      tags: tags || null,
+    };
     if (isEditing) {
-      await updateNote.mutateAsync({ id: note.id, title, content });
+      await updateNote.mutateAsync({ id: note.id, ...data });
     } else {
-      await createNote.mutateAsync({ title, content });
+      await createNote.mutateAsync(data);
     }
     onClose();
   };
@@ -64,6 +83,23 @@ export function NoteEditor({ opened, onClose, note }: Props) {
           placeholder="Título de la nota"
           required
         />
+
+        <Group grow>
+          <Select
+            label="Proyecto"
+            data={projectOptions}
+            value={projectId}
+            onChange={setProjectId}
+            clearable
+            placeholder="Sin proyecto"
+          />
+          <TextInput
+            label="Etiquetas"
+            value={tags}
+            onChange={(e) => setTags(e.currentTarget.value)}
+            placeholder="tag1, tag2, tag3"
+          />
+        </Group>
 
         <SegmentedControl
           data={[

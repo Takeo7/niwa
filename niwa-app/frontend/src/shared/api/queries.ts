@@ -21,6 +21,12 @@ import type {
   OAuthStatus,
   Settings,
   VersionInfo,
+  DashboardData,
+  ActivityItem,
+  HistoryResponse,
+  Routine,
+  SearchResult,
+  TaskAttachment,
 } from '../types';
 
 // ── Tasks ──
@@ -401,5 +407,198 @@ export function useVersion() {
     queryKey: ['version'],
     queryFn: () => api<VersionInfo>('version'),
     staleTime: 300000,
+  });
+}
+
+// ── Dashboard ──
+export function useDashboard() {
+  return useQuery({
+    queryKey: ['dashboard'],
+    queryFn: () => api<DashboardData>('dashboard'),
+    refetchInterval: 30000,
+  });
+}
+
+export function useActivity(limit = 8) {
+  return useQuery({
+    queryKey: ['activity', limit],
+    queryFn: () => api<ActivityItem[]>(`activity?limit=${limit}`),
+  });
+}
+
+// ── History ──
+export function useHistory(params?: {
+  page?: number;
+  per_page?: number;
+  sort?: string;
+  order?: string;
+  status?: string;
+  search?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.per_page) qs.set('per_page', String(params.per_page));
+  if (params?.sort) qs.set('sort', params.sort);
+  if (params?.order) qs.set('order', params.order);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.search) qs.set('search', params.search);
+  const query = qs.toString();
+  return useQuery({
+    queryKey: ['history', params],
+    queryFn: () => api<HistoryResponse>(`tasks/history${query ? `?${query}` : ''}`),
+  });
+}
+
+// ── Routines ──
+export function useRoutines() {
+  return useQuery({
+    queryKey: ['routines'],
+    queryFn: () => api<Routine[]>('routines'),
+  });
+}
+
+export function useCreateRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<Routine>) => apiPost<Routine>('routines', data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); },
+  });
+}
+
+export function useUpdateRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: Partial<Routine> & { id: string }) =>
+      apiPatch<Routine>(`routines/${id}`, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); },
+  });
+}
+
+export function useDeleteRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiDelete<{ ok: boolean }>(`routines/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); },
+  });
+}
+
+export function useToggleRoutine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiPost<{ ok: boolean }>(`routines/${id}/toggle`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['routines'] }); },
+  });
+}
+
+export function useRunRoutine() {
+  return useMutation({
+    mutationFn: (id: string) => apiPost<{ ok: boolean }>(`routines/${id}/run`, {}),
+  });
+}
+
+// ── Logs ──
+export function useLogs(source = 'app', lines = 200) {
+  return useQuery({
+    queryKey: ['logs', source, lines],
+    queryFn: () => api<{ lines: string[] }>(`logs?source=${source}&lines=${lines}`),
+  });
+}
+
+// ── Search ──
+export function useSearch(query: string) {
+  return useQuery({
+    queryKey: ['search', query],
+    queryFn: () => api<SearchResult>(`search?q=${encodeURIComponent(query)}`),
+    enabled: query.length >= 2,
+  });
+}
+
+// ── Task Attachments ──
+export function useTaskAttachments(taskId: string | null) {
+  return useQuery({
+    queryKey: ['task-attachments', taskId],
+    queryFn: () => api<TaskAttachment[]>(`tasks/${taskId}/attachments`),
+    enabled: !!taskId,
+  });
+}
+
+export function useUploadTaskAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ taskId, file }: { taskId: string; file: File }) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`/api/tasks/${taskId}/attachments`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin',
+      });
+      if (!res.ok) throw new Error('Error al subir archivo');
+      return res.json();
+    },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-attachments', vars.taskId] });
+    },
+  });
+}
+
+export function useDeleteTaskAttachment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, filename }: { taskId: string; filename: string }) =>
+      apiDelete<{ ok: boolean }>(`tasks/${taskId}/attachments/${encodeURIComponent(filename)}`),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-attachments', vars.taskId] });
+    },
+  });
+}
+
+// ── Task Reject ──
+export function useRejectTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiPost<{ ok: boolean }>(`tasks/${id}/reject`, { reason }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['task'] });
+      qc.invalidateQueries({ queryKey: ['kanban'] });
+    },
+  });
+}
+
+// ── Projects Mutations ──
+export function useCreateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<Project>) => apiPost<{ ok: boolean; id: string }>('projects', data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); },
+  });
+}
+
+export function useUpdateProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, ...data }: Partial<Project> & { slug: string }) =>
+      apiPatch<{ ok: boolean }>(`projects/${slug}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['project'] });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => apiDelete<{ ok: boolean }>(`projects/${slug}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); },
+  });
+}
+
+// ── System ──
+export function useSystemUpdate() {
+  return useMutation({
+    mutationFn: () => apiPost<{ ok: boolean; message: string }>('system/update', {}),
   });
 }

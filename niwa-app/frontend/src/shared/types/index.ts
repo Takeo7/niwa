@@ -209,3 +209,98 @@ export interface VersionInfo {
   version: string;
   [key: string]: unknown;
 }
+
+// ── Dashboard ──
+export interface DashboardData {
+  done_today: number;
+  pending: number;
+  blocked: number;
+  in_progress: number;
+  routines_count?: number;
+  attention: Array<{
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    due_at?: string | null;
+    project_name?: string | null;
+  }>;
+  velocity: Array<{ day: string; count: number }>;
+}
+
+// ── Activity ──
+export interface ActivityItem {
+  id: string;
+  type: string;
+  task_id?: string;
+  task_title?: string;
+  project_name?: string;
+  agent_name?: string;
+  description: string;
+  created_at: string;
+}
+
+// ── History ──
+export interface HistoryEntry {
+  id: string;
+  title: string;
+  project_name?: string | null;
+  agent_name?: string | null;
+  source?: string;
+  status: string;
+  duration?: number | null;
+  attempts?: number;
+  completed_at?: string | null;
+  created_at: string;
+}
+
+export interface HistoryResponse {
+  items: HistoryEntry[];
+  total: number;
+  page: number;
+  per_page: number;
+  stats?: {
+    total: number;
+    success: number;
+    failed: number;
+    avg_duration: number;
+  };
+}
+
+// ── Routine ──
+export interface Routine {
+  id: string;
+  name: string;
+  description?: string;
+  schedule: string;
+  action_type?: string;
+  action_config?: Record<string, unknown>;
+  enabled: boolean | number;
+  last_run?: string | null;
+  next_run?: string | null;
+  errors?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ── Log ──
+export interface LogEntry {
+  line: string;
+  level?: string;
+  source?: string;
+  timestamp?: string;
+}
+
+// ── Search ──
+export interface SearchResult {
+  tasks: Array<{ id: string; title: string; status: string }>;
+  projects: Array<{ id: string; name: string; slug: string }>;
+  notes?: Array<{ id: string; title: string }>;
+}
+
+// ── Attachment ──
+export interface TaskAttachment {
+  filename: string;
+  size?: number;
+  created_at?: string;
+}

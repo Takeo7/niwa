@@ -7,6 +7,11 @@ interface Props {
   message: ChatMessage;
 }
 
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 function extractImages(content: string): { text: string; images: string[] } {
   const images: string[] = [];
   const imagePattern = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp))/gi;
@@ -27,7 +32,7 @@ function extractImages(content: string): { text: string; images: string[] } {
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === 'user';
   const isPending = message.status === 'pending' && !message.content;
-  const { text, images } = extractImages(message.content || '');
+  const { text, images } = extractImages(stripAnsi(message.content || ''));
 
   return (
     <Box

@@ -7,6 +7,7 @@ import {
   Button,
   Stack,
   Group,
+  Checkbox,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { useCreateTask, useUpdateTask } from '../hooks/useTasks';
@@ -35,6 +36,12 @@ const PRIORITY_OPTIONS = [
   { value: 'critica', label: 'Crítica' },
 ];
 
+const AREA_OPTIONS = [
+  { value: 'personal', label: 'Personal' },
+  { value: 'trabajo', label: 'Trabajo' },
+  { value: 'empresa', label: 'Empresa' },
+];
+
 export function TaskForm({ opened, onClose, task }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -42,6 +49,9 @@ export function TaskForm({ opened, onClose, task }: Props) {
   const [priority, setPriority] = useState('media');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [dueDate, setDueDate] = useState<Date | null>(null);
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [area, setArea] = useState<string | null>(null);
+  const [urgent, setUrgent] = useState(false);
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -57,6 +67,9 @@ export function TaskForm({ opened, onClose, task }: Props) {
       setPriority(task.priority);
       setProjectId(task.project_id);
       setDueDate(task.due_at ? new Date(task.due_at) : null);
+      setStartDate(task.scheduled_for ? new Date(task.scheduled_for) : null);
+      setArea(task.area || null);
+      setUrgent(task.urgent === 1);
     } else {
       setTitle('');
       setDescription('');
@@ -64,6 +77,9 @@ export function TaskForm({ opened, onClose, task }: Props) {
       setPriority('media');
       setProjectId(null);
       setDueDate(null);
+      setStartDate(null);
+      setArea(null);
+      setUrgent(false);
     }
   }, [task, opened]);
 
@@ -73,19 +89,22 @@ export function TaskForm({ opened, onClose, task }: Props) {
   }));
 
   const handleSubmit = async () => {
-    const data = {
+    const data: Record<string, unknown> = {
       title,
       description,
       status,
       priority,
       project_id: projectId,
       due_at: dueDate ? dueDate.toISOString().split('T')[0] : null,
+      scheduled_for: startDate ? startDate.toISOString().split('T')[0] : null,
+      area: area || '',
+      urgent: urgent ? 1 : 0,
     };
 
     if (isEditing) {
-      await updateTask.mutateAsync({ id: task.id, ...data });
+      await updateTask.mutateAsync({ id: task.id, ...data } as Parameters<typeof updateTask.mutateAsync>[0]);
     } else {
-      await createTask.mutateAsync(data);
+      await createTask.mutateAsync(data as Parameters<typeof createTask.mutateAsync>[0]);
     }
     onClose();
   };
@@ -135,6 +154,24 @@ export function TaskForm({ opened, onClose, task }: Props) {
             clearable
             placeholder="Sin proyecto"
           />
+          <Select
+            label="Área"
+            data={AREA_OPTIONS}
+            value={area}
+            onChange={setArea}
+            clearable
+            placeholder="Sin área"
+          />
+        </Group>
+        <Group grow>
+          <DateInput
+            label="Fecha inicio"
+            value={startDate}
+            onChange={setStartDate}
+            clearable
+            placeholder="Sin fecha"
+            valueFormat="DD/MM/YYYY"
+          />
           <DateInput
             label="Fecha límite"
             value={dueDate}
@@ -144,6 +181,11 @@ export function TaskForm({ opened, onClose, task }: Props) {
             valueFormat="DD/MM/YYYY"
           />
         </Group>
+        <Checkbox
+          label="Urgente"
+          checked={urgent}
+          onChange={(e) => setUrgent(e.currentTarget.checked)}
+        />
         <Group justify="flex-end" mt="md">
           <Button variant="subtle" onClick={onClose}>
             Cancelar

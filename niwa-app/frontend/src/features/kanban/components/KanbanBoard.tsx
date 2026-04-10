@@ -7,6 +7,8 @@ import {
   Text,
   ScrollArea,
   Group,
+  Select,
+  Checkbox,
 } from '@mantine/core';
 import {
   DndContext,
@@ -21,21 +23,33 @@ import {
 import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
 import { useKanbanColumns, useTasks, useUpdateTask } from '../hooks/useKanban';
+import { useProjects } from '../../../shared/api/queries';
 import { TaskDetail } from '../../tasks/components/TaskDetail';
+import { TaskForm } from '../../tasks/components/TaskForm';
 import type { Task } from '../../../shared/types';
 
 export function KanbanBoard() {
   const { data: columns, isLoading: colsLoading } = useKanbanColumns();
-  const { data: tasks, isLoading: tasksLoading } = useTasks({ include_done: true });
+  const [showDone, setShowDone] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const { data: tasks, isLoading: tasksLoading } = useTasks({ include_done: showDone });
+  const { data: projects } = useProjects();
   const updateTask = useUpdateTask();
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [addTaskStatus, setAddTaskStatus] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 },
     }),
   );
+
+  const filteredTasks = useMemo(() => {
+    if (!tasks) return [];
+    if (!projectFilter) return tasks;
+    return tasks.filter((t) => String(t.project_id) === projectFilter);
+  }, [tasks, projectFilter]);
 
   const tasksByStatus = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -44,18 +58,21 @@ export function KanbanBoard() {
         map[col.status] = [];
       }
     }
-    if (tasks) {
-      for (const task of tasks) {
-        if (map[task.status]) {
-          map[task.status].push(task);
-        }
+    for (const task of filteredTasks) {
+      if (map[task.status]) {
+        map[task.status].push(task);
       }
     }
     return map;
-  }, [columns, tasks]);
+  }, [columns, filteredTasks]);
+
+  const projectOptions = (projects || []).map((p) => ({
+    value: String(p.id),
+    label: p.name,
+  }));
 
   const handleDragStart = (event: DragStartEvent) => {
-    const task = tasks?.find((t) => t.id === event.active.id);
+    const task = filteredTasks.find((t) => t.id === event.active.id);
     if (task) setActiveTask(task);
   };
 
@@ -66,7 +83,7 @@ export function KanbanBoard() {
 
     const taskId = String(active.id);
     const newStatus = String(over.id);
-    const task = tasks?.find((t) => t.id === taskId);
+    const task = filteredTasks.find((t) => t.id === taskId);
 
     if (task && task.status !== newStatus) {
       updateTask.mutate({ id: taskId, status: newStatus });
@@ -93,6 +110,23 @@ export function KanbanBoard() {
     <Box>
       <Group justify="space-between" mb="md">
         <Title order={3}>Kanban</Title>
+        <Group gap="sm">
+          <Select
+            placeholder="Filtrar proyecto"
+            data={projectOptions}
+            value={projectFilter}
+            onChange={setProjectFilter}
+            clearable
+            size="xs"
+            w={180}
+          />
+          <Checkbox
+            label="Mostrar hechas"
+            checked={showDone}
+            onChange={(e) => setShowDone(e.currentTarget.checked)}
+            size="xs"
+          />
+        </Group>
       </Group>
       <ScrollArea>
         <DndContext
@@ -108,6 +142,7 @@ export function KanbanBoard() {
                 column={col}
                 tasks={tasksByStatus[col.status] || []}
                 onTaskClick={setDetailTaskId}
+                onAddTask={() => setAddTaskStatus(col.status)}
               />
             ))}
           </Box>
@@ -121,6 +156,12 @@ export function KanbanBoard() {
         taskId={detailTaskId}
         opened={!!detailTaskId}
         onClose={() => setDetailTaskId(null)}
+      />
+
+      <TaskForm
+        opened={!!addTaskStatus}
+        onClose={() => setAddTaskStatus(null)}
+        task={addTaskStatus ? { status: addTaskStatus } as Task : null}
       />
     </Box>
   );

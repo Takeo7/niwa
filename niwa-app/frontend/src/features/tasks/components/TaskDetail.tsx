@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Modal,
   Stack,
@@ -10,9 +11,29 @@ import {
   Divider,
   Loader,
   Center,
+  TextInput,
+  ActionIcon,
+  Paper,
 } from '@mantine/core';
-import { IconTrash } from '@tabler/icons-react';
-import { useTask, useUpdateTask, useDeleteTask } from '../hooks/useTasks';
+import { Dropzone } from '@mantine/dropzone';
+import {
+  IconTrash,
+  IconUpload,
+  IconFile,
+  IconDownload,
+  IconX,
+  IconPlus,
+  IconPlayerStop,
+} from '@tabler/icons-react';
+import {
+  useTask,
+  useUpdateTask,
+  useDeleteTask,
+  useTaskAttachments,
+  useUploadTaskAttachment,
+  useDeleteTaskAttachment,
+  useRejectTask,
+} from '../hooks/useTasks';
 import { notifications } from '@mantine/notifications';
 
 interface Props {
@@ -48,6 +69,11 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
   const { data: task, isLoading } = useTask(taskId);
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
+  const { data: attachments } = useTaskAttachments(taskId);
+  const uploadAttachment = useUploadTaskAttachment();
+  const deleteAttachment = useDeleteTaskAttachment();
+  const rejectTask = useRejectTask();
+  const [newLabel, setNewLabel] = useState('');
 
   const handleStatusChange = (status: string | null) => {
     if (!task || !status) return;
@@ -68,6 +94,47 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
       color: 'red',
     });
     onClose();
+  };
+
+  const handleReject = async () => {
+    if (!task) return;
+    const reason = window.prompt('Razón del rechazo:');
+    if (reason === null) return;
+    await rejectTask.mutateAsync({ id: task.id, reason: reason || '' });
+    notifications.show({
+      title: 'Tarea rechazada',
+      message: `"${task.title}" ha sido rechazada`,
+      color: 'orange',
+    });
+  };
+
+  // Labels
+  const labels = task?.tags ? task.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+
+  const addLabel = () => {
+    if (!task || !newLabel.trim()) return;
+    const updated = [...labels, newLabel.trim()].join(', ');
+    updateTask.mutate({ id: task.id, tags: updated });
+    setNewLabel('');
+  };
+
+  const removeLabel = (label: string) => {
+    if (!task) return;
+    const updated = labels.filter((l) => l !== label).join(', ');
+    updateTask.mutate({ id: task.id, tags: updated });
+  };
+
+  // Attachments
+  const handleUpload = (files: File[]) => {
+    if (!task) return;
+    for (const file of files) {
+      uploadAttachment.mutate({ taskId: task.id, file });
+    }
+  };
+
+  const handleDeleteAttachment = (filename: string) => {
+    if (!task) return;
+    deleteAttachment.mutate({ taskId: task.id, filename });
   };
 
   return (
@@ -103,7 +170,47 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
               <Badge variant="outline">{task.project_name}</Badge>
             )}
             {task.urgent === 1 && <Badge color="red">Urgente</Badge>}
+            {task.area && (
+              <Badge variant="dot">{task.area}</Badge>
+            )}
           </Group>
+
+          {/* Labels */}
+          <Stack gap="xs">
+            <Text size="sm" fw={500}>Etiquetas</Text>
+            <Group gap={4}>
+              {labels.map((label) => (
+                <Badge
+                  key={label}
+                  variant="light"
+                  rightSection={
+                    <ActionIcon
+                      size="xs"
+                      variant="transparent"
+                      onClick={() => removeLabel(label)}
+                    >
+                      <IconX size={10} />
+                    </ActionIcon>
+                  }
+                >
+                  {label}
+                </Badge>
+              ))}
+              <Group gap={4}>
+                <TextInput
+                  size="xs"
+                  placeholder="Nueva etiqueta"
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.currentTarget.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addLabel(); }}
+                  w={120}
+                />
+                <ActionIcon size="sm" variant="light" onClick={addLabel} disabled={!newLabel.trim()}>
+                  <IconPlus size={14} />
+                </ActionIcon>
+              </Group>
+            </Group>
+          </Stack>
 
           <Divider />
 
@@ -121,6 +228,27 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
               onChange={handlePriorityChange}
             />
           </Group>
+
+          {/* Pipeline phase */}
+          {task.agent_status && (
+            <Paper p="xs" radius="sm" withBorder>
+              <Group gap="xs">
+                <Text size="sm" fw={500}>Fase:</Text>
+                <Badge
+                  color={
+                    task.agent_status === 'running' ? 'cyan' :
+                    task.agent_status === 'completed' ? 'green' :
+                    task.agent_status === 'failed' ? 'red' : 'gray'
+                  }
+                >
+                  {task.agent_status}
+                </Badge>
+                {task.agent_name && (
+                  <Text size="xs" c="dimmed">Agente: {task.agent_name}</Text>
+                )}
+              </Group>
+            </Paper>
+          )}
 
           <Group gap="xs">
             <Text size="xs" c="dimmed">
@@ -141,17 +269,75 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
           {task.notes && (
             <>
               <Divider />
-              <Text size="sm" fw={500}>
-                Notas
-              </Text>
+              <Text size="sm" fw={500}>Notas</Text>
               <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
                 {task.notes}
               </Text>
             </>
           )}
 
+          {/* Attachments */}
+          <Divider />
+          <Text size="sm" fw={500}>Adjuntos</Text>
+          <Dropzone
+            onDrop={handleUpload}
+            loading={uploadAttachment.isPending}
+            maxSize={10 * 1024 * 1024}
+          >
+            <Group justify="center" gap="xs" p="xs" style={{ pointerEvents: 'none' }}>
+              <IconUpload size={20} />
+              <Text size="sm" c="dimmed">
+                Arrastra archivos o haz clic para subir
+              </Text>
+            </Group>
+          </Dropzone>
+          {attachments && attachments.length > 0 && (
+            <Stack gap={4}>
+              {attachments.map((att) => (
+                <Paper key={att.filename} p="xs" radius="sm" withBorder>
+                  <Group justify="space-between" wrap="nowrap">
+                    <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+                      <IconFile size={16} />
+                      <Text size="sm" lineClamp={1}>{att.filename}</Text>
+                    </Group>
+                    <Group gap={4} wrap="nowrap">
+                      <ActionIcon
+                        size="sm"
+                        variant="light"
+                        component="a"
+                        href={`/api/tasks/${task.id}/attachments/${encodeURIComponent(att.filename)}`}
+                        target="_blank"
+                      >
+                        <IconDownload size={14} />
+                      </ActionIcon>
+                      <ActionIcon
+                        size="sm"
+                        variant="light"
+                        color="red"
+                        onClick={() => handleDeleteAttachment(att.filename)}
+                      >
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    </Group>
+                  </Group>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+
           <Divider />
           <Group justify="flex-end">
+            {(task.status === 'en_progreso' || task.status === 'hecha') && (
+              <Button
+                color="orange"
+                variant="light"
+                leftSection={<IconPlayerStop size={16} />}
+                onClick={handleReject}
+                loading={rejectTask.isPending}
+              >
+                Rechazar
+              </Button>
+            )}
             <Button
               color="red"
               variant="light"

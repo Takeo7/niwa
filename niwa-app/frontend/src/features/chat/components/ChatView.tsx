@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Box,
   Stack,
@@ -12,12 +12,10 @@ import {
   Loader,
   Center,
   Divider,
-  Menu,
 } from '@mantine/core';
 import {
   IconPlus,
   IconMessageCircle,
-  IconDotsVertical,
   IconTrash,
 } from '@tabler/icons-react';
 import { useAppStore } from '../../../shared/stores/app';
@@ -39,6 +37,8 @@ export function ChatView() {
   const sendMessage = useSendChatMessage();
   const deleteSession = useDeleteChatSession();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [idleTicks, setIdleTicks] = useState(0);
+  const lastMsgCount = useRef(0);
 
   // Auto-select first session
   useEffect(() => {
@@ -55,19 +55,47 @@ export function ChatView() {
         behavior: 'smooth',
       });
     }
+    // Idle timeout: reset when new messages arrive
+    const count = messages?.length ?? 0;
+    if (count !== lastMsgCount.current) {
+      lastMsgCount.current = count;
+      setIdleTicks(0);
+    }
   }, [messages]);
+
+  // Idle timeout: increment ticks every 3s (polling interval)
+  useEffect(() => {
+    if (!activeChat) return;
+    const interval = setInterval(() => {
+      setIdleTicks((t) => t + 1);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [activeChat]);
+
+  // Stop polling after ~2 min idle (40 ticks * 3s = 120s)
+  const isIdle = idleTicks > 40;
 
   const handleNewChat = async () => {
     const session = await createSession.mutateAsync({
       title: 'Nueva conversación',
     });
     setActiveChat(session.id);
+    setIdleTicks(0);
   };
 
-  const handleSend = (content: string) => {
-    if (!activeChat) return;
+  const handleSend = useCallback(async (content: string) => {
+    setIdleTicks(0);
+    // Auto-create session if none exist
+    if (!activeChat) {
+      const session = await createSession.mutateAsync({
+        title: content.slice(0, 50),
+      });
+      setActiveChat(session.id);
+      sendMessage.mutate({ session_id: session.id, content });
+      return;
+    }
     sendMessage.mutate({ session_id: activeChat, content });
-  };
+  }, [activeChat, createSession, sendMessage, setActiveChat]);
 
   const handleDeleteSession = (id: string) => {
     deleteSession.mutate(id);
@@ -120,37 +148,44 @@ export function ChatView() {
                     description={new Date(s.updated_at).toLocaleDateString('es-ES')}
                     leftSection={<IconMessageCircle size={16} />}
                     active={activeChat === s.id}
-                    onClick={() => setActiveChat(s.id)}
+                    onClick={() => { setActiveChat(s.id); setIdleTicks(0); }}
                     variant="light"
                     style={{ flex: 1, borderRadius: 'var(--mantine-radius-md)' }}
                     styles={{ label: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }}
                   />
-                  <Menu shadow="md" width={160}>
-                    <Menu.Target>
-                      <ActionIcon variant="subtle" size="sm">
-                        <IconDotsVertical size={14} />
-                      </ActionIcon>
-                    </Menu.Target>
-                    <Menu.Dropdown>
-                      <Menu.Item
-                        leftSection={<IconTrash size={14} />}
-                        color="red"
-                        onClick={() => handleDeleteSession(s.id)}
-                      >
-                        Eliminar
-                      </Menu.Item>
-                    </Menu.Dropdown>
-                  </Menu>
+                  <ActionIcon
+                    variant="subtle"
+                    size="sm"
+                    color="red"
+                    onClick={() => handleDeleteSession(s.id)}
+                    title="Eliminar"
+                  >
+                    <IconTrash size={14} />
+                  </ActionIcon>
                 </Group>
               ))}
             </Stack>
           )}
         </ScrollArea>
+        {isIdle && activeChat && (
+          <Text size="xs" c="dimmed" ta="center" py={4}>
+            Sondeo pausado por inactividad
+          </Text>
+        )}
       </Paper>
 
       {/* Chat area */}
       <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {!activeChat ? (
+        {!activeChat && !sessions?.length ? (
+          <Center style={{ flex: 1 }}>
+            <Stack align="center" gap="sm">
+              <IconMessageCircle size={48} color="var(--mantine-color-dimmed)" />
+              <Text c="dimmed">
+                Escribe un mensaje para iniciar una conversación
+              </Text>
+            </Stack>
+          </Center>
+        ) : !activeChat ? (
           <Center style={{ flex: 1 }}>
             <Stack align="center" gap="sm">
               <IconMessageCircle size={48} color="var(--mantine-color-dimmed)" />
@@ -189,6 +224,15 @@ export function ChatView() {
               />
             </Box>
           </>
+        )}
+        {/* Send even without activeChat */}
+        {!activeChat && (
+          <Box p="md" pt="xs">
+            <ChatInput
+              onSend={handleSend}
+              loading={sendMessage.isPending || createSession.isPending}
+            />
+          </Box>
         )}
       </Box>
     </Box>

@@ -3,10 +3,16 @@ import {
   IconPlugConnected,
   IconRobot,
   IconSettings,
+  IconClock,
+  IconFileText,
+  IconPalette,
 } from '@tabler/icons-react';
 import { ServicesPanel } from './ServicesPanel';
 import { AgentsPanel } from './AgentsPanel';
 import { ConfigPanel } from './ConfigPanel';
+import { RoutinesPanel } from './RoutinesPanel';
+import { LogsPanel } from './LogsPanel';
+import { StylesPanel } from './StylesPanel';
 
 export function SystemView() {
   return (
@@ -28,7 +34,25 @@ export function SystemView() {
             value="config"
             leftSection={<IconSettings size={16} />}
           >
-            Configuración
+            Config
+          </Tabs.Tab>
+          <Tabs.Tab
+            value="routines"
+            leftSection={<IconClock size={16} />}
+          >
+            Rutinas
+          </Tabs.Tab>
+          <Tabs.Tab
+            value="logs"
+            leftSection={<IconFileText size={16} />}
+          >
+            Logs
+          </Tabs.Tab>
+          <Tabs.Tab
+            value="styles"
+            leftSection={<IconPalette size={16} />}
+          >
+            Estilos
           </Tabs.Tab>
         </Tabs.List>
 
@@ -40,6 +64,15 @@ export function SystemView() {
         </Tabs.Panel>
         <Tabs.Panel value="config" pt="md">
           <ConfigPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="routines" pt="md">
+          <RoutinesPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="logs" pt="md">
+          <LogsPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="styles" pt="md">
+          <StylesPanel />
         </Tabs.Panel>
       </Tabs>
     </Stack>

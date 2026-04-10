@@ -5,4 +5,7 @@ export {
   useProjectFolderFiles,
   useProjectUploads,
   useUploadFile,
+  useCreateProject,
+  useUpdateProject,
+  useDeleteProject,
 } from '../../../shared/api/queries';
