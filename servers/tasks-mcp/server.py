@@ -116,6 +116,39 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="project_update",
+            description="Update a project's fields. Required: project_id. Optional: name, description, directory, url, active.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "directory": {"type": "string"},
+                    "url": {"type": "string", "description": "Live URL for preview (e.g. http://host:port)"},
+                    "active": {"type": "boolean"},
+                },
+                "required": ["project_id"],
+            },
+        ),
+        Tool(
+            name="task_update",
+            description="Update a task's fields. Required: task_id. Optional: title, description, project_id, priority, area, notes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "project_id": {"type": "string"},
+                    "priority": {"type": "string", "enum": list(VALID_PRIORITIES)},
+                    "area": {"type": "string", "enum": list(VALID_AREAS)},
+                    "notes": {"type": "string"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        Tool(
             name="task_create",
             description=(
                 "Create a new task. Required: title, area. Set assigned_to_claude=true for "
@@ -497,6 +530,55 @@ def _memory_list(args: dict) -> list:
     return [_row_to_dict(r) for r in rows]
 
 
+def _project_update(args: dict) -> dict:
+    project_id = args.get("project_id", "").strip()
+    if not project_id:
+        raise ValueError("project_id required")
+    with _rw_conn() as c:
+        row = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if not row:
+            raise ValueError(f"project not found: {project_id}")
+        updates, params = [], []
+        for field in ("name", "description", "directory", "url"):
+            if field in args and args[field] is not None:
+                updates.append(f"{field}=?")
+                params.append(args[field])
+        if "active" in args:
+            updates.append("active=?")
+            params.append(1 if args["active"] else 0)
+        if not updates:
+            return _row_to_dict(row)
+        updates.append("updated_at=?")
+        params.append(_now_iso())
+        params.append(project_id)
+        c.execute(f"UPDATE projects SET {', '.join(updates)} WHERE id=?", params)
+        c.commit()
+        return _row_to_dict(c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone())
+
+
+def _task_update(args: dict) -> dict:
+    task_id = args.get("task_id", "").strip()
+    if not task_id:
+        raise ValueError("task_id required")
+    with _rw_conn() as c:
+        row = c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not row:
+            raise ValueError(f"task not found: {task_id}")
+        updates, params = [], []
+        for field in ("title", "description", "project_id", "priority", "area", "notes"):
+            if field in args and args[field] is not None:
+                updates.append(f"{field}=?")
+                params.append(args[field])
+        if not updates:
+            return _row_to_dict(row)
+        updates.append("updated_at=?")
+        params.append(_now_iso())
+        params.append(task_id)
+        c.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id=?", params)
+        c.commit()
+        return _row_to_dict(c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+
+
 def _project_create(args: dict) -> dict:
     name = args.get("name", "").strip()
     if not name:
@@ -597,6 +679,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             payload = _pipeline_status()
         elif name == "project_create":
             payload = _project_create(arguments or {})
+        elif name == "project_update":
+            payload = _project_update(arguments or {})
+        elif name == "task_update":
+            payload = _task_update(arguments or {})
         elif name == "task_create":
             payload = _task_create(arguments or {})
         elif name == "task_update_status":
