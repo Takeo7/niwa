@@ -461,10 +461,11 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     run_env = os.environ.copy()
     run_env["TERM"] = "dumb"
     run_env["NO_COLOR"] = "1"
+    # Only set keys not already in the environment to avoid overwriting
     if LLM_API_KEY:
-        run_env["ANTHROPIC_API_KEY"] = LLM_API_KEY
-        run_env["OPENAI_API_KEY"] = LLM_API_KEY
-        run_env["GOOGLE_API_KEY"] = LLM_API_KEY
+        for key_name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+            if key_name not in run_env:
+                run_env[key_name] = LLM_API_KEY
     if LLM_SETUP_TOKEN:
         run_env["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
     try:
