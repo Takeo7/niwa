@@ -88,10 +88,13 @@ def _cfg(key: str, env_key: str, default: str = "") -> str:
 
 DB_PATH = ENV.get("NIWA_DB_PATH") or str(INSTALL_DIR / "data" / "niwa.sqlite3")
 LLM_COMMAND = _cfg("llm_command", "NIWA_LLM_COMMAND")
+LLM_COMMAND_CHAT = _cfg("llm_command_chat", "NIWA_LLM_COMMAND_CHAT") or ""
 LLM_API_KEY = _cfg("llm_api_key", "NIWA_LLM_API_KEY")
 LLM_SETUP_TOKEN = _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN")
 POLL_SECONDS = int(_cfg("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
+CHAT_POLL_SECONDS = int(ENV.get("NIWA_EXECUTOR_CHAT_POLL_SECONDS", "5"))
 TIMEOUT_SECONDS = int(_cfg("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
+CHAT_TIMEOUT_SECONDS = int(ENV.get("NIWA_EXECUTOR_CHAT_TIMEOUT_SECONDS", "120"))
 MAX_OUTPUT_CHARS = int(ENV.get("NIWA_EXECUTOR_MAX_OUTPUT", "10000"))
 HEARTBEAT_SECONDS = int(ENV.get("NIWA_EXECUTOR_HEARTBEAT_SECONDS", "60"))
 MAX_CONSECUTIVE_FAILURES = int(ENV.get("NIWA_EXECUTOR_MAX_FAILURES", "3"))
@@ -359,18 +362,35 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
                 scope = " (this project)" if m.get("project_id") else " (global)"
                 parts.append(f"    {m['key']}: {m['value']}{scope}")
 
-    # Instructions
+    # Instructions — different for chat vs tasks
+    is_chat = task.get("source") == "chat"
     parts.append("")
-    parts.append("INSTRUCTIONS:")
-    parts.append("1. Read any files relevant to understanding the task.")
-    parts.append("2. Make the changes required.")
-    parts.append("3. Verify your work (run tests/build/lint as appropriate).")
-    parts.append("4. Reply with a brief summary of what you did.")
-    parts.append("5. If the task is too large or unclear, explain why and stop.")
+    if is_chat:
+        parts.append("ROLE: You are Niwa's chat assistant (fast, conversational).")
+        parts.append("INSTRUCTIONS:")
+        parts.append("1. Answer the user's message concisely and helpfully.")
+        parts.append("2. If the user asks for something complex (coding, refactoring, analysis,")
+        parts.append("   research, file changes), DO NOT do it yourself. Instead:")
+        parts.append("   a) Acknowledge the request briefly")
+        parts.append("   b) Use the task_create MCP tool to create a proper task for it")
+        parts.append("   c) Tell the user you've created a task and it will be processed")
+        parts.append("3. For simple questions, facts, planning, or conversation — answer directly.")
+        parts.append("4. Use memory_store to save important facts the user mentions.")
+        parts.append("5. Use memory_search to recall previous context when relevant.")
+        parts.append("6. Be brief. This is a chat, not a report.")
+        parts.append("7. Reply in the same language the user writes in.")
+    else:
+        parts.append("INSTRUCTIONS:")
+        parts.append("1. Read any files relevant to understanding the task.")
+        parts.append("2. Make the changes required.")
+        parts.append("3. Verify your work (run tests/build/lint as appropriate).")
+        parts.append("4. Reply with a brief summary of what you did.")
+        parts.append("5. If the task is too large or unclear, explain why and stop.")
     parts.append("")
     parts.append("You have access to the Niwa MCP tools (tasks, notes, platform).")
-    parts.append("Use task_log to record findings or progress during your work.")
-    parts.append("Use task_request_input if you need a human decision before proceeding.")
+    if not is_chat:
+        parts.append("Use task_log to record findings or progress during your work.")
+        parts.append("Use task_request_input if you need a human decision before proceeding.")
 
     return "\n".join(parts)
 
@@ -445,7 +465,7 @@ def _finish_task(task_id: str, status: str, output: str) -> None:
 _active_proc: Optional[subprocess.Popen] = None
 
 
-def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
+def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) -> tuple[bool, str]:
     """Run LLM command with PTY so Claude Code output is captured.
 
     Claude Code writes to /dev/tty, bypassing stdout/stderr when piped.
@@ -453,7 +473,9 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     read the master side to capture the output.
     """
     global _active_proc
-    if not LLM_COMMAND:
+    command = llm_command or LLM_COMMAND
+    task_timeout = timeout or TIMEOUT_SECONDS
+    if not command:
         return False, "NIWA_LLM_COMMAND is not configured"
     import pty, select
     # Write prompt to temp file — Claude Code interprets long positional
@@ -464,7 +486,7 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
     )
     prompt_file.write(prompt)
     prompt_file.close()
-    cmd = shlex.split(LLM_COMMAND) + [prompt_file.name]
+    cmd = shlex.split(command) + [prompt_file.name]
     log.info("exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
     run_env = os.environ.copy()
     run_env["TERM"] = "dumb"
@@ -488,13 +510,13 @@ def _run_llm(prompt: str, cwd: Path) -> tuple[bool, str]:
         # Read output from master until process exits or timeout
         chunks: list[bytes] = []
         import time as _t
-        deadline = _t.time() + TIMEOUT_SECONDS
+        deadline = _t.time() + task_timeout
         while True:
             if _t.time() > deadline:
                 proc.kill()
                 proc.wait()
                 os.close(master_fd)
-                return False, f"[timeout after {TIMEOUT_SECONDS}s]"
+                return False, f"[timeout after {task_timeout}s]"
             ready, _, _ = select.select([master_fd], [], [], 1.0)
             if ready:
                 try:
@@ -551,45 +573,92 @@ def _shutdown(signum, frame):
         _active_proc.terminate()
 
 
+def _claim_next_chat_task() -> Optional[sqlite3.Row]:
+    """Fast-path: claim the oldest pending chat task."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM tasks WHERE status='pendiente' AND source='chat' "
+            "ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        c.execute(
+            "UPDATE tasks SET status='en_progreso', updated_at=? WHERE id=? AND status='pendiente'",
+            (_now_iso(), row["id"]),
+        )
+        if c.execute("SELECT changes()").fetchone()[0] == 0:
+            return None
+        c.commit()
+        return c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+
+
+def _execute_task(task: sqlite3.Row) -> tuple[bool, str]:
+    """Run a single task through the LLM. Returns (success, output)."""
+    is_chat = task.get("source") == "chat"
+    project_dir = _resolve_project_dir(task["project_id"])
+    if not project_dir and task["project_id"]:
+        log.warning("Project dir not found for %s, using $HOME", task["project_id"])
+    cwd = project_dir or Path.home()
+    prompt = _build_prompt(task, project_dir)
+    log.debug("prompt: %d chars, chat=%s", len(prompt), is_chat)
+
+    # Choose command and timeout based on task type
+    if is_chat and LLM_COMMAND_CHAT:
+        llm_cmd = LLM_COMMAND_CHAT
+        timeout = CHAT_TIMEOUT_SECONDS
+        log.info("chat task %s (fast path)", task["id"])
+    else:
+        llm_cmd = LLM_COMMAND
+        timeout = TIMEOUT_SECONDS
+
+    heartbeat = HeartbeatThread(task["id"])
+    heartbeat.start()
+    try:
+        return _run_llm(prompt, cwd, llm_command=llm_cmd, timeout=timeout)
+    finally:
+        heartbeat.stop()
+        heartbeat.join(timeout=2)
+
+
 def main() -> None:
     global _active_proc
     log.info(
-        "Niwa executor starting (db=%s, poll=%ds, timeout=%ds)",
-        DB_PATH, POLL_SECONDS, TIMEOUT_SECONDS,
+        "Niwa executor starting (db=%s, poll=%ds, chat_poll=%ds)",
+        DB_PATH, POLL_SECONDS, CHAT_POLL_SECONDS,
     )
     if not LLM_COMMAND:
         log.error(
             "NIWA_LLM_COMMAND not set in %s — executor will idle",
             INSTALL_DIR / "secrets" / "mcp.env",
         )
-    log.info("LLM command: %s", LLM_COMMAND or "(none)")
+    log.info("LLM command (tasks): %s", LLM_COMMAND or "(none)")
+    log.info("LLM command (chat):  %s", LLM_COMMAND_CHAT or "(same as tasks)")
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
     consecutive_failures = 0
+    last_poll = 0.0
 
     while _running:
         try:
-            task = _claim_next_task()
+            # Fast path: check for chat tasks every CHAT_POLL_SECONDS
+            task = _claim_next_chat_task()
             if task is None:
-                time.sleep(POLL_SECONDS)
+                # Slow path: check for regular tasks every POLL_SECONDS
+                now = time.time()
+                if now - last_poll >= POLL_SECONDS:
+                    task = _claim_next_task()
+                    last_poll = now
+
+            if task is None:
+                time.sleep(CHAT_POLL_SECONDS)
                 continue
-            log.info("task %s: %s", task["id"], task["title"])
-            project_dir = _resolve_project_dir(task["project_id"])
-            if not project_dir and task["project_id"]:
-                log.warning("Project dir not found for %s, using $HOME", task["project_id"])
-            cwd = project_dir or Path.home()
-            prompt = _build_prompt(task, project_dir)
-            log.debug("prompt: %d chars", len(prompt))
-            heartbeat = HeartbeatThread(task["id"])
-            heartbeat.start()
-            try:
-                success, output = _run_llm(prompt, cwd)
-            finally:
-                _active_proc = None
-                heartbeat.stop()
-                heartbeat.join(timeout=2)
+
+            log.info("task %s: %s [source=%s]", task["id"], task["title"], task.get("source", "manual"))
+            success, output = _execute_task(task)
+            _active_proc = None
+
             if success:
                 _finish_task(task["id"], "hecha", output)
                 _record_event(task["id"], "completed", {"executor": "niwa-executor"})
@@ -614,7 +683,7 @@ def main() -> None:
             break
         except Exception as e:
             log.exception("executor loop error: %s", e)
-            time.sleep(POLL_SECONDS)
+            time.sleep(CHAT_POLL_SECONDS)
 
 
 if __name__ == "__main__":
