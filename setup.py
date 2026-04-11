@@ -905,7 +905,7 @@ def step_projects(cfg: WizardConfig) -> None:
     print("'directory' field to know where to run the LLM commands.")
     print("You can register projects now or add them later via the Niwa app web UI.")
     print()
-    if not prompt_bool("Register a project now?", default=cfg.executor_enabled):
+    if not prompt_bool("Register a project now?", default=False):
         return
     while True:
         name = prompt("Project name", default="my-project")
