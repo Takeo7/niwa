@@ -33,6 +33,9 @@ import {
   useUploadTaskAttachment,
   useDeleteTaskAttachment,
   useRejectTask,
+  useTaskLabels,
+  useAddTaskLabel,
+  useRemoveTaskLabel,
 } from '../hooks/useTasks';
 import { notifications } from '@mantine/notifications';
 
@@ -73,6 +76,9 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
   const uploadAttachment = useUploadTaskAttachment();
   const deleteAttachment = useDeleteTaskAttachment();
   const rejectTask = useRejectTask();
+  const { data: labelsData } = useTaskLabels(taskId);
+  const addTaskLabel = useAddTaskLabel();
+  const removeTaskLabel = useRemoveTaskLabel();
   const [newLabel, setNewLabel] = useState('');
 
   const handleStatusChange = (status: string | null) => {
@@ -108,20 +114,18 @@ export function TaskDetail({ taskId, opened, onClose }: Props) {
     });
   };
 
-  // Labels
-  const labels = task?.tags ? task.tags.split(',').map((t) => t.trim()).filter(Boolean) : [];
+  // Labels (from task_labels API)
+  const labels = labelsData ?? [];
 
   const addLabel = () => {
     if (!task || !newLabel.trim()) return;
-    const updated = [...labels, newLabel.trim()].join(', ');
-    updateTask.mutate({ id: task.id, tags: updated });
+    addTaskLabel.mutate({ taskId: task.id, label: newLabel.trim() });
     setNewLabel('');
   };
 
   const removeLabel = (label: string) => {
     if (!task) return;
-    const updated = labels.filter((l) => l !== label).join(', ');
-    updateTask.mutate({ id: task.id, tags: updated });
+    removeTaskLabel.mutate({ taskId: task.id, label });
   };
 
   // Attachments

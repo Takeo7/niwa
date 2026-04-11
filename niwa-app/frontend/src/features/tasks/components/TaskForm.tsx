@@ -38,8 +38,9 @@ const PRIORITY_OPTIONS = [
 
 const AREA_OPTIONS = [
   { value: 'personal', label: 'Personal' },
-  { value: 'trabajo', label: 'Trabajo' },
   { value: 'empresa', label: 'Empresa' },
+  { value: 'proyecto', label: 'Proyecto' },
+  { value: 'sistema', label: 'Sistema' },
 ];
 
 export function TaskForm({ opened, onClose, task }: Props) {

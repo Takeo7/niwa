@@ -421,16 +421,61 @@ def dashboard_data():
         'empresa': len([t for t in tasks if t['area'] == 'empresa' and t['status'] not in ('hecha', 'archivada')]),
         'proyecto': len([t for t in tasks if t['area'] == 'proyecto' and t['status'] not in ('hecha', 'archivada')]),
     }
+    pending_count = len([t for t in tasks if t['status'] == 'pendiente'])
+    blocked_count = len([t for t in tasks if t['status'] == 'bloqueada'])
+    in_progress_count = len([t for t in tasks if t['status'] == 'en_progreso'])
+    # Attention items: blocked, overdue, or revision tasks
+    attention = []
+    for t in tasks:
+        if t['status'] in ('bloqueada', 'revision'):
+            attention.append({
+                'id': t['id'], 'title': t['title'], 'status': t['status'],
+                'priority': t['priority'], 'due_at': t.get('due_at'),
+                'project_name': t.get('project_name'),
+            })
+        elif t.get('due_at') and t['status'] not in ('hecha', 'archivada'):
+            try:
+                if date.fromisoformat(t['due_at'][:10]) < date.today():
+                    attention.append({
+                        'id': t['id'], 'title': t['title'], 'status': t['status'],
+                        'priority': t['priority'], 'due_at': t.get('due_at'),
+                        'project_name': t.get('project_name'),
+                    })
+            except (ValueError, TypeError):
+                pass
+    # Velocity: completions by day (last 7 days)
+    with db_conn() as conn:
+        cbd_rows = conn.execute(
+            "SELECT date(completed_at) as day, COUNT(*) as count FROM tasks "
+            "WHERE status='hecha' AND completed_at IS NOT NULL AND date(completed_at) >= date('now', '-7 days') "
+            "GROUP BY date(completed_at) ORDER BY day"
+        ).fetchall()
+        velocity = [{'day': r['day'], 'count': r['count']} for r in cbd_rows]
+        done_today_count = conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE source != 'chat' AND status='hecha' AND date(completed_at)=date('now')"
+        ).fetchone()[0]
+        routines_count = 0
+        try:
+            routines_count = conn.execute("SELECT COUNT(*) FROM routines WHERE enabled=1").fetchone()[0]
+        except Exception:
+            pass
     return {
+        'done_today': done_today_count,
+        'pending': pending_count,
+        'blocked': blocked_count,
+        'in_progress': in_progress_count,
+        'routines_count': routines_count,
+        'attention': attention[:12],
+        'velocity': velocity,
         'urgent': urgent[:8],
         'today': today[:10],
         'projects': fetch_projects(),
         'kanban_columns': fetch_kanban_columns(include_terminal=True),
         'counts': {
-            'inbox': 0,  # deprecated, merged into pendiente
-            'pending': len([t for t in tasks if t['status'] == 'pendiente']),
-            'review': len([t for t in tasks if t['status'] == 'en_progreso']),
-            'blocked': len([t for t in tasks if t['status'] == 'bloqueada']),
+            'inbox': 0,
+            'pending': pending_count,
+            'review': in_progress_count,
+            'blocked': blocked_count,
             'total': len([t for t in tasks if t['status'] not in ('hecha', 'archivada')]),
         },
         'by_area': by_area,
@@ -793,7 +838,7 @@ def create_chat_session(data):
         c.execute("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (?,?,?,?)",
                   (sid, title, now, now))
         c.commit()
-    return {'id': sid, 'title': title, 'created_at': now}
+    return {'id': sid, 'title': title, 'created_at': now, 'updated_at': now}
 
 
 def get_chat_messages(session_id):
@@ -977,8 +1022,8 @@ def send_chat_message(data):
         c.commit()
 
     return {
-        'user_message': {'id': user_msg_id, 'role': 'user', 'content': content},
-        'assistant_message': {'id': assistant_msg_id, 'role': 'assistant', 'task_id': task_id, 'status': 'pending'},
+        'user_message': {'id': user_msg_id, 'session_id': session_id, 'role': 'user', 'content': content, 'status': 'done', 'created_at': now},
+        'assistant_message': {'id': assistant_msg_id, 'session_id': session_id, 'role': 'assistant', 'content': '', 'task_id': task_id, 'status': 'pending', 'created_at': now},
     }
 
 
@@ -1058,7 +1103,10 @@ def delete_note(note_id):
 def fetch_activity(limit=50):
     with db_conn() as conn:
         rows = conn.execute(
-            "SELECT e.*, t.title as task_title FROM task_events e LEFT JOIN tasks t ON t.id=e.task_id ORDER BY e.created_at DESC LIMIT ?",
+            "SELECT e.*, t.title as task_title, p.name as project_name FROM task_events e "
+            "LEFT JOIN tasks t ON t.id=e.task_id "
+            "LEFT JOIN projects p ON p.id=t.project_id "
+            "ORDER BY e.created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         items = []
@@ -1068,6 +1116,9 @@ def fetch_activity(limit=50):
                 item['payload'] = json.loads(item.get('payload_json') or '{}')
             except Exception:
                 item['payload'] = {}
+            # Add description and agent_name for frontend ActivityItem type
+            item['description'] = item.get('task_title') or item.get('type', '')
+            item['agent_name'] = item['payload'].get('agent_name', '') if isinstance(item.get('payload'), dict) else ''
             items.append(item)
         return items
 
@@ -1215,7 +1266,7 @@ def fetch_setting_raw(key):
         return row['value'] if row else None
 
 
-_SETTINGS_KEY_PREFIXES = ('svc.', 'int.', 'agent.', 'ui.', 'kanban.')
+_SETTINGS_KEY_PREFIXES = ('svc.', 'int.', 'agent.', 'ui.', 'kanban.', 'style_')
 
 
 def save_setting(key, value):
@@ -2952,7 +3003,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.wfile.write(body)
         if path == '/auth/check':
             if is_authenticated(self):
-                return self._json({'ok': True})
+                return self._json({'authenticated': True, 'ok': True})
             # ForwardAuth: Traefik passes 401 body to client — HTML redirect to login
             self.send_response(401)
             self.send_header('Content-Type', 'text/html')
@@ -3110,7 +3161,7 @@ class Handler(BaseHTTPRequestHandler):
                         size = os.path.getsize(full)
                     except Exception:
                         size = 0
-                    files.append({'name': entry, 'size': size})
+                    files.append({'name': entry, 'size': size, 'type': 'file'})
                 elif os.path.isdir(full):
                     try:
                         count = len(os.listdir(full))
@@ -3125,10 +3176,10 @@ class Handler(BaseHTTPRequestHandler):
             with db_conn() as conn:
                 proj = conn.execute('SELECT * FROM projects WHERE slug=?', (slug,)).fetchone()
             if not proj or not proj['directory']:
-                return self._json([])
+                return self._json({'files': []})
             uploads_dir = os.path.join(proj['directory'], 'uploads')
             if not os.path.isdir(uploads_dir):
-                return self._json([])
+                return self._json({'files': []})
             uploads = []
             for f in sorted(os.listdir(uploads_dir)):
                 full = os.path.join(uploads_dir, f)
@@ -3138,7 +3189,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         size = 0
                     uploads.append({'name': f, 'size': size})
-            return self._json(uploads)
+            return self._json({'files': uploads})
 
         # ── Single project by slug or id (must come AFTER sub-endpoints, BEFORE /api/projects list) ──
         _m_proj_detail = re.match(r'^/api/projects/([^/]+)$', path)
@@ -3152,8 +3203,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'not_found'}, 404)
             result = dict(proj)
             with db_conn() as conn:
-                result['task_count'] = conn.execute('SELECT count(*) FROM tasks WHERE project_id=?', (proj['id'],)).fetchone()[0]
-                result['done_count'] = conn.execute("SELECT count(*) FROM tasks WHERE project_id=? AND status='hecha'", (proj['id'],)).fetchone()[0]
+                total = conn.execute('SELECT count(*) FROM tasks WHERE project_id=?', (proj['id'],)).fetchone()[0]
+                done = conn.execute("SELECT count(*) FROM tasks WHERE project_id=? AND status='hecha'", (proj['id'],)).fetchone()[0]
+                open_count = conn.execute("SELECT count(*) FROM tasks WHERE project_id=? AND status NOT IN ('hecha','archivada')", (proj['id'],)).fetchone()[0]
+                result['task_count'] = total
+                result['done_count'] = done
+                result['total_tasks'] = total
+                result['done_tasks'] = done
+                result['open_tasks'] = open_count
             return self._json(result)
 
         if path == '/api/projects':
@@ -3202,7 +3259,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/logs':
             source = (qs.get('source') or ['gateway'])[0]
             lines_count = int((qs.get('lines') or ['100'])[0])
-            return self._json(fetch_logs(source=source, limit=lines_count))
+            log_entries = fetch_logs(source=source, limit=lines_count)
+            return self._json({'lines': [entry['line'] if isinstance(entry, dict) else str(entry) for entry in log_entries]})
         if path == '/api/routines':
             return self._json(scheduler.list_routines(db_conn))
         if re.match(r'^/api/routines/[^/]+$', path) and path.count('/') == 3:
@@ -3243,7 +3301,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(result)
         if path == '/api/search':
             q = (qs.get('q') or [''])[0]
-            return self._json(search_tasks(q))
+            raw_tasks = search_tasks(q)
+            # Format for frontend SearchResult type
+            search_result = {
+                'tasks': [{'id': t['id'], 'title': t['title'], 'status': t['status']} for t in raw_tasks],
+                'projects': [],
+                'notes': [],
+            }
+            # Also search projects and notes
+            if q.strip():
+                q_esc = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+                with db_conn() as conn:
+                    proj_rows = conn.execute(
+                        "SELECT id, name, slug FROM projects WHERE active=1 AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\') LIMIT 10",
+                        (f'%{q_esc}%', f'%{q_esc}%'),
+                    ).fetchall()
+                    search_result['projects'] = [{'id': r['id'], 'name': r['name'], 'slug': r['slug']} for r in proj_rows]
+                    note_rows = conn.execute(
+                        "SELECT id, title FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' LIMIT 10",
+                        (f'%{q_esc}%', f'%{q_esc}%'),
+                    ).fetchall()
+                    search_result['notes'] = [{'id': r['id'], 'title': r['title']} for r in note_rows]
+            return self._json(search_result)
         if path == '/api/dashboard/pipeline':
             days = int(qs.get('days', ['7'])[0])
             return self._json(fetch_pipeline(days=days))
@@ -3575,6 +3654,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({'ok': True, 'enabled': new_state})
         if path == '/api/routines/run':
             rid = payload.get('id', '')
+            routine = scheduler.get_routine(db_conn, rid)
+            if not routine:
+                return self._json({'error': 'not_found'}, 404)
+            if _scheduler:
+                import threading as _thr
+                _thr.Thread(target=_scheduler._execute_routine, args=(routine,), daemon=True).start()
+            return self._json({'ok': True, 'message': f'Routine {rid} queued'})
+        # Support path-parameter style: /api/routines/{id}/toggle and /api/routines/{id}/run
+        _m_routine_toggle = re.match(r'^/api/routines/([^/]+)/toggle$', path)
+        if _m_routine_toggle:
+            rid = _m_routine_toggle.group(1)
+            new_state = scheduler.toggle_routine(db_conn, rid)
+            if new_state is None:
+                return self._json({'error': 'not_found'}, 404)
+            return self._json({'ok': True, 'enabled': new_state})
+        _m_routine_run = re.match(r'^/api/routines/([^/]+)/run$', path)
+        if _m_routine_run:
+            rid = _m_routine_run.group(1)
             routine = scheduler.get_routine(db_conn, rid)
             if not routine:
                 return self._json({'error': 'not_found'}, 404)

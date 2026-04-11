@@ -31,6 +31,7 @@ export interface Project {
   slug: string;
   description: string;
   directory: string;
+  url?: string | null;
   active: number;
   open_tasks: number;
   done_tasks: number;
@@ -116,7 +117,7 @@ export interface ServiceField {
 }
 
 export interface ServiceStatus {
-  status: 'configured' | 'not_configured' | 'error' | 'warning';
+  status: 'configured' | 'not_configured' | 'error' | 'warning' | 'unknown';
   message: string;
 }
 

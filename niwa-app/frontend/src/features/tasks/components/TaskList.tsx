@@ -28,6 +28,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
+  inbox: 'Inbox',
   pendiente: 'Pendiente',
   en_progreso: 'En Progreso',
   bloqueada: 'Bloqueada',
@@ -37,6 +38,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
+  inbox: 'indigo',
   pendiente: 'yellow',
   en_progreso: 'blue',
   bloqueada: 'red',

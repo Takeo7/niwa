@@ -195,6 +195,7 @@ def fetch_task_history(params, db_conn_fn=None):
                 'created_at': r['created_at'],
                 'completed_at': r['completed_at'],
                 'duration_hours': duration,
+                'duration': round(duration * 3600, 1) if duration is not None else None,
                 'attempts': r['attempts'],
                 'reviews': r['reviews'],
             })

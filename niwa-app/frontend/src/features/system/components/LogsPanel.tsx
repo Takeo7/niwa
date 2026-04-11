@@ -46,7 +46,7 @@ export function LogsPanel() {
   const { data, isLoading, refetch } = useLogs(source, 200);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const lines = data?.lines ?? (Array.isArray(data) ? data as string[] : []);
+  const lines: string[] = data?.lines ?? [];
 
   // Auto-scroll to bottom
   useEffect(() => {

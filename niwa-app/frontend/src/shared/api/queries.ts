@@ -569,6 +569,37 @@ export function useDeleteTaskAttachment() {
   });
 }
 
+// ── Task Labels ──
+export function useTaskLabels(taskId: string | null) {
+  return useQuery({
+    queryKey: ['task-labels', taskId],
+    queryFn: () => api<string[]>(`tasks/${taskId}/labels`),
+    enabled: !!taskId,
+  });
+}
+
+export function useAddTaskLabel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, label }: { taskId: string; label: string }) =>
+      apiPost<{ ok: boolean }>(`tasks/${taskId}/labels`, { label }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-labels', vars.taskId] });
+    },
+  });
+}
+
+export function useRemoveTaskLabel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, label }: { taskId: string; label: string }) =>
+      apiDelete<{ ok: boolean }>(`tasks/${taskId}/labels/${encodeURIComponent(label)}`),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['task-labels', vars.taskId] });
+    },
+  });
+}
+
 // ── Task Reject ──
 export function useRejectTask() {
   const qc = useQueryClient();

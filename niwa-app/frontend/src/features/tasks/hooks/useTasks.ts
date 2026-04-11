@@ -8,4 +8,7 @@ export {
   useUploadTaskAttachment,
   useDeleteTaskAttachment,
   useRejectTask,
+  useTaskLabels,
+  useAddTaskLabel,
+  useRemoveTaskLabel,
 } from '../../../shared/api/queries';
