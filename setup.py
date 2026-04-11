@@ -1496,6 +1496,39 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
         (niwa_home / "bin").mkdir(parents=True, exist_ok=True)
         shutil.copy(str(cfg.niwa_home / "secrets" / "mcp.env"), str(niwa_home / "secrets" / "mcp.env"))
         shutil.copy(str(executor_path), str(niwa_home / "bin" / "task-executor.py"))
+        # Copy Claude credentials to niwa user so executor can authenticate
+        claude_creds = Path.home() / ".claude"
+        claude_json = Path.home() / ".claude.json"
+        niwa_claude = Path("/home/niwa") / ".claude"
+        niwa_claude_json = Path("/home/niwa") / ".claude.json"
+        if claude_creds.is_dir() and not niwa_claude.exists():
+            shutil.copytree(str(claude_creds), str(niwa_claude))
+            subprocess.run(["chown", "-R", "niwa:niwa", str(niwa_claude)], capture_output=True)
+            ok("Copied Claude credentials to niwa user")
+        if claude_json.is_file() and not niwa_claude_json.exists():
+            shutil.copy2(str(claude_json), str(niwa_claude_json))
+            subprocess.run(["chown", "niwa:niwa", str(niwa_claude_json)], capture_output=True)
+        # Also try to generate a setup token for portability
+        if which("claude") and cfg.llm_provider == "claude":
+            try:
+                result = subprocess.run(
+                    ["claude", "setup-token"],
+                    capture_output=True, text=True, timeout=30,
+                    input="\n",  # Accept defaults
+                )
+                if result.returncode == 0 and "sk-ant-" in result.stdout:
+                    # Extract token from output
+                    for line in result.stdout.split("\n"):
+                        if "sk-ant-" in line:
+                            token = line.strip()
+                            # Save to niwa env
+                            env = _read_env_file(niwa_home / "secrets" / "mcp.env")
+                            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+                            write_env_file(niwa_home / "secrets" / "mcp.env", env)
+                            ok("Generated and saved Claude setup token for executor")
+                            break
+            except Exception as e:
+                info(f"Could not generate setup token: {e} (executor will use copied credentials)")
         # Data/logs in a shared location
         shared_dir = Path("/opt") / cfg.instance_name
         shared_dir.mkdir(parents=True, exist_ok=True)
@@ -1532,6 +1565,18 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
 
     unit_name = f"niwa-{cfg.instance_name}-executor.service"
 
+    # Detect paths for LLM CLIs so the executor can find them
+    extra_paths = set()
+    for cli in ["claude", "codex", "openclaw", "node", "npm"]:
+        cli_path = which(cli)
+        if cli_path:
+            extra_paths.add(str(Path(cli_path).parent))
+    # Also check common npm global locations
+    for p in ["/usr/local/bin", str(Path.home() / ".npm-global" / "bin"), "/usr/bin"]:
+        if Path(p).is_dir():
+            extra_paths.add(p)
+    path_env = ":".join(sorted(extra_paths)) + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
     if run_as_root:
         # System-level unit running as niwa user
         unit_dir = Path("/etc/systemd/system")
@@ -1544,6 +1589,7 @@ Type=simple
 User=niwa
 Group=niwa
 Environment="NIWA_HOME={niwa_home_env}"
+Environment="PATH={path_env}"
 ExecStart=/usr/bin/env python3 {executor_path}
 StandardOutput=append:{log_path}
 StandardError=append:{log_path}
@@ -1569,6 +1615,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="NIWA_HOME={niwa_home_env}"
+Environment="PATH={path_env}"
 ExecStart=/usr/bin/env python3 {executor_path}
 StandardOutput=append:{log_path}
 StandardError=append:{log_path}
