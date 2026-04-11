@@ -1147,7 +1147,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_APP_USERNAME": cfg.username,
         "NIWA_APP_PASSWORD": cfg.password,
         "NIWA_APP_SESSION_SECRET": generate_token(),
-        "NIWA_APP_PUBLIC_BASE_URL": f"http://localhost:{cfg.app_port}",
+        "NIWA_APP_PUBLIC_BASE_URL": f"http://{'0.0.0.0' if cfg.bind_host == '0.0.0.0' else 'localhost'}:{cfg.app_port}",
         "NIWA_APP_AUTH_REQUIRED": "1",
         "NIWA_REGISTERED_CLAUDE": "1" if cfg.register_claude else "0",
         "NIWA_REGISTERED_OPENCLAW": "1" if cfg.register_openclaw else "0",
@@ -1356,16 +1356,36 @@ def execute_install(cfg: WizardConfig) -> None:
     print_summary(cfg)
 
 
+def _get_local_ip() -> str:
+    """Get the machine's LAN IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
 def print_summary(cfg: WizardConfig) -> None:
     header("✅ Niwa is up")
     print()
+    # Determine the right host to show in URLs
+    if cfg.bind_host == "0.0.0.0":
+        local_ip = _get_local_ip()
+        host_display = local_ip
+    else:
+        host_display = "localhost"
     print(f"  {BOLD}Endpoints:{RESET}")
-    print(f"    Local (streaming HTTP):  http://localhost:{cfg.gateway_streaming_port}/mcp")
-    print(f"    Local (SSE legacy):      http://localhost:{cfg.gateway_sse_port}/sse")
-    print(f"    Caddy reverse proxy:     http://localhost:{cfg.caddy_port}/mcp (bearer auth)")
-    print(f"    Niwa app web UI:         http://localhost:{cfg.app_port}")
+    print(f"    MCP (streaming HTTP):    http://{host_display}:{cfg.gateway_streaming_port}/mcp")
+    print(f"    MCP (SSE legacy):        http://{host_display}:{cfg.gateway_sse_port}/sse")
+    print(f"    Caddy reverse proxy:     http://{host_display}:{cfg.caddy_port}/mcp (bearer auth)")
+    print(f"    Niwa app web UI:         http://{host_display}:{cfg.app_port}")
+    if cfg.bind_host == "0.0.0.0":
+        print(f"    También accesible en:    http://localhost:{cfg.app_port} (desde esta máquina)")
     if cfg.mode == "remote" and cfg.public_domain:
-        print(f"    Public (remote):         https://{cfg.public_domain}/mcp (bearer NIWA_REMOTE_TOKEN)")
+        print(f"    Público (remoto):        https://{cfg.public_domain}/mcp (bearer NIWA_REMOTE_TOKEN)")
     print()
     print(f"  {BOLD}Tokens:{RESET}")
     print(f"    Remote (for public/external clients): {cfg.tokens['NIWA_REMOTE_TOKEN'][:16]}...")
@@ -1374,7 +1394,7 @@ def print_summary(cfg: WizardConfig) -> None:
     print(f"  {BOLD}MCP servers:{RESET} {', '.join(cfg.server_names.values())}")
     print()
     print(f"  {BOLD}Next steps:{RESET}")
-    print(f"    - Open Niwa app:    open http://localhost:{cfg.app_port}")
+    print(f"    - Open Niwa app:    open http://{host_display}:{cfg.app_port}")
     if cfg.register_claude:
         print(f"    - Test from Claude Code:  ask it to use the '{cfg.server_names['tasks']}' MCP")
     print(f"    - View logs:          docker logs {cfg.instance_name}-mcp-gateway")
