@@ -2864,6 +2864,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/login':
             if is_authenticated(self):
                 return self._redirect('/')
+            # If React frontend is built, let it handle the login page
+            react_index = BASE_DIR / 'frontend' / 'dist' / 'index.html'
+            if react_index.is_file():
+                return self._html(react_index.read_text())
             return self._html(render_login_page())
         if path == '/logout':
             return self._redirect('/login', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age=0'})
