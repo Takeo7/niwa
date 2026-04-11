@@ -615,6 +615,13 @@ export function useDeleteProject() {
 // ── System ──
 export function useSystemUpdate() {
   return useMutation({
-    mutationFn: () => apiPost<{ ok: boolean; message: string }>('system/update', {}),
+    mutationFn: () =>
+      apiPost<{
+        ok: boolean;
+        message: string;
+        manual_steps?: string[];
+        needs_restart?: boolean;
+        pull?: string;
+      }>('system/update', {}),
   });
 }

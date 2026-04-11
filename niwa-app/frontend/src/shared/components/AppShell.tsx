@@ -80,10 +80,33 @@ export function AppShell({ children }: Props) {
 
   const handleUpdate = async () => {
     try {
-      await systemUpdate.mutateAsync();
-      notifications.show({ title: 'Actualización', message: 'Niwa se está actualizando...', color: 'blue' });
+      const result = await systemUpdate.mutateAsync();
+      if (result.ok) {
+        const msg = result.needs_restart
+          ? `${result.message}\nRecarga la página para ver los cambios.`
+          : result.message;
+        notifications.show({
+          title: 'Actualización exitosa',
+          message: msg,
+          color: 'green',
+          autoClose: 8000,
+        });
+      } else if (result.manual_steps) {
+        notifications.show({
+          title: 'Actualización manual requerida',
+          message: `${result.message}\n${result.manual_steps.join('\n')}`,
+          color: 'yellow',
+          autoClose: false,
+        });
+      } else {
+        notifications.show({
+          title: 'Error al actualizar',
+          message: result.message || 'Error desconocido',
+          color: 'red',
+        });
+      }
     } catch {
-      notifications.show({ title: 'Error', message: 'No se pudo actualizar', color: 'red' });
+      notifications.show({ title: 'Error', message: 'No se pudo conectar con el servidor', color: 'red' });
     }
   };
 

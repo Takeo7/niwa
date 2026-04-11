@@ -2111,49 +2111,104 @@ def save_integrations(payload):
 
 
 def run_niwa_update():
-    """Trigger a niwa update from the API.
-    
-    The app runs inside Docker so it can't rebuild itself.
-    This function updates what it CAN reach: the executor and MCP servers
-    on the host filesystem via the /data volume mount.
+    """Actualizar Niwa desde el repositorio git.
+
+    Busca el repositorio en rutas conocidas, ejecuta git pull,
+    reconstruye el frontend y copia los archivos actualizados.
+    Si no puede hacerlo, devuelve instrucciones manuales.
     """
     import shutil as _shutil
-    data_dir = Path(os.environ.get("NIWA_DATA_DIR", "/data"))
-    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home())))
-    
-    # The app source is at /app inside the container
-    app_dir = Path("/app")
-    
-    # Try to find repo on host via common paths
+
+    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
+
     repo_candidates = [
-        Path("/repo"),  # if mounted
-        install_dir / "repo",
+        Path("/repo"),
+        install_dir.parent / "niwa",
         Path.home() / "niwa",
+        Path.home() / "Documentos" / "niwa",
+        Path("/root/niwa"),
     ]
     repo_dir = None
-    for c in repo_candidates:
-        if (c / ".git").exists():
-            repo_dir = c
+    for candidate in repo_candidates:
+        if (candidate / "setup.py").exists():
+            repo_dir = candidate
             break
-    
-    steps = []
-    
-    if repo_dir:
-        # Git pull if repo is mounted
+
+    if not repo_dir:
+        return {
+            "ok": False,
+            "message": "No se encontró el repositorio de Niwa. Actualiza manualmente:",
+            "manual_steps": [
+                "cd ~/Documentos/niwa  # o donde clonaste el repo",
+                "git pull",
+                "cd niwa-app/frontend && npm ci && npm run build",
+                "python3 setup.py restart",
+            ],
+        }
+
+    # 1. Git pull
+    try:
+        pull = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=str(repo_dir),
+            capture_output=True, text=True, timeout=30,
+        )
+        if pull.returncode != 0:
+            return {"ok": False, "message": f"Git pull falló: {pull.stderr[:200]}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "Timeout ejecutando git pull"}
+    except FileNotFoundError:
+        return {"ok": False, "message": "git no encontrado en el sistema"}
+
+    # 2. Reconstruir frontend si es posible
+    frontend_dir = repo_dir / "niwa-app" / "frontend"
+    frontend_ok = False
+    if (frontend_dir / "package.json").exists():
         try:
-            r = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
-                              capture_output=True, text=True, timeout=30)
-            steps.append({"step": "git_pull", "ok": r.returncode == 0, "output": r.stdout.strip()[:200]})
-        except Exception as e:
-            steps.append({"step": "git_pull", "ok": False, "output": str(e)[:200]})
+            subprocess.run(
+                ["npm", "ci"], cwd=str(frontend_dir),
+                capture_output=True, timeout=120,
+            )
+            build = subprocess.run(
+                ["npm", "run", "build"], cwd=str(frontend_dir),
+                capture_output=True, text=True, timeout=120,
+            )
+            if build.returncode == 0:
+                frontend_ok = True
+                # Copiar dist al directorio de la app si es diferente
+                app_dist = Path("/app/frontend/dist")
+                src_dist = frontend_dir / "dist"
+                if app_dist.exists() and app_dist != src_dist:
+                    _shutil.rmtree(str(app_dist), ignore_errors=True)
+                    _shutil.copytree(str(src_dist), str(app_dist))
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    # 3. Copiar archivos de backend si es posible
+    backend_src = repo_dir / "niwa-app" / "backend"
+    backend_dst = Path("/app/backend")
+    if backend_dst.exists() and backend_dst != backend_src:
+        try:
+            for f in backend_src.glob("*.py"):
+                _shutil.copy2(str(f), str(backend_dst / f.name))
+        except Exception:
+            pass
+
+    pull_output = pull.stdout.strip()[:200]
+    if frontend_ok:
+        return {
+            "ok": True,
+            "message": "Actualizado correctamente. Los cambios de frontend se aplicaron. Reinicia Niwa para aplicar cambios de backend.",
+            "pull": pull_output,
+            "needs_restart": True,
+        }
     else:
-        steps.append({"step": "git_pull", "ok": False, "output": "Git repo not mounted in container. Run from CLI: python3 setup.py update"})
-    
-    return {
-        "ok": True,
-        "steps": steps,
-        "message": "Para actualizar completamente, ejecuta en el servidor: cd ~/niwa && python3 setup.py update --dir ~/.niwatest"
-    }
+        return {
+            "ok": True,
+            "message": f"Git pull OK: {pull_output}. No se pudo reconstruir el frontend automáticamente.",
+            "pull": pull_output,
+            "needs_restart": True,
+        }
 
 
 def test_telegram():
