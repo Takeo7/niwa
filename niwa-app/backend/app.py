@@ -1609,7 +1609,7 @@ SERVICES_REGISTRY = [
                 {"value": "bidirectional", "label": "Bidireccional (experimental)"},
             ], "default": "disabled", "help": "OpenClaw como client MCP de Niwa es el modo recomendado."},
             {"key": "svc.openclaw.gateway_url", "type": "url", "label": "URL del MCP Gateway de Niwa",
-             "help": "La URL que OpenClaw usará para conectarse. Ejemplo: http://tu-servidor:28812/sse",
+             "help": "La URL que OpenClaw usará para conectarse. Ejemplo: http://tu-servidor:28810/mcp",
              "show_when": {"field": "svc.openclaw.mode", "value": ["mcp_client", "bidirectional"]}},
             {"key": "svc.openclaw.gateway_token", "type": "password", "label": "Token del Gateway", "sensitive": True,
              "help": "El MCP_GATEWAY_AUTH_TOKEN. OpenClaw lo necesita para autenticarse.",
@@ -1627,7 +1627,7 @@ SERVICES_REGISTRY = [
             "2. Activa el modo 'OpenClaw → Niwa' arriba",
             "3. Copia la URL del gateway y el token",
             "4. En tu terminal con OpenClaw:",
-            "   openclaw mcp set niwa-core '{\"url\":\"URL_GATEWAY/sse\",\"transport\":\"sse\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
+            "   openclaw mcp set niwa-core '{\"url\":\"URL_GATEWAY/mcp\",\"transport\":\"streamable-http\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
             "5. Reinicia OpenClaw: openclaw gateway restart",
             "6. Verifica: openclaw mcp list (debe mostrar las tools de Niwa)",
         ]
@@ -3395,14 +3395,14 @@ class Handler(BaseHTTPRequestHandler):
                     host = self.headers.get('Host', 'localhost')
                     proto = self.headers.get('X-Forwarded-Proto', 'http')
                     host = f"{proto}://{host}"
-                gateway_url = host.rsplit(':', 1)[0] + ':28812/sse'
+                gateway_url = host.rsplit(':', 1)[0] + ':28810/mcp'
             gateway_token = settings.get("svc.openclaw.gateway_token", "") or os.environ.get("MCP_GATEWAY_AUTH_TOKEN", "")
             domains = settings.get("svc.openclaw.domains", "all")
             config = {
                 "gateway_url": gateway_url,
                 "has_token": bool(gateway_token),
                 "domains": domains,
-                "cli_command": f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"sse","headers":{{"Authorization":"Bearer {gateway_token}"}}}}\'' if gateway_token else f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"sse"}}\'',
+                "cli_command": f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"streamable-http","headers":{{"Authorization":"Bearer {gateway_token}"}}}}\'' if gateway_token else f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"streamable-http"}}\'',
             }
             return self._json(config)
         # ── Services API ──

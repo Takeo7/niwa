@@ -378,11 +378,28 @@ def generate_catalog_yaml(
     fs_memory: str,
     instance_name: str,
 ) -> str:
-    """Generate the niwa-catalog.yaml content with the user's chosen server names."""
+    """Generate the niwa-catalog.yaml content with the user's chosen server names.
+
+    Tools for the tasks-mcp server are read from config/mcp-catalog/*.json
+    (source of truth) instead of being hardcoded.
+    """
     tasks_name = server_names["tasks"]
     notes_name = server_names["notes"]
     platform_name = server_names["platform"]
     fs_name = server_names["filesystem"]
+
+    # Read tools list from config/mcp-catalog/*.json (source of truth)
+    catalog_dir = REPO_ROOT / "config" / "mcp-catalog"
+    tasks_tools: list[str] = []
+    for catalog_file in sorted(catalog_dir.glob("*.json")):
+        if catalog_file.name == "combined.json":
+            continue
+        with open(catalog_file) as _f:
+            data = json.load(_f)
+            tasks_tools.extend(data.get("tools", []))
+
+    tools_yaml = "\n".join(f'      - name: "{t}"' for t in tasks_tools)
+
     return f"""version: 2
 name: {instance_name}
 displayName: {instance_name.capitalize()} local catalog
@@ -393,13 +410,7 @@ registry:
     type: "server"
     image: "{instance_name}-tasks-mcp:{NIWA_VERSION}"
     tools:
-      - name: "task_list"
-      - name: "task_get"
-      - name: "project_list"
-      - name: "project_get"
-      - name: "pipeline_status"
-      - name: "task_create"
-      - name: "task_update_status"
+{tools_yaml}
     volumes:
       - "{db_path}:/data/niwa.sqlite3"
     metadata:
@@ -825,14 +836,14 @@ def _configure_openclaw_mcp(cfg) -> None:
     """Configure OpenClaw to use Niwa's MCP gateway."""
     if not which("openclaw"):
         return
-    gateway_port = getattr(cfg, 'gateway_sse_port', 28812)
+    gateway_port = getattr(cfg, 'gateway_streaming_port', 28810)
     gateway_token = getattr(cfg, 'mcp_gateway_token', '')
     bind_host = getattr(cfg, 'bind_host', '127.0.0.1')
-    gateway_url = f"http://{bind_host}:{gateway_port}/sse"
-    
+    gateway_url = f"http://{bind_host}:{gateway_port}/mcp"
+
     mcp_config = json.dumps({
         "url": gateway_url,
-        "transport": "sse",
+        "transport": "streamable-http",
         "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
     })
     
@@ -1216,8 +1227,18 @@ def execute_install(cfg: WizardConfig) -> None:
                 "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
                 ("proj-default", "default", "Default", "proyecto", f"Default project for {cfg.instance_name}", 1, ts, ts),
             )
-            # Create schema_version table and mark all existing migrations as applied.
-            # This prevents `bin/niwa migrate` from re-running them on a fresh DB.
+            # Run all migrations on top of the base schema.
+            # Migrations use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS
+            # so they are safe to run on a fresh schema that already has these objects.
+            migrations_dir = REPO_ROOT / "niwa-app" / "db" / "migrations"
+            if migrations_dir.is_dir():
+                import glob as _glob
+                for mfile in sorted(_glob.glob(str(migrations_dir / "*.sql"))):
+                    mig_sql = Path(mfile).read_text()
+                    conn.executescript(mig_sql)
+
+            # Track which migrations have been applied so `bin/niwa migrate`
+            # won't re-run them.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER PRIMARY KEY,
@@ -1225,9 +1246,7 @@ def execute_install(cfg: WizardConfig) -> None:
                     filename TEXT
                 )
             """)
-            migrations_dir = REPO_ROOT / "niwa-app" / "db" / "migrations"
             if migrations_dir.is_dir():
-                import glob as _glob
                 for mfile in sorted(_glob.glob(str(migrations_dir / "*.sql"))):
                     fname = os.path.basename(mfile)
                     try:

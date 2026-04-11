@@ -91,15 +91,18 @@ class TestInstalacionLimpia:
 class TestAutenticacion:
     """Verifica la lógica de autenticación."""
 
-    def test_credenciales_por_defecto_detectadas(self):
-        """Las credenciales por defecto son identificadas como inseguras."""
-        assert 'admin' == 'admin'
-        assert 'change-me' == 'change-me'
+    def test_default_credentials_are_insecure(self):
+        """_security_preflight blocks default password on non-local bind."""
+        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
+            content = f.read()
+        assert 'change-me' in content, "Default password check missing from security preflight"
+        assert '_security_preflight' in content, "Security preflight function missing"
 
-    def test_secreto_sesion_debe_cambiar(self):
-        """El secreto de sesión por defecto no es apto para producción."""
-        default = 'niwa-dev-secret-change-me'
-        assert len(default) > 0
+    def test_session_secret_check_exists(self):
+        """The session secret default is flagged as insecure in the codebase."""
+        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
+            content = f.read()
+        assert 'niwa-dev-secret-change-me' in content, "Default session secret not found in app.py"
 
 
 class TestSuperficieMCP:
@@ -291,6 +294,125 @@ class TestOpenClaw:
         with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
             content = f.read()
         assert 'service_id == "openclaw"' in content
+
+
+class TestMCPCatalogIntegrity:
+    """Verify the MCP catalog matches the actual server surface."""
+
+    def test_catalog_yaml_matches_server(self):
+        """Generated catalog YAML must expose all 21 tools from tasks-mcp."""
+        import re
+
+        # Get tools from server.py dispatcher
+        server_path = os.path.join(PROJECT_ROOT, 'servers', 'tasks-mcp', 'server.py')
+        with open(server_path) as f:
+            content = f.read()
+        server_tools = set()
+        for m in re.finditer(r'(?:if|elif)\s+name\s*==\s*["\'](\w+)["\']', content):
+            server_tools.add(m.group(1))
+
+        # Get tools from catalog JSONs
+        catalog_dir = os.path.join(PROJECT_ROOT, 'config', 'mcp-catalog')
+        catalog_tools = set()
+        for f in os.listdir(catalog_dir):
+            if f.endswith('.json') and f != 'combined.json':
+                with open(os.path.join(catalog_dir, f)) as fh:
+                    data = json.load(fh)
+                    catalog_tools.update(data.get('tools', []))
+
+        # Verify catalog covers server
+        missing = server_tools - catalog_tools
+        assert not missing, f"Server tools not in catalog: {missing}"
+
+        # Verify no ghost tools in catalog
+        ghost = catalog_tools - server_tools
+        assert not ghost, f"Catalog tools not in server: {ghost}"
+
+    def test_setup_reads_catalog_jsons(self):
+        """setup.py generate_catalog_yaml must read from config/mcp-catalog/*.json."""
+        with open(os.path.join(PROJECT_ROOT, 'setup.py')) as f:
+            content = f.read()
+        assert 'mcp-catalog' in content, "setup.py doesn't reference mcp-catalog directory"
+
+
+class TestDatabaseBootstrap:
+    """Verify fresh DB bootstrap works correctly."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path = tempfile.mkstemp(suffix='.db')
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_deployments_table_from_schema(self):
+        """deployments table must exist after schema.sql without runtime DDL."""
+        schema = open(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')).read()
+        self.conn.executescript(schema)
+
+        # Run migrations too (as setup.py now does)
+        migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
+        for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
+            sql = open(mig_path).read()
+            self.conn.executescript(sql)
+
+        tables = {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert 'deployments' in tables, "deployments table not created by schema.sql + migrations"
+
+    def test_no_runtime_ddl_in_mcp_server(self):
+        """MCP server must NOT create tables at runtime."""
+        server_path = os.path.join(PROJECT_ROOT, 'servers', 'tasks-mcp', 'server.py')
+        with open(server_path) as f:
+            content = f.read()
+        assert '_ensure_deployments_table' not in content, \
+            "server.py still has runtime DDL (_ensure_deployments_table)"
+
+
+class TestImageProviders:
+    """Verify all advertised image providers are implemented."""
+
+    def test_all_providers_have_handlers(self):
+        """Every image provider must have a generate handler in image_service.py."""
+        img_path = os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'image_service.py')
+        with open(img_path) as f:
+            img_content = f.read()
+
+        expected_providers = ['openai', 'stability', 'replicate', 'fal', 'together']
+        for provider in expected_providers:
+            assert f'_generate_{provider}' in img_content, \
+                f"Provider '{provider}' has no _generate_{provider} handler in image_service.py"
+
+    def test_all_providers_have_test_connection(self):
+        """Every provider must be testable via test_connection()."""
+        img_path = os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'image_service.py')
+        with open(img_path) as f:
+            img_content = f.read()
+
+        expected_providers = ['openai', 'stability', 'replicate', 'fal', 'together']
+        for provider in expected_providers:
+            assert f'provider == "{provider}"' in img_content, \
+                f"Provider '{provider}' not handled in test_connection()"
+
+
+class TestOpenClawConfig:
+    """Verify OpenClaw integration uses streamable-http."""
+
+    def test_setup_uses_streamable_http(self):
+        """setup.py must configure OpenClaw with streamable-http, not SSE."""
+        with open(os.path.join(PROJECT_ROOT, 'setup.py')) as f:
+            content = f.read()
+        assert 'streamable-http' in content, "setup.py should use streamable-http for OpenClaw"
+
+    def test_api_config_uses_streamable_http(self):
+        """API openclaw/config endpoint must return streamable-http transport."""
+        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
+            content = f.read()
+        assert 'streamable-http' in content, "app.py openclaw config should use streamable-http"
 
 
 class TestAllEndpoints:

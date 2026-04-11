@@ -78,9 +78,9 @@ services:
         max-file: "3"
 
   mcp-gateway-sse:
-    # Twin gateway in legacy SSE transport mode for clients that don't speak
-    # streamable HTTP (e.g. OpenClaw's bundled MCP client). Same catalog,
-    # same backing servers, different transport.
+    # Twin gateway in legacy SSE transport mode for older MCP clients that
+    # don't speak streamable HTTP. OpenClaw 1.x+ supports streamable-http
+    # and should use the primary gateway. Same catalog, same backing servers.
     image: docker/mcp-gateway:latest
     container_name: ${INSTANCE_NAME}-mcp-gateway-sse
     restart: unless-stopped

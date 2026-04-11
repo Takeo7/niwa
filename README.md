@@ -278,13 +278,13 @@ bin/niwa check              # pre-flight health verification
 | Container | Image | Purpose | Memory |
 |-----------|-------|---------|--------|
 | `socket-proxy` | `tecnativa/docker-socket-proxy:0.3.0` | Filtered Docker socket proxy | 64 MB |
-| `mcp-gateway` | `docker/mcp-gateway:0.1` | Streamable HTTP transport | 256 MB |
-| `mcp-gateway-sse` | `docker/mcp-gateway:0.1` | Legacy SSE transport | 256 MB |
+| `mcp-gateway` | `docker/mcp-gateway:latest` | Streamable HTTP transport | 256 MB |
+| `mcp-gateway-sse` | `docker/mcp-gateway:latest` | Legacy SSE transport | 256 MB |
 | `app` | `<instance>-app:<version>` | Niwa web app | 256 MB |
-| `caddy` | `caddy:2.9-alpine` | Reverse proxy with bearer auth | 64 MB |
+| `caddy` | `caddy:2-alpine` | Reverse proxy with bearer auth | 64 MB |
 | `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal | 128 MB |
 
-All images use pinned versions (no `:latest`).
+Base images (Python, Node) and custom builds are pinned to specific versions. Third-party services (`docker/mcp-gateway`, `caddy`) use stable rolling tags (`latest`, `2-alpine`) that auto-update with patch releases.
 
 ## MCP Catalog
 
