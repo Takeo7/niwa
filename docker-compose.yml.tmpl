@@ -44,7 +44,7 @@ services:
         max-file: "2"
 
   mcp-gateway:
-    image: docker/mcp-gateway:0.1
+    image: docker/mcp-gateway:latest
     container_name: ${INSTANCE_NAME}-mcp-gateway
     restart: unless-stopped
     depends_on:
@@ -81,7 +81,7 @@ services:
     # Twin gateway in legacy SSE transport mode for clients that don't speak
     # streamable HTTP (e.g. OpenClaw's bundled MCP client). Same catalog,
     # same backing servers, different transport.
-    image: docker/mcp-gateway:0.1
+    image: docker/mcp-gateway:latest
     container_name: ${INSTANCE_NAME}-mcp-gateway-sse
     restart: unless-stopped
     depends_on:
@@ -139,7 +139,7 @@ services:
         max-file: "3"
 
   caddy:
-    image: caddy:2.9-alpine
+    image: caddy:2-alpine
     container_name: ${INSTANCE_NAME}-caddy
     restart: unless-stopped
     depends_on:
