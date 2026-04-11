@@ -733,13 +733,23 @@ def step_ports(cfg: WizardConfig) -> None:
         ("Web terminal", "terminal_port", 7681),
     ]
     for label, attr, default in defaults:
-        in_use = not detect_port_free(default)
-        suffix = f" {YELLOW}(default in use!){RESET}" if in_use else ""
+        # Auto-find a free port if default is in use
+        actual_default = default
+        if not detect_port_free(default):
+            # Try incrementing until we find a free one
+            for offset in range(1, 100):
+                candidate = default + offset
+                if detect_port_free(candidate):
+                    actual_default = candidate
+                    info(f"Puerto {default} en uso — usando {candidate} automáticamente")
+                    break
+        in_use = not detect_port_free(actual_default)
+        suffix = f" {YELLOW}(in use!){RESET}" if in_use else ""
         while True:
-            answer = prompt(f"{label} port{suffix}", default=str(default), validator=valid_port)
+            answer = prompt(f"{label} port{suffix}", default=str(actual_default), validator=valid_port)
             n = int(answer)
             if not detect_port_free(n):
-                if n == default and not prompt_bool(
+                if n == actual_default and not prompt_bool(
                     f"  Port {n} appears to be in use. Continue anyway?", default=False
                 ):
                     continue
