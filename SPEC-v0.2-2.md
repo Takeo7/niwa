@@ -491,7 +491,7 @@ Vas a implementar el PR-{{NÚMERO}} del proyecto Niwa v0.2.
 CONTEXTO OBLIGATORIO ANTES DE EMPEZAR:
 
 1. Lee el documento de especificación completo:
-   https://github.com/yumewagener/niwa/blob/v0.2/docs/SPEC-v0.2.md
+   https://github.com/Takeo7/niwa/blob/v0.2/docs/SPEC-v0.2.md
 
 2. Presta especial atención a:
    - El apartado 8 (Reglas de comportamiento). Se aplican estrictamente.
@@ -499,10 +499,10 @@ CONTEXTO OBLIGATORIO ANTES DE EMPEZAR:
    - Las dependencias con PRs anteriores ya mergeados.
 
 3. Lee el estado actual del repo en la rama v0.2:
-   https://github.com/yumewagener/niwa/tree/v0.2
+   https://github.com/Takeo7/niwa/tree/v0.2
 
 4. Lee el log de decisiones tomadas hasta ahora:
-   https://github.com/yumewagener/niwa/blob/v0.2/docs/DECISIONS-LOG.md
+   https://github.com/Takeo7/niwa/blob/v0.2/docs/DECISIONS-LOG.md
 
 TAREA:
 

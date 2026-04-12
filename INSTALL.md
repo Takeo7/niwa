@@ -18,7 +18,7 @@
 ## Quickest install (3 commands)
 
 ```bash
-git clone https://github.com/yumewagener/niwa
+git clone https://github.com/Takeo7/niwa
 cd niwa
 ./niwa install
 ```

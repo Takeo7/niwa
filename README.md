@@ -171,7 +171,7 @@ Full PKCE OAuth flow for ChatGPT subscription authentication. The web UI provide
 - Node.js 22+ (used in the Docker multi-stage build for the React frontend)
 
 ```bash
-git clone https://github.com/yumewagener/niwa
+git clone https://github.com/Takeo7/niwa
 cd niwa
 python3 setup.py install
 ```
