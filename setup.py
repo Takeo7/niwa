@@ -2058,25 +2058,94 @@ def configure_cloudflared(cfg: WizardConfig) -> None:
             warn("  sudo systemctl restart cloudflared")
 
 
+class StepBack(Exception):
+    """Raised when the user wants to go back to the previous step."""
+    pass
+
+
+def prompt_with_back(label, **kwargs):
+    """Wrapper around prompt() that raises StepBack if user types '<' or 'back'."""
+    result = prompt(label, **kwargs)
+    if result.strip().lower() in ('<', 'back', 'atras', 'atrás', 'b'):
+        raise StepBack()
+    return result
+
+
+def prompt_bool_with_back(label, **kwargs):
+    """Wrapper around prompt_bool() that checks for back command."""
+    # Show the prompt but intercept 'back' before processing
+    raw = prompt(label + f" [{'Y/n' if kwargs.get('default', False) else 'y/N'}] (<: volver) ", default='')
+    if raw.strip().lower() in ('<', 'back', 'atras', 'atrás', 'b'):
+        raise StepBack()
+    if raw.strip() == '':
+        return kwargs.get('default', False)
+    return raw.strip().lower() in ('y', 'yes', 'si', 'sí', 's')
+
+
+def run_wizard_steps(cfg: WizardConfig) -> bool:
+    """Run all wizard steps with back navigation support.
+    
+    Type '<' or 'back' at any prompt to go back to the previous step.
+    Returns True if the wizard completed, False if aborted.
+    """
+    steps = [
+        ("Detección", step_detection),
+        ("Nombre", step_naming),
+        ("Base de datos", step_database),
+        ("Sistema de archivos", step_filesystem),
+        ("Restart whitelist", step_restart_whitelist),
+        ("Tokens", step_tokens),
+        ("Credenciales", step_credentials),
+        ("Puertos", step_ports),
+        ("Executor", step_executor),
+        ("Proyectos", step_projects),
+        ("Acceso remoto", step_remote),
+        ("Notificaciones", step_notifications),
+        ("Clientes MCP", step_clients),
+    ]
+    
+    i = 0
+    while i < len(steps):
+        name, fn = steps[i]
+        try:
+            fn(cfg)
+            i += 1
+        except StepBack:
+            if i > 0:
+                i -= 1
+                info(f"Volviendo a: {steps[i][0]}")
+            else:
+                info("Ya estás en el primer paso.")
+        except KeyboardInterrupt:
+            print()
+            info("Instalación cancelada.")
+            return False
+    
+    # Summary step (can also go back)
+    while True:
+        try:
+            if step_summary(cfg):
+                return True
+            info("Aborted — nothing was installed")
+            return False
+        except StepBack:
+            i = len(steps) - 1
+            name, fn = steps[i]
+            info(f"Volviendo a: {name}")
+            try:
+                fn(cfg)
+            except StepBack:
+                if i > 0:
+                    i -= 1
+            continue
+
+
 def cmd_install(args) -> None:
     print(f"{BOLD}🌿 Niwa installer{RESET}")
-    print(f"{DIM}Interactive setup for the Niwa MCP gateway + web app{RESET}\n")
+    print(f"{DIM}Interactive setup for the Niwa MCP gateway + web app{RESET}")
+    print(f"{DIM}Escribe '<' o 'back' en cualquier momento para volver al paso anterior.{RESET}\n")
     cfg = WizardConfig()
-    step_detection(cfg)
-    step_naming(cfg)
-    step_database(cfg)
-    step_filesystem(cfg)
-    step_restart_whitelist(cfg)
-    step_tokens(cfg)
-    step_credentials(cfg)
-    step_ports(cfg)
-    step_executor(cfg)
-    step_projects(cfg)
-    step_remote(cfg)
-    step_notifications(cfg)
-    step_clients(cfg)
-    if not step_summary(cfg):
-        info("Aborted — nothing was installed")
+    if not run_wizard_steps(cfg):
         return
     execute_install(cfg)
 
