@@ -96,7 +96,11 @@ Opt-in. If `y`:
 ### Step 11 — Auto-register MCP clients
 Only shown if Claude Code or OpenClaw are detected.
 - **Claude Code**: `claude mcp add --scope user --transport http <tasks_name> http://localhost:<port>/mcp`
-- **OpenClaw**: `openclaw mcp set <tasks_name> '{"type":"sse","url":"http://localhost:<port>/sse"}'`
+- **OpenClaw**: `openclaw mcp set <tasks_name> '{"type":"streamable-http","url":"http://localhost:<port>/mcp"}'`
+
+> **Note (v0.2):** OpenClaw registration uses `streamable-http` (the modern MCP transport), not SSE. The legacy SSE gateway remains available at port 18812 for older MCP clients, but `streamable-http` is the recommended path for Assistant mode.
+>
+> **Important:** `mcp set` does not validate the connection. The installer performs a real smoke test after registration to verify that the MCP endpoint responds. If the smoke test fails, the installer warns you and provides troubleshooting steps.
 
 ### Step 12 — Summary + confirmation
 Shows everything you picked. Last chance to abort with `n`.
