@@ -377,11 +377,16 @@ def generate_catalog_yaml(
     fs_workspace: str,
     fs_memory: str,
     instance_name: str,
+    contract_file: Optional[str] = None,
 ) -> str:
     """Generate the niwa-catalog.yaml content with the user's chosen server names.
 
     Tools for the tasks-mcp server are read from config/mcp-catalog/*.json
     (source of truth) instead of being hardcoded.
+
+    If contract_file is given and exists, only expose tools listed in the contract.
+    This is used when OpenClaw is enabled to limit the tool surface.
+    For standalone Niwa (no OpenClaw), all 21 tools are exposed.
     """
     tasks_name = server_names["tasks"]
     notes_name = server_names["notes"]
@@ -397,6 +402,12 @@ def generate_catalog_yaml(
         with open(catalog_file) as _f:
             data = json.load(_f)
             tasks_tools.extend(data.get("tools", []))
+
+    # If a contract is specified, filter tools to only those in the contract
+    if contract_file and Path(contract_file).exists():
+        contract = json.loads(Path(contract_file).read_text())
+        allowed = set(contract.get("tools", []))
+        tasks_tools = [t for t in tasks_tools if t in allowed]
 
     tools_yaml = "\n".join(f'      - name: "{t}"' for t in tasks_tools)
 
@@ -832,40 +843,59 @@ def _auto_install_openclaw() -> bool:
     return False
 
 
+def _get_local_ip() -> str:
+    """Get the local LAN IP address for non-loopback binds."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def _configure_openclaw_mcp(cfg) -> None:
-    """Configure OpenClaw to use Niwa's MCP gateway."""
+    """Configure OpenClaw to use Niwa's single MCP gateway endpoint."""
     if not which("openclaw"):
         return
     gateway_port = getattr(cfg, 'gateway_streaming_port', 28810)
     gateway_token = getattr(cfg, 'mcp_gateway_token', '')
     bind_host = getattr(cfg, 'bind_host', '127.0.0.1')
-    gateway_url = f"http://{bind_host}:{gateway_port}/mcp"
+
+    # Use the LAN IP if bound to all interfaces
+    if bind_host == '0.0.0.0':
+        host = _get_local_ip()
+    else:
+        host = bind_host
+
+    gateway_url = f"http://{host}:{gateway_port}/mcp"
 
     mcp_config = json.dumps({
         "url": gateway_url,
         "transport": "streamable-http",
         "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
     })
-    
-    info(f"Registering Niwa MCP server in OpenClaw...")
+
+    info("Registering Niwa in OpenClaw as single endpoint...")
     try:
+        # Register as ONE server: "niwa" (not split into core/ops/files)
         r = subprocess.run(
-            ["openclaw", "mcp", "set", "niwa-core", mcp_config],
+            ["openclaw", "mcp", "set", "niwa", mcp_config],
             capture_output=True, text=True, timeout=15,
         )
         if r.returncode == 0:
-            ok("OpenClaw configured to use Niwa MCP gateway")
-            # Also save the config in Niwa's DB-compatible settings
-            info(f"Gateway URL: {gateway_url}")
+            ok(f"OpenClaw configured: niwa \u2192 {gateway_url}")
+            info("Tools will appear as niwa__task_list, niwa__task_create, etc.")
             return
         warn(f"openclaw mcp set failed: {r.stderr[:200]}")
     except Exception as e:
-        warn(f"OpenClaw MCP config failed: {e}")
-    
+        warn(f"OpenClaw config failed: {e}")
+
     # Fallback: print manual instructions
     print()
-    info("To connect OpenClaw manually, run:")
-    print(f"  openclaw mcp set niwa-core '{mcp_config}'")
+    info("To connect manually:")
+    print(f"  openclaw mcp set niwa '{mcp_config}'")
     print(f"  openclaw gateway restart")
     print()
 

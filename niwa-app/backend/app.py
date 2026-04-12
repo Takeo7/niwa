@@ -1627,7 +1627,7 @@ SERVICES_REGISTRY = [
             "2. Activa el modo 'OpenClaw → Niwa' arriba",
             "3. Copia la URL del gateway y el token",
             "4. En tu terminal con OpenClaw:",
-            "   openclaw mcp set niwa-core '{\"url\":\"URL_GATEWAY/mcp\",\"transport\":\"streamable-http\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
+            "   openclaw mcp set niwa '{\"url\":\"URL_GATEWAY/mcp\",\"transport\":\"streamable-http\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
             "5. Reinicia OpenClaw: openclaw gateway restart",
             "6. Verifica: openclaw mcp list (debe mostrar las tools de Niwa)",
         ]
@@ -3390,19 +3390,23 @@ class Handler(BaseHTTPRequestHandler):
             settings = fetch_settings(raw=True)
             gateway_url = settings.get("svc.openclaw.gateway_url", "")
             if not gateway_url:
-                host = os.environ.get('NIWA_APP_PUBLIC_BASE_URL', '')
-                if not host:
-                    host = self.headers.get('Host', 'localhost')
-                    proto = self.headers.get('X-Forwarded-Proto', 'http')
-                    host = f"{proto}://{host}"
-                gateway_url = host.rsplit(':', 1)[0] + ':28810/mcp'
+                host = self.headers.get('Host', 'localhost').split(':')[0]
+                proto = self.headers.get('X-Forwarded-Proto', 'http')
+                # Use streaming port for streamable-http
+                gateway_port = os.environ.get('NIWA_GATEWAY_STREAMING_PORT', '18810')
+                gateway_url = f"{proto}://{host}:{gateway_port}/mcp"
             gateway_token = settings.get("svc.openclaw.gateway_token", "") or os.environ.get("MCP_GATEWAY_AUTH_TOKEN", "")
-            domains = settings.get("svc.openclaw.domains", "all")
+            # Build the CLI command for single-endpoint registration
+            if gateway_token:
+                cli_json = json.dumps({"url": gateway_url, "transport": "streamable-http", "headers": {"Authorization": f"Bearer {gateway_token}"}})
+            else:
+                cli_json = json.dumps({"url": gateway_url, "transport": "streamable-http"})
             config = {
                 "gateway_url": gateway_url,
+                "transport": "streamable-http",
                 "has_token": bool(gateway_token),
-                "domains": domains,
-                "cli_command": f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"streamable-http","headers":{{"Authorization":"Bearer {gateway_token}"}}}}\'' if gateway_token else f'openclaw mcp set niwa-core \'{{"url":"{gateway_url}","transport":"streamable-http"}}\'',
+                "server_name": "niwa",
+                "cli_command": f"openclaw mcp set niwa '{cli_json}'",
             }
             return self._json(config)
         # ── Services API ──

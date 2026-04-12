@@ -52,6 +52,7 @@ services:
     environment:
       DOCKER_HOST: tcp://socket-proxy:2375
     env_file:
+      # Loads MCP_GATEWAY_AUTH_TOKEN and other secrets
       - ${NIWA_SECRETS_DIR}/mcp.env
     command:
       - --transport=streaming

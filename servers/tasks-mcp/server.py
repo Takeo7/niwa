@@ -25,7 +25,7 @@ from mcp.types import TextContent, Tool
 DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 
 VALID_AREAS = ("personal", "empresa", "proyecto", "sistema")
-VALID_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "hecha", "archivada")
+VALID_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "waiting_input", "hecha", "archivada")
 VALID_PRIORITIES = ("baja", "media", "alta", "critica", "low", "medium", "high", "critical")
 
 server = Server("tasks")
@@ -165,6 +165,7 @@ async def list_tools() -> list[Tool]:
                     "description": {"type": "string"},
                     "notes": {"type": "string"},
                     "assigned_to_claude": {"type": "boolean", "default": False, "description": "Set true for auto-execution by the main model"},
+                    "source": {"type": "string", "description": "Origin of the task (e.g. 'openclaw', 'mcp:tasks'). Defaults to 'mcp:tasks'."},
                 },
                 "required": ["title", "area"],
             },
@@ -366,6 +367,7 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
     notes = args.get("notes")
 
     assigned_to_claude = 1 if args.get("assigned_to_claude") else 0
+    source = args.get("source", "mcp:tasks")
 
     task_id = f"task-{uuid.uuid4().hex[:12]}"
     now = _now_iso()
@@ -376,9 +378,9 @@ def _task_create(args: dict[str, Any]) -> dict[str, Any]:
                 id, title, description, area, project_id, status, priority,
                 urgent, source, notes, created_at, updated_at,
                 assigned_to_yume, assigned_to_claude
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'mcp:tasks', ?, ?, ?, 0, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?)
             """,
-            (task_id, title, description, area, project_id, status, priority, notes, now, now, assigned_to_claude),
+            (task_id, title, description, area, project_id, status, priority, source, notes, now, now, assigned_to_claude),
         )
         c.commit()
         row = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()

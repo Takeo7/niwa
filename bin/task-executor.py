@@ -131,6 +131,11 @@ MAX_CONSECUTIVE_FAILURES = int(ENV.get("NIWA_EXECUTOR_MAX_FAILURES", "3"))
 MAX_WORKERS = int(ENV.get("NIWA_EXECUTOR_MAX_WORKERS", "3"))
 PUBLIC_URL = ENV.get("NIWA_PUBLIC_URL", "").strip()
 
+# OpenClaw worker mode — when OpenClaw is the orchestrator, executor only runs
+# tasks explicitly assigned by OpenClaw (source='openclaw') and skips the planner tier.
+OPENCLAW_MODE = _SETTINGS.get('svc.openclaw.mode', 'disabled')
+WORKER_MODE = OPENCLAW_MODE in ('mcp_client', 'bidirectional')
+
 # Context limits — keep prompts reasonable
 MAX_CONTEXT_TASKS = int(ENV.get("NIWA_EXECUTOR_CONTEXT_TASKS", "20"))
 MAX_CONTEXT_NOTES = int(ENV.get("NIWA_EXECUTOR_CONTEXT_NOTES", "5"))
@@ -194,6 +199,30 @@ def _claim_next_task() -> Optional[sqlite3.Row]:
         )
         changed = c.execute("SELECT changes()").fetchone()[0]
         if changed == 0:
+            return None
+        c.commit()
+        return c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+
+
+def _claim_next_openclaw_task() -> Optional[sqlite3.Row]:
+    """Worker mode: only pick tasks explicitly assigned by OpenClaw (source='openclaw')."""
+    with _conn() as c:
+        row = c.execute(
+            """
+            SELECT * FROM tasks
+            WHERE status = 'pendiente'
+            AND source = 'openclaw'
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            return None
+        c.execute(
+            "UPDATE tasks SET status='en_progreso', updated_at=? WHERE id=? AND status='pendiente'",
+            (_now_iso(), row["id"]),
+        )
+        if c.execute("SELECT changes()").fetchone()[0] == 0:
             return None
         c.commit()
         return c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
@@ -848,8 +877,9 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
         return _run_with_heartbeat(task["id"], prompt, cwd, LLM_COMMAND_CHAT, CHAT_TIMEOUT_SECONDS)
 
     # Tier 2: Planner → Opus (analyze + split if needed)
+    # Skip planner in worker mode — OpenClaw is the orchestrator
     # Only run planner for non-retry, non-chat tasks when planner is configured
-    if LLM_COMMAND_PLANNER and not retry_prompt:
+    if LLM_COMMAND_PLANNER and not retry_prompt and not WORKER_MODE:
         log.info("task %s planning phase (tier-2 planner)", task["id"])
         _record_event(task["id"], "comment", {
             "author": "executor", "kind": "progress",
@@ -930,6 +960,7 @@ def _reload_config():
     """Hot-reload configuration from settings.json and DB settings table."""
     global LLM_COMMAND, LLM_COMMAND_CHAT, LLM_COMMAND_PLANNER, LLM_COMMAND_EXECUTOR
     global LLM_API_KEY, LLM_SETUP_TOKEN, POLL_SECONDS, TIMEOUT_SECONDS
+    global OPENCLAW_MODE, WORKER_MODE
 
     # Re-read settings.json
     global _SETTINGS
@@ -965,8 +996,13 @@ def _reload_config():
     POLL_SECONDS = int(_cfg_reload("executor_poll_seconds", "NIWA_EXECUTOR_POLL_SECONDS", "30"))
     TIMEOUT_SECONDS = int(_cfg_reload("executor_timeout_seconds", "NIWA_EXECUTOR_TIMEOUT_SECONDS", "1800"))
 
-    log.info("Configuration reloaded — LLM: %s, Chat: %s, Planner: %s, Executor: %s",
-             LLM_COMMAND or "(none)", LLM_COMMAND_CHAT or "(same)", LLM_COMMAND_PLANNER or "(none)", LLM_COMMAND_EXECUTOR or "(same)")
+    # Reload OpenClaw worker mode
+    OPENCLAW_MODE = merged.get('svc.openclaw.mode', 'disabled')
+    WORKER_MODE = OPENCLAW_MODE in ('mcp_client', 'bidirectional')
+
+    log.info("Configuration reloaded — LLM: %s, Chat: %s, Planner: %s, Executor: %s, Worker: %s",
+             LLM_COMMAND or "(none)", LLM_COMMAND_CHAT or "(same)", LLM_COMMAND_PLANNER or "(none)",
+             LLM_COMMAND_EXECUTOR or "(same)", WORKER_MODE)
 
 
 def _check_reload_requested(start_time_iso: str) -> bool:
@@ -1007,6 +1043,8 @@ def main() -> None:
     )
     if PUBLIC_URL:
         log.info("Public URL: %s", PUBLIC_URL)
+    if WORKER_MODE:
+        log.info("Worker mode: OpenClaw is the orchestrator. Executor only runs explicitly assigned tasks.")
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
@@ -1053,12 +1091,15 @@ def main() -> None:
                 time.sleep(CHAT_POLL_SECONDS)
                 continue
 
-            # Try to claim a task (chat first, then regular)
+            # Try to claim a task (chat first, then regular or openclaw)
             task = _claim_next_chat_task()
             if not task:
                 now = time.time()
                 if now - last_poll >= POLL_SECONDS:
-                    task = _claim_next_task()
+                    if WORKER_MODE:
+                        task = _claim_next_openclaw_task()
+                    else:
+                        task = _claim_next_task()
                     last_poll = now
 
             if task:

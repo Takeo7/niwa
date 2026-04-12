@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT,
   area TEXT NOT NULL CHECK (area IN ('personal','empresa','proyecto','sistema')) DEFAULT 'proyecto',
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-  status TEXT NOT NULL CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','hecha','archivada')) DEFAULT 'inbox',
+  status TEXT NOT NULL CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','waiting_input','hecha','archivada')) DEFAULT 'inbox',
   priority TEXT NOT NULL CHECK (priority IN ('baja','media','alta','critica','low','medium','high','critical')) DEFAULT 'media',
   urgent INTEGER NOT NULL DEFAULT 0,
   scheduled_for TEXT,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- ── Kanban columns ──
 CREATE TABLE IF NOT EXISTS kanban_columns (
   id TEXT PRIMARY KEY,
-  status TEXT NOT NULL UNIQUE CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','hecha','archivada')),
+  status TEXT NOT NULL UNIQUE CHECK (status IN ('inbox','pendiente','en_progreso','bloqueada','revision','waiting_input','hecha','archivada')),
   label TEXT NOT NULL,
   position INTEGER NOT NULL,
   color TEXT,

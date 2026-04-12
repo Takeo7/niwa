@@ -179,6 +179,20 @@ export function ServiceCard({ service }: Props) {
             ) : null,
           )}
 
+          {/* Worker mode note for OpenClaw */}
+          {service.id === 'openclaw' &&
+            (values['svc.openclaw.mode'] === 'mcp_client' ||
+              values['svc.openclaw.mode'] === 'bidirectional') && (
+              <Alert
+                color="blue"
+                variant="light"
+                icon={<IconAlertCircle size={16} />}
+              >
+                Modo worker activo: el executor solo ejecutar&aacute; tareas
+                asignadas por OpenClaw.
+              </Alert>
+            )}
+
           {/* OAuth section */}
           {service.oauth_provider && (
             <OAuthSection provider={service.oauth_provider} />

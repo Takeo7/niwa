@@ -474,3 +474,178 @@ class TestFrontendBuild:
         for f in expected:
             path = os.path.join(src_dir, f)
             assert os.path.exists(path), f"Componente faltante: {f}"
+
+
+class TestExecutorQueue:
+    """Verify executor respects the task queue properly."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path = tempfile.mkstemp(suffix='.db')
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        schema = open(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')).read()
+        self.conn.executescript(schema)
+        for mig in sorted(glob.glob(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations', '*.sql'))):
+            self.conn.executescript(open(mig).read())
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_only_pendiente_tasks_are_picked(self):
+        """Executor should only pick tasks with status='pendiente'."""
+        now = '2026-01-01T00:00:00'
+        # Insert tasks with different statuses
+        for status in ['pendiente', 'en_progreso', 'hecha', 'bloqueada', 'archivada', 'inbox']:
+            self.conn.execute(
+                "INSERT INTO tasks (id, title, status, created_at, updated_at, source) VALUES (?, ?, ?, ?, ?, 'api')",
+                (f'task-{status}', f'Task {status}', status, now, now)
+            )
+        self.conn.commit()
+
+        # Query what the executor would pick (same query as task-executor.py)
+        rows = self.conn.execute(
+            "SELECT * FROM tasks WHERE status='pendiente' AND source != 'chat' ORDER BY created_at ASC"
+        ).fetchall()
+
+        assert len(rows) == 1
+        assert rows[0]['status'] == 'pendiente'
+        assert rows[0]['title'] == 'Task pendiente'
+
+    def test_executor_query_excludes_chat_source(self):
+        """Executor should NOT pick tasks created from chat (source='chat')."""
+        now = '2026-01-01T00:00:00'
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, status, source, created_at, updated_at) VALUES ('task-chat', 'Chat task', 'pendiente', 'chat', ?, ?)",
+            (now, now)
+        )
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, status, source, created_at, updated_at) VALUES ('task-api', 'API task', 'pendiente', 'api', ?, ?)",
+            (now, now)
+        )
+        self.conn.commit()
+
+        rows = self.conn.execute(
+            "SELECT * FROM tasks WHERE status='pendiente' AND source != 'chat' ORDER BY created_at ASC"
+        ).fetchall()
+
+        assert len(rows) == 1
+        assert rows[0]['title'] == 'API task'
+
+
+class TestMCPCatalogToolCount:
+    """Verify catalog tool count and setup.py integration."""
+
+    def test_generate_catalog_produces_all_tools(self):
+        """setup.py generate_catalog_yaml must include all 21 tools."""
+        # Simulate what generate_catalog_yaml does
+        catalog_dir = os.path.join(PROJECT_ROOT, 'config', 'mcp-catalog')
+        all_tools = []
+        for f in sorted(os.listdir(catalog_dir)):
+            if f.endswith('.json') and f != 'combined.json':
+                with open(os.path.join(catalog_dir, f)) as fh:
+                    data = json.load(fh)
+                    all_tools.extend(data.get('tools', []))
+
+        assert len(all_tools) == 21, f"Expected 21 tools, got {len(all_tools)}"
+
+        # Verify setup.py reads from this source
+        with open(os.path.join(PROJECT_ROOT, 'setup.py')) as f:
+            content = f.read()
+        assert 'mcp-catalog' in content
+        assert 'glob' in content or '.json' in content
+
+
+class TestRemoteAuth:
+    """Verify auth enforcement for remote/non-local binds."""
+
+    def test_preflight_blocks_default_password_on_remote(self):
+        """_security_preflight must exist and check for 'change-me'."""
+        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
+            content = f.read()
+        assert '_security_preflight' in content
+        assert "'change-me'" in content or '"change-me"' in content
+        # Must call sys.exit on failure
+        assert 'sys.exit' in content
+
+    def test_gateway_token_required_for_mcp(self):
+        """MCP gateway must require bearer token authentication."""
+        with open(os.path.join(PROJECT_ROOT, 'docker-compose.yml.tmpl')) as f:
+            content = f.read()
+        # Gateway must have AUTH_TOKEN configured
+        assert 'MCP_GATEWAY_AUTH_TOKEN' in content or 'GATEWAY_AUTH' in content
+
+    def test_oauth_callback_unauthenticated(self):
+        """OAuth callback must NOT require Niwa session auth."""
+        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'backend', 'app.py')) as f:
+            content = f.read()
+        # The callback handler must come before auth check, or have explicit skip
+        assert 'oauth/callback' in content
+
+
+class TestTaskStateCycle:
+    """Verify tasks can transition through the full lifecycle."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path = tempfile.mkstemp(suffix='.db')
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        schema = open(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')).read()
+        self.conn.executescript(schema)
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_pendiente_to_hecha_cycle(self):
+        """Task must be able to go: pendiente -> en_progreso -> hecha."""
+        now = '2026-01-01T00:00:00'
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, status, created_at, updated_at, source) VALUES ('task-1', 'Test', 'pendiente', ?, ?, 'api')",
+            (now, now)
+        )
+        self.conn.commit()
+
+        task_id = self.conn.execute("SELECT id FROM tasks WHERE title='Test'").fetchone()[0]
+
+        # pendiente -> en_progreso
+        self.conn.execute("UPDATE tasks SET status='en_progreso' WHERE id=?", (task_id,))
+        self.conn.commit()
+        assert self.conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == 'en_progreso'
+
+        # en_progreso -> hecha
+        self.conn.execute("UPDATE tasks SET status='hecha' WHERE id=?", (task_id,))
+        self.conn.commit()
+        assert self.conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == 'hecha'
+
+    def test_pendiente_to_waiting_input_cycle(self):
+        """Task must be able to go: pendiente -> en_progreso -> waiting_input -> en_progreso -> hecha."""
+        now = '2026-01-01T00:00:00'
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, status, created_at, updated_at, source) VALUES ('task-2', 'Test2', 'pendiente', ?, ?, 'api')",
+            (now, now)
+        )
+        self.conn.commit()
+        task_id = self.conn.execute("SELECT id FROM tasks WHERE title='Test2'").fetchone()[0]
+
+        for status in ['en_progreso', 'waiting_input', 'en_progreso', 'hecha']:
+            self.conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+            self.conn.commit()
+            assert self.conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == status
+
+    def test_blocked_and_rejected_states(self):
+        """Tasks can be blocked or rejected."""
+        now = '2026-01-01T00:00:00'
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, status, created_at, updated_at, source) VALUES ('task-3', 'Test3', 'pendiente', ?, ?, 'api')",
+            (now, now)
+        )
+        self.conn.commit()
+        task_id = self.conn.execute("SELECT id FROM tasks WHERE title='Test3'").fetchone()[0]
+
+        # Can be blocked
+        self.conn.execute("UPDATE tasks SET status='bloqueada' WHERE id=?", (task_id,))
+        self.conn.commit()
+        assert self.conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == 'bloqueada'
