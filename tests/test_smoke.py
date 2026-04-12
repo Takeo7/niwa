@@ -55,7 +55,15 @@ class TestInstalacionLimpia:
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
         for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
             sql = open(mig_path).read()
-            self.conn.executescript(sql)  # No debería lanzar excepción
+            try:
+                self.conn.executescript(sql)  # No debería lanzar excepción
+            except sqlite3.OperationalError as e:
+                # ALTER TABLE ADD COLUMN fails when column already exists from
+                # schema.sql. Expected for migrations that extend existing
+                # tables (e.g., 007_v02_execution_core.sql). SQLite does not
+                # support ADD COLUMN IF NOT EXISTS.
+                if 'duplicate column name' not in str(e):
+                    raise
 
     def test_esquema_mas_migraciones_crea_todas_las_tablas(self):
         """Esquema + migraciones juntos producen todas las tablas necesarias."""
@@ -65,7 +73,11 @@ class TestInstalacionLimpia:
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
         for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
             sql = open(mig_path).read()
-            self.conn.executescript(sql)
+            try:
+                self.conn.executescript(sql)
+            except sqlite3.OperationalError as e:
+                if 'duplicate column name' not in str(e):
+                    raise
 
         tables = {r[0] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -357,7 +369,11 @@ class TestDatabaseBootstrap:
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
         for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
             sql = open(mig_path).read()
-            self.conn.executescript(sql)
+            try:
+                self.conn.executescript(sql)
+            except sqlite3.OperationalError as e:
+                if 'duplicate column name' not in str(e):
+                    raise
 
         tables = {r[0] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -486,7 +502,11 @@ class TestExecutorQueue:
         schema = open(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')).read()
         self.conn.executescript(schema)
         for mig in sorted(glob.glob(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations', '*.sql'))):
-            self.conn.executescript(open(mig).read())
+            try:
+                self.conn.executescript(open(mig).read())
+            except sqlite3.OperationalError as e:
+                if 'duplicate column name' not in str(e):
+                    raise
 
     def teardown_method(self):
         self.conn.close()

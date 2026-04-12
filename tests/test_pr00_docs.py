@@ -185,7 +185,7 @@ class TestDecisionsLog:
     """Verify DECISIONS-LOG.md has the ADR numbering entry."""
 
     def test_adr_numbering_decision_logged(self):
-        path = os.path.join(PROJECT_ROOT, 'DECISIONS-LOG.md')
+        path = os.path.join(PROJECT_ROOT, 'docs', 'DECISIONS-LOG.md')
         with open(path) as f:
             content = f.read()
         assert 'PR-00' in content

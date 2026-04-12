@@ -66,3 +66,36 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** Establecer baseline verificable antes de las migraciones de PR-01.
 **Alternativas consideradas:** Ninguna — es una auditoría, no una decisión de diseño.
 **Impacto:** PR-01 (migración 007), PR-03/PR-04 (reemplazo del pipeline), PR-05 (gate del flag peligroso).
+
+## 2026-04-12 — PR-01
+
+### Decisión 1: ALTER TABLE idempotency en tests existentes
+
+**Decisión:** Modificar 4 tests existentes en `test_smoke.py` para tolerar errores `duplicate column name` de SQLite al aplicar migraciones sobre `schema.sql`.
+**Motivo:** SQLite no soporta `ALTER TABLE ADD COLUMN IF NOT EXISTS`. La migración 007 usa `ALTER TABLE ADD COLUMN` (requisito del humano para installs existentes), pero `schema.sql` ya contiene las columnas nuevas (requisito de ser el schema autoritativo). Cuando los tests aplican `schema.sql` + migraciones, el ALTER TABLE falla porque las columnas ya existen. El migration runner de producción (`app.py _run_migrations`) no tiene este problema porque trackea versiones aplicadas en `schema_version` y no re-ejecuta migraciones.
+**Alternativas consideradas:**
+- No incluir columnas nuevas en `schema.sql` → rompe la convención de schema autoritativo.
+- No usar ALTER TABLE en la migración → installs existentes no obtienen las columnas nuevas.
+- Usar recreación de tabla (CREATE TABLE nuevo, copiar datos, DROP, RENAME) → destructivo, rompe FKs e índices.
+**Impacto:** Los 4 tests modificados siguen validando lo mismo (schema + migraciones aplican sin errores); solo toleran el caso esperado de columna duplicada. Tests afectados: `test_migraciones_idempotentes_sobre_esquema`, `test_esquema_mas_migraciones_crea_todas_las_tablas`, `test_deployments_table_from_schema`, `TestExecutorQueue.setup_method`.
+
+### Decisión 2: CHECK constraints solo para enums explícitos en SPEC PR-01
+
+**Decisión:** Añadir CHECK constraints para `backend_kind`, `runtime_kind` y `relation_type`. No añadir CHECKs para `backend_runs.status` ni `approvals.status`.
+**Motivo:** Los valores de estado de `backend_runs` y `approvals` se definen en PR-02 (máquina de estados). Adelantar esos CHECKs aquí violaría la regla de no adelantar trabajo de otros PRs.
+**Alternativas consideradas:** Añadir CHECKs de status ahora con los valores del SPEC → rechazado por ser scope de PR-02.
+**Impacto:** PR-02 deberá añadir los CHECK constraints para los campos de estado al implementar la máquina de estados.
+
+### Decisión 3: FKs en ALTER TABLE (limitación de SQLite)
+
+**Decisión:** Las columnas añadidas via ALTER TABLE (`requested_backend_profile_id`, `selected_backend_profile_id`, `current_run_id`) incluyen cláusula REFERENCES, pero SQLite no las enforce en columnas añadidas por ALTER TABLE. En `schema.sql` (fresh installs), estas FKs sí se enforcean porque están en el CREATE TABLE.
+**Motivo:** Limitación conocida de SQLite. No hay workaround limpio sin recrear la tabla completa.
+**Alternativas consideradas:** Recrear la tabla tasks → demasiado invasivo y riesgoso para datos existentes.
+**Impacto:** En bases de datos actualizadas (no fresh install), las FKs de las 3 columnas nuevas no se validan a nivel de DB. La aplicación debe enforcar la integridad. Fresh installs no tienen este problema.
+
+### Decisión 4: Tabla count — 9 tablas, no 8
+
+**Decisión:** La migración crea 9 tablas nuevas (las 8 del título del SPEC + `secret_bindings` que también aparece en el listado detallado del SPEC PR-01).
+**Motivo:** El SPEC lista explícitamente `secret_bindings` junto con las demás tablas en PR-01.
+**Alternativas consideradas:** Ninguna — se implementó exactamente lo que dice el SPEC.
+**Impacto:** Ninguno adicional.
