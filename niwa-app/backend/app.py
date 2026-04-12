@@ -1623,13 +1623,14 @@ SERVICES_REGISTRY = [
         ],
         "test_action": "test_openclaw",
         "setup_guide": [
-            "1. Instala OpenClaw: https://docs.openclaw.ai/getting-started",
-            "2. Activa el modo 'OpenClaw → Niwa' arriba",
-            "3. Copia la URL del gateway y el token",
-            "4. En tu terminal con OpenClaw:",
-            "   openclaw mcp set niwa '{\"url\":\"URL_GATEWAY/mcp\",\"transport\":\"streamable-http\",\"headers\":{\"Authorization\":\"Bearer TOKEN\"}}'",
-            "5. Reinicia OpenClaw: openclaw gateway restart",
-            "6. Verifica: openclaw mcp list (debe mostrar las tools de Niwa)",
+            "Si instalaste Niwa con OpenClaw, todo está configurado automáticamente.",
+            "Si necesitas reconectar manualmente:",
+            "1. Verifica la URL del gateway y el token arriba",
+            "2. Ejecuta el comando que aparece abajo en tu terminal",
+            "3. Reinicia OpenClaw: openclaw gateway restart",
+            "4. Verifica: openclaw mcp list (debe mostrar las tools de Niwa)",
+            "",
+            "Para probar: openclaw 'lista mis tareas'",
         ]
     },
 ]

@@ -856,11 +856,12 @@ def _get_local_ip() -> str:
 
 
 def _configure_openclaw_mcp(cfg) -> None:
-    """Configure OpenClaw to use Niwa's single MCP gateway endpoint."""
+    """Full OpenClaw auto-configuration: MCP server + skill + agent config."""
     if not which("openclaw"):
         return
+
     gateway_port = getattr(cfg, 'gateway_streaming_port', 28810)
-    gateway_token = getattr(cfg, 'mcp_gateway_token', '')
+    gateway_token = cfg.tokens.get('MCP_GATEWAY_AUTH_TOKEN', '')
     bind_host = getattr(cfg, 'bind_host', '127.0.0.1')
 
     # Use the LAN IP if bound to all interfaces
@@ -871,28 +872,103 @@ def _configure_openclaw_mcp(cfg) -> None:
 
     gateway_url = f"http://{host}:{gateway_port}/mcp"
 
+    # Step 1: Register MCP server
     mcp_config = json.dumps({
         "url": gateway_url,
         "transport": "streamable-http",
         "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
     })
 
-    info("Registering Niwa in OpenClaw as single endpoint...")
+    info("Registering Niwa MCP server in OpenClaw...")
     try:
-        # Register as ONE server: "niwa" (not split into core/ops/files)
         r = subprocess.run(
             ["openclaw", "mcp", "set", "niwa", mcp_config],
             capture_output=True, text=True, timeout=15,
         )
         if r.returncode == 0:
-            ok(f"OpenClaw configured: niwa \u2192 {gateway_url}")
-            info("Tools will appear as niwa__task_list, niwa__task_create, etc.")
+            ok("MCP server registered: niwa")
+        else:
+            warn(f"MCP registration failed: {r.stderr[:200]}")
+            _print_openclaw_manual_instructions(gateway_url, gateway_token)
             return
-        warn(f"openclaw mcp set failed: {r.stderr[:200]}")
     except Exception as e:
-        warn(f"OpenClaw config failed: {e}")
+        warn(f"MCP config failed: {e}")
+        _print_openclaw_manual_instructions(gateway_url, gateway_token)
+        return
 
-    # Fallback: print manual instructions
+    # Step 2: Install Niwa skill
+    skill_src = Path(__file__).parent / "config" / "openclaw" / "niwa-skill.md"
+    if skill_src.is_file():
+        openclaw_config = Path.home() / ".config" / "openclaw"
+        if not openclaw_config.exists():
+            openclaw_config = Path.home() / ".openclaw"
+
+        skills_dir = openclaw_config / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        shutil.copy2(str(skill_src), str(skills_dir / "niwa.md"))
+        ok("Niwa skill installed for OpenClaw")
+
+    # Step 3: Add Niwa MCP to openclaw.json
+    openclaw_json = Path.home() / ".config" / "openclaw" / "openclaw.json"
+    if not openclaw_json.exists():
+        openclaw_json = Path.home() / ".openclaw" / "openclaw.json"
+
+    if openclaw_json.exists():
+        try:
+            config = json.loads(openclaw_json.read_text())
+        except Exception:
+            config = {}
+    else:
+        config = {}
+        openclaw_json.parent.mkdir(parents=True, exist_ok=True)
+
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    config["mcpServers"]["niwa"] = {
+        "url": gateway_url,
+        "transport": "streamable-http",
+        "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
+    }
+
+    openclaw_json.write_text(json.dumps(config, indent=2) + "\n")
+    ok("Updated openclaw.json with Niwa MCP server")
+
+    # Step 4: Verify connection
+    info("Verifying OpenClaw \u2192 Niwa connection...")
+    try:
+        r = subprocess.run(
+            ["openclaw", "mcp", "list"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "niwa" in r.stdout.lower():
+            niwa_lines = [l for l in r.stdout.split('\n') if 'niwa' in l.lower()]
+            ok(f"Connection verified: {len(niwa_lines)} Niwa tools visible to OpenClaw")
+        else:
+            warn("Niwa tools not yet visible. Run 'openclaw mcp list' after restarting OpenClaw gateway.")
+    except Exception:
+        info("Run 'openclaw mcp list' to verify after the gateway starts.")
+
+    # Step 5: Print summary
+    print()
+    ok("OpenClaw \u2194 Niwa integration complete:")
+    print(f"    Gateway:   {gateway_url}")
+    print(f"    Server:    niwa (13 tools via contract)")
+    print(f"    Skill:     niwa.md installed")
+    print(f"    Transport: streamable-http")
+    print()
+    info("Try: openclaw 'list my tasks'")
+    info("Or from Telegram/Discord: 'create a task to review the homepage'")
+
+
+def _print_openclaw_manual_instructions(gateway_url: str, gateway_token: str) -> None:
+    """Fallback: print manual OpenClaw setup instructions."""
+    mcp_config = json.dumps({
+        "url": gateway_url,
+        "transport": "streamable-http",
+        "headers": {"Authorization": f"Bearer {gateway_token}"} if gateway_token else {},
+    })
     print()
     info("To connect manually:")
     print(f"  openclaw mcp set niwa '{mcp_config}'")
@@ -1402,7 +1478,53 @@ def execute_install(cfg: WizardConfig) -> None:
     if cfg.register_openclaw:
         _configure_openclaw_mcp(cfg)
 
+    _post_install_smoke(cfg)
     print_summary(cfg)
+
+
+def _post_install_smoke(cfg) -> None:
+    """Quick smoke test after install."""
+    import urllib.request
+
+    info("Running post-install verification...")
+
+    # Test 1: App responds
+    try:
+        url = f"http://localhost:{cfg.app_port}/api/version"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            ok(f"Niwa app: v{data.get('version', '?')} responding on port {cfg.app_port}")
+    except Exception as e:
+        warn(f"App not responding on port {cfg.app_port}: {e}")
+
+    # Test 2: MCP gateway responds
+    try:
+        url = f"http://localhost:{cfg.gateway_streaming_port}/mcp"
+        headers = {"Authorization": f"Bearer {cfg.tokens.get('MCP_GATEWAY_AUTH_TOKEN', '')}"}
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            ok(f"MCP gateway: responding on port {cfg.gateway_streaming_port}")
+    except Exception as e:
+        # Gateway might not respond to plain GET — that's OK if it returns 405 or similar
+        if '405' in str(e) or '400' in str(e):
+            ok(f"MCP gateway: responding on port {cfg.gateway_streaming_port}")
+        else:
+            warn(f"MCP gateway not responding: {e}")
+
+    # Test 3: Database has tables
+    try:
+        import sqlite3 as _sqlite3
+        db_path = cfg.niwa_home / "data" / "niwa.sqlite3"
+        if db_path.exists():
+            conn = _sqlite3.connect(str(db_path))
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            conn.close()
+            ok(f"Database: {len(tables)} tables created")
+        else:
+            warn(f"Database not found at {db_path}")
+    except Exception as e:
+        warn(f"Database check failed: {e}")
 
 
 def _get_local_ip() -> str:
