@@ -457,8 +457,19 @@ def _check_filesystem_scope(file_path: str,
         else:
             resolved_allow.append(os.path.abspath(ap))
 
+    if not resolved_allow and allow_paths:
+        # allow list was defined but couldn't be resolved (e.g.
+        # <workspace> without workspace_path) — fail closed.
+        return {
+            "type": "filesystem_scope_unresolvable",
+            "detail": (
+                "allow list contains <workspace> but no "
+                "workspace_path provided — denying by default"
+            ),
+        }
+
     if not resolved_allow:
-        # No resolvable allow paths — can't verify, allow by default
+        # No allow paths defined at all — no scope restriction
         return None
 
     for ap in resolved_allow:

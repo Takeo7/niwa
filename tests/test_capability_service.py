@@ -360,6 +360,23 @@ class TestFilesystemScope:
         result = cs.evaluate_runtime_event(event, profile)
         assert result["allowed"] is True
 
+    def test_workspace_without_path_fails_closed(self):
+        """allow: ['<workspace>'] + workspace_path=None → deny (fail-closed)."""
+        profile = _make_profile(
+            filesystem_scope_json=json.dumps({
+                "allow": ["<workspace>"], "deny": [],
+            }),
+        )
+        event = _tool_use_event("Write", {
+            "file_path": "/some/file.py",
+        })
+        result = cs.evaluate_runtime_event(
+            event, profile, workspace_path=None,
+        )
+        assert result["allowed"] is False
+        assert any(t["type"] == "filesystem_scope_unresolvable"
+                   for t in result["triggers"])
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 6. secrets_scope_json — no-op, verify non-breaking
