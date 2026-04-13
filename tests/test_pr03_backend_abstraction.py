@@ -196,18 +196,46 @@ _STUB_ARGS = {
 }
 
 
-class TestClaudeCodeStubs:
+class TestClaudeCodeImplemented:
+    """PR-04 replaced stubs with real implementations.
+
+    Verify the methods are callable (no NotImplementedError).
+    parse_usage_signals is pure so we can test it directly;
+    the others need DB/subprocess so we just check they're not stubs.
+    """
 
     def setup_method(self):
         self.adapter = ClaudeCodeAdapter()
+
+    def test_parse_usage_signals_is_implemented(self):
+        """parse_usage_signals() returns a dict (not NotImplementedError)."""
+        result = self.adapter.parse_usage_signals("raw output")
+        assert isinstance(result, dict)
+
+    def test_collect_artifacts_is_implemented(self):
+        """collect_artifacts() returns a list for missing path (not NotImplementedError)."""
+        result = self.adapter.collect_artifacts({"id": "r1", "artifact_root": None})
+        assert isinstance(result, list)
+
+    def test_cancel_is_implemented(self):
+        """cancel() returns dict for unknown run (not NotImplementedError)."""
+        result = self.adapter.cancel({"id": "r1"})
+        assert isinstance(result, dict)
+
+    def test_heartbeat_is_implemented(self):
+        """heartbeat() returns dict for unknown run (not NotImplementedError)."""
+        result = self.adapter.heartbeat({"id": "r1"})
+        assert isinstance(result, dict)
 
     @pytest.mark.parametrize("method", [
         "start", "resume", "cancel", "heartbeat",
         "collect_artifacts", "parse_usage_signals",
     ])
-    def test_raises_not_implemented(self, method):
-        with pytest.raises(NotImplementedError, match="PR-04"):
-            getattr(self.adapter, method)(*_STUB_ARGS[method])
+    def test_methods_are_not_stubs(self, method):
+        """No method raises NotImplementedError with 'PR-04'."""
+        import inspect
+        source = inspect.getsource(getattr(self.adapter, method))
+        assert "NotImplementedError" not in source
 
 
 class TestCodexStubs:

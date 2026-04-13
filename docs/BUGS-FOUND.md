@@ -46,3 +46,12 @@ Formato sugerido:
 **Ubicación:** Tabla `tasks`, filas donde `status='revision'` y la timeline contiene un evento `type='alerted'` con `author='claude'`.
 **Severidad:** baja (no hay instancias de producción con datos afectados al momento de PR-02).
 **PR futuro donde se arreglará:** pendiente de asignar — cleanup operacional manual, no migración automática.
+
+## 2026-04-13 — encontrado durante PR-04
+
+### Bug 5: test_e2e.py::test_executor falla porque asume BD runtime disponible
+
+**Descripción:** `tests/test_e2e.py::test_executor` intenta abrir la base de datos de la aplicación (`/instance/niwa-app/data/niwa.sqlite3`) directamente. Ese path no existe en entornos de CI/test. El test fue diseñado para correr contra una instancia viva, no en un entorno aislado. Confirmado preexistente en commit `8130acf` (pre-PR-04).
+**Ubicación:** `tests/test_e2e.py:19` — `sqlite3.connect(DB, timeout=10)` donde `DB` apunta a la ruta de producción.
+**Severidad:** baja (no afecta funcionalidad, solo la suite de tests en CI).
+**PR futuro donde se arreglará:** pendiente de asignar (PR-12 reescribe tests).
