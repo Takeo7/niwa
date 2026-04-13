@@ -29,6 +29,7 @@ import scheduler
 import notifier
 import image_service
 import oauth
+import state_machines
 import time as _time
 
 _scheduler: scheduler.SchedulerThread | None = None
@@ -912,12 +913,12 @@ def get_chat_messages(session_id):
                 c.commit()
                 result.append({'id': msg_id, 'session_id': session_id, 'role': 'assistant', 'content': content, 'task_id': d['id'], 'status': 'done', 'created_at': now})
 
-            # Also check for tasks waiting for input (revision status)
+            # Also check for tasks waiting for input (waiting_input status; was 'revision' pre-PR-02)
             waiting = c.execute(
                 "SELECT t.id, t.title, "
                 "(SELECT payload_json FROM task_events WHERE task_id=t.id AND type='alerted' ORDER BY created_at DESC LIMIT 1) as payload_json "
                 "FROM tasks t "
-                "WHERE t.source='mcp:tasks' AND t.status='revision' "
+                "WHERE t.source='mcp:tasks' AND t.status IN ('waiting_input','revision') "
                 "AND t.created_at >= ? "
                 "AND t.id NOT IN (SELECT task_id FROM chat_messages WHERE session_id=? AND task_id IS NOT NULL) "
                 "ORDER BY t.updated_at DESC LIMIT 5",
@@ -3620,13 +3621,22 @@ class Handler(BaseHTTPRequestHandler):
                 task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
                 if not task:
                     return self._json({'error': 'task_not_found'}, 404)
+                # Reject bypasses the state machine (hecha is terminal).
+                # See state_machines.force_reject_task docstring.
+                audit = state_machines.force_reject_task(task_id, reason, user='niwa-app')
                 old_notes = task['notes'] or ''
                 new_notes = old_notes + f'\n[rejected] {reason}' if old_notes else f'[rejected] {reason}'
                 conn.execute(
-                    "UPDATE tasks SET status='pendiente', assigned_to_claude=0, completed_at=NULL, notes=?, updated_at=? WHERE id=?",
+                    "UPDATE tasks SET status='pendiente', completed_at=NULL, notes=?, updated_at=? WHERE id=?",
                     (new_notes, now_iso(), task_id),
                 )
-                record_task_event(conn, task_id, 'status_changed', {'changes': {'status': 'pendiente'}, 'old_status': 'hecha', 'source': 'user_reject', 'reason': reason})
+                record_task_event(conn, task_id, 'status_changed', {
+                    'changes': {'status': 'pendiente'},
+                    'old_status': task['status'],
+                    'source': 'user_reject',
+                    'reason': reason,
+                    'audit': audit,
+                })
             return self._json({'ok': True})
         if re.match(r'^/api/tasks/[^/]+/labels$', path):
             task_id = path.split('/')[3]

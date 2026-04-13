@@ -37,3 +37,12 @@ Formato sugerido:
 **Ubicación:** `niwa-app/db/migrations/005_services_and_settings_unify.sql` define `idx_settings_key`; `niwa-app/db/schema.sql` no lo incluye.
 **Severidad:** media.
 **PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de schema.sql).
+
+## 2026-04-13 — encontrado durante PR-02
+
+### Bug 4: Datos preexistentes con `status='revision'` que semánticamente deberían ser `waiting_input`
+
+**Descripción:** Antes de PR-02, `task_request_input` (MCP tool) escribía `status='revision'` cuando el agente necesitaba input humano. El status correcto es `waiting_input` (corregido en PR-02). Cualquier base de datos de producción creada antes de PR-02 puede tener tareas con `status='revision'` que semánticamente representan solicitudes de input, no revisiones de deliverables.
+**Ubicación:** Tabla `tasks`, filas donde `status='revision'` y la timeline contiene un evento `type='alerted'` con `author='claude'`.
+**Severidad:** baja (no hay instancias de producción con datos afectados al momento de PR-02).
+**PR futuro donde se arreglará:** pendiente de asignar — cleanup operacional manual, no migración automática.
