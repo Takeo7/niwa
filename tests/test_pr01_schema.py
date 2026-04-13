@@ -539,9 +539,9 @@ class TestTableStructure:
     def test_project_capability_profiles_columns(self):
         expected = {
             'id', 'project_id', 'name', 'repo_mode', 'shell_mode',
-            'web_mode', 'network_mode', 'filesystem_scope_json',
-            'secrets_scope_json', 'resource_budget_json',
-            'created_at', 'updated_at',
+            'shell_whitelist_json', 'web_mode', 'network_mode',
+            'filesystem_scope_json', 'secrets_scope_json',
+            'resource_budget_json', 'created_at', 'updated_at',
         }
         actual = self._columns_for('project_capability_profiles')
         assert expected == actual, f"project_capability_profiles mismatch: missing={expected-actual}, extra={actual-expected}"

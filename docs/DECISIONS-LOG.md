@@ -248,12 +248,13 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Alternativas consideradas:** (a) Constante Python — no configurable por proyecto, requiere redeploy, no auditable. (b) Codificar dentro de `shell_mode` (e.g., `"whitelist:ls,cat"`) — parsing frágil, mezcla semánticas.
 **Impacto:** Migration 009 (ALTER TABLE ADD COLUMN) para bases existentes. Schema.sql actualizado para fresh installs.
 
-### Decisión 2: secrets_scope_json es no-op en PR-05
+### Decisión 2: secrets_scope_json — detección runtime no-op, validación pre-exec pendiente
 
-**Decisión:** El campo `secrets_scope_json` se almacena y se propaga, pero no se evalúa en runtime. No hay trigger asociado.
-**Motivo:** Detectar acceso a secretos en runtime (variables de entorno, archivos sensibles) requiere hooking de procesos o análisis semántico del prompt — ambos fuera del alcance de PR-05. Los tests verifican que el campo no rompe nada.
-**Alternativas consideradas:** Implementar checklist de paths sensibles en Bash — complejo, alta tasa de falsos positivos.
-**Impacto:** El campo existe y se puede configurar. Un PR futuro puede implementar la evaluación cuando haya mecanismo fiable de detección.
+**Decisión:** La detección RUNTIME de acceso a secretos (identificar si un `tool_use` accede a un secret concreto) es no-op en PR-05. No se implementa trigger runtime para `secrets_scope_json`.
+**Motivo:** Detectar en runtime si un `Bash` tool_use lee una variable de entorno secreta o un `Read` accede a un archivo de credenciales requiere hooking del proceso o análisis semántico del comando shell — ambos fuera del alcance de PR-05 y con alta tasa de falsos positivos.
+**Lo que SÍ queda posible (pendiente):** La validación PRE-EJECUCIÓN contra `secret_bindings` (tabla existente en schema) es viable: antes de arrancar un run, se puede verificar que el proyecto tiene bindings configurados para los secrets que necesita, y denegar si faltan. Esta validación pre-exec queda pendiente para un PR futuro que implemente el flujo de `secret_bindings`.
+**Alternativas consideradas:** Implementar checklist de paths sensibles en Bash — complejo, alta tasa de falsos positivos. Regex sobre comandos shell para `$SECRET_NAME` — no fiable, los secrets pueden accederse indirectamente.
+**Impacto:** El campo `secrets_scope_json` se almacena, se propaga, y no rompe nada. La mitad del campo (runtime) es no-op; la otra mitad (pre-exec contra bindings) es implementable y queda pendiente.
 
 ### Decisión 3: quota_risk y estimated_resource_cost son no-op hasta PR-06
 
