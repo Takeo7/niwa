@@ -303,7 +303,7 @@ CREATE TABLE IF NOT EXISTS backend_runs (
     runtime_kind               TEXT,
     model_resolved             TEXT,
     session_handle             TEXT,
-    status                     TEXT NOT NULL,
+    status                     TEXT NOT NULL CHECK(status IN ('queued','starting','running','waiting_approval','waiting_input','succeeded','failed','cancelled','timed_out','rejected')),
     capability_snapshot_json   TEXT,
     budget_snapshot_json       TEXT,
     observed_usage_signals_json TEXT,

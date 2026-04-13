@@ -99,3 +99,26 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** El SPEC lista explícitamente `secret_bindings` junto con las demás tablas en PR-01.
 **Alternativas consideradas:** Ninguna — se implementó exactamente lo que dice el SPEC.
 **Impacto:** Ninguno adicional.
+
+## 2026-04-13 — PR-02
+
+### Decisión 1: Reject es excepción autorizada a la state machine de tasks
+
+**Decisión:** `hecha` es estado terminal en la state machine canónica — `can_transition_task('hecha', 'pendiente')` retorna `False`. El endpoint `/api/tasks/{id}/reject` bypasea la máquina de estados a través de `force_reject_task()`, una función dedicada que loguea cada uso para auditoría.
+**Motivo:** Reject es un override humano explícito para tareas marcadas como hechas por error. No es un flujo automático, y tratarlo como transición válida rompería la semántica terminal de `hecha` para el resto del sistema.
+**Alternativas consideradas:** Añadir `hecha → pendiente` como transición válida en la state machine — rechazado porque haría `hecha` no-terminal, afectando pipelines y métricas que asumen que `hecha` es final.
+**Impacto:** Cualquier código futuro que necesite transicionar desde `hecha` debe decidir si la transición debería ser válida en la state machine o si necesita un bypass análogo documentado.
+
+### Decisión 2: Transition maps duplicadas en tres runtimes
+
+**Decisión:** Las transition maps de `tasks.status` se definen en tres ubicaciones: `niwa-app/backend/state_machines.py` (canónica), `servers/tasks-mcp/server.py` (inline) y `bin/task-executor.py` (inline). Las copias inline referencian la fuente canónica en un comentario.
+**Motivo:** Los tres runtimes son independientes: el backend corre como proceso Python, el MCP server corre en un contenedor Docker separado, y el executor es un daemon host-side. No comparten sys.path ni filesystem. Añadir infraestructura compartida (paquete instalable, mount de volumen) excede el scope de PR-02.
+**Alternativas consideradas:** (a) Paquete Python instalable con state_machines — scope excesivo para PR-02. (b) Mount del módulo en el contenedor Docker — acopla infraestructura al código.
+**Impacto:** Los tests de PR-02 verifican que las tres copias son idénticas. Si un PR futuro refactoriza la distribución del código, deberá unificarlas.
+
+### Decisión 3: No migrar datos existentes de `revision` a `waiting_input`
+
+**Decisión:** La migración 008 no incluye `UPDATE tasks SET status='waiting_input' WHERE status='revision'`. Los datos existentes se dejan como están.
+**Motivo:** No mezclar cambios de schema con modificaciones de datos en la misma migración. En el entorno de desarrollo actual no hay base de datos con tareas afectadas. Para instancias de producción futuras, la corrección de datos es un paso operacional manual.
+**Alternativas consideradas:** Añadir UPDATE condicional en la migración — rechazado por el principio de no mezclar DDL y DML de corrección.
+**Impacto:** Documentado en BUGS-FOUND.md como cleanup pendiente.
