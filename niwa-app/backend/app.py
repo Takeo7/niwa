@@ -235,6 +235,9 @@ def init_db():
         # Seed default backend profiles (PR-03)
         from backend_registry import seed_backend_profiles
         seed_backend_profiles(conn)
+        # Seed default capability profiles for existing projects (PR-05)
+        from capability_service import seed_capability_profiles
+        seed_capability_profiles(conn)
         conn.commit()
 
 

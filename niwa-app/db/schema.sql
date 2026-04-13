@@ -362,6 +362,7 @@ CREATE TABLE IF NOT EXISTS project_capability_profiles (
     name                  TEXT NOT NULL,
     repo_mode             TEXT,
     shell_mode            TEXT,
+    shell_whitelist_json  TEXT,
     web_mode              TEXT,
     network_mode          TEXT,
     filesystem_scope_json TEXT,

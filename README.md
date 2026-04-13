@@ -16,10 +16,16 @@ Niwa is a self-contained Docker stack you install on your machine. It gives you:
 - **3-tier autonomous executor**: Haiku (chat) → Opus (planner) → Sonnet (executor), with automatic retry and heartbeat.
 - **OAuth support**: Anthropic (API key + setup token) and OpenAI (API key + OAuth with PKCE for ChatGPT subscriptions).
 - **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.
-- **Web terminal** (ttyd) for server administration from the browser.
+- **Web terminal** (ttyd) for server administration from the browser — disabled by default, enable via advanced compose overlay (see below).
 - **Theme customization** with 7 presets, 7 color pickers, font selector, and radius control.
 
-It runs as 6 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`, `terminal`) + spawns ephemeral MCP server containers per tool call. The executor runs on the host as a systemd service (Linux) or launchd agent (macOS).
+It runs as 5 long-lived containers (`mcp-gateway`, `mcp-gateway-sse`, `caddy`, `socket-proxy`, `app`) + spawns ephemeral MCP server containers per tool call. The executor runs on the host as a systemd service (Linux) or launchd agent (macOS).
+
+> **Web terminal (advanced):** The `terminal` service (ttyd with full host access) is in `docker-compose.advanced.yml`. To enable it:
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.advanced.yml up
+> ```
+> Only use this in trusted environments — it runs with `privileged: true`, `pid: host`, and `network_mode: host`.
 
 ## The 9 Views
 
@@ -260,7 +266,7 @@ bin/niwa check              # pre-flight health verification
           Stage 2: Python 3.12 → serves React SPA + API
 
         caddy (reverse proxy, bearer auth, port 18811)
-        terminal (ttyd web shell, port 7681)
+        terminal (ttyd web shell, port 7681) — advanced overlay only
 
         task-executor (host-side, systemd/launchd)
         ────────────────────────────────────────────
@@ -275,7 +281,7 @@ bin/niwa check              # pre-flight health verification
 - **Stage 1** (`node:22-slim`): `npm ci` + `npm run build` produces the React production bundle
 - **Stage 2** (`python:3.12.8-slim`): copies backend (pure stdlib Python, no pip), React build output, and legacy fallback. Serves on port 8080.
 
-**6 containers** defined in `docker-compose.yml.tmpl`:
+**5 containers** defined in `docker-compose.yml.tmpl`:
 
 | Container | Image | Purpose | Memory |
 |-----------|-------|---------|--------|
@@ -284,7 +290,12 @@ bin/niwa check              # pre-flight health verification
 | `mcp-gateway-sse` | `docker/mcp-gateway:latest` | Legacy SSE transport | 256 MB |
 | `app` | `<instance>-app:<version>` | Niwa web app | 256 MB |
 | `caddy` | `caddy:2-alpine` | Reverse proxy with bearer auth | 64 MB |
-| `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal | 128 MB |
+
+**Advanced** (in `docker-compose.advanced.yml`):
+
+| Container | Image | Purpose | Memory |
+|-----------|-------|---------|--------|
+| `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal (privileged) | 128 MB |
 
 Base images (Python, Node) and custom builds are pinned to specific versions. Third-party services (`docker/mcp-gateway`, `caddy`) use stable rolling tags (`latest`, `2-alpine`) that auto-update with patch releases.
 

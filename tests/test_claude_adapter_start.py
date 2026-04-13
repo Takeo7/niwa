@@ -396,20 +396,38 @@ class TestRequireDbFactory:
 
 class TestApprovalGate:
 
-    def test_stub_always_returns_true(self):
-        assert check_approval_gate({}, {}, {}, {}) is True
+    def test_gate_returns_allowed_for_empty_profile(self):
+        """With no quota_risk/estimated_resource_cost, gate allows."""
+        result = check_approval_gate({}, {}, {}, {})
+        assert result["allowed"] is True
 
-    @patch("backend_adapters.claude_code.check_approval_gate", return_value=False)
-    def test_start_returns_rejected_when_denied(self, mock_gate):
-        adapter = ClaudeCodeAdapter(db_conn_factory=lambda: None)
-        result = adapter.start(
-            {"id": "t1", "title": "T"},
-            {"id": "r1", "artifact_root": None},
-            {"default_model": "claude-sonnet-4-6"},
-            {},
+    @patch("backend_adapters.claude_code.check_approval_gate",
+           return_value={"allowed": False, "approval_required": False,
+                         "reason": "denied", "triggers": []})
+    def test_start_returns_failed_when_denied_no_approval(self, mock_gate):
+        """When gate denies without approval, adapter returns failed."""
+        db_fd, db_path, conn = _make_db()
+        task_id, profile_id, rd_id = _seed(conn)
+        run = runs_service.create_run(
+            task_id, rd_id, profile_id, conn,
         )
-        assert result["status"] == "rejected"
-        assert result["reason"] == "approval_denied"
+        try:
+            def _factory():
+                c = sqlite3.connect(db_path, timeout=10)
+                c.row_factory = sqlite3.Row
+                c.execute("PRAGMA foreign_keys=ON")
+                return c
+            adapter = ClaudeCodeAdapter(db_conn_factory=_factory)
+            result = adapter.start(
+                {"id": task_id, "title": "T"}, run,
+                {"default_model": "claude-sonnet-4-6"}, {},
+            )
+            assert result["status"] == "failed"
+            assert result["error_code"] == "capability_denied"
+        finally:
+            conn.close()
+            os.close(db_fd)
+            os.unlink(db_path)
 
 
 # ═══════════════════════════════════════════════════════════════════

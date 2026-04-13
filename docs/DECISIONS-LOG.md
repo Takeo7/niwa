@@ -238,3 +238,55 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** El requisito dice "No llames a la CLI real en CI." La validación real requiere credenciales de Anthropic y no es posible en el entorno de test.
 **Alternativas consideradas:** Escribir el prompt en archivo temporal como hace `task-executor.py` — descartado porque stdin pipe es más limpio y evita archivos temporales huérfanos.
 **Impacto:** Validación manual pendiente antes de PR-06. Si la CLI real exige el prompt como argumento posicional en lugar de stdin, `_build_command()` necesitará ajuste.
+
+## 2026-04-13 — PR-05
+
+### Decisión 1: Shell whitelist almacenada en columna `shell_whitelist_json`
+
+**Decisión:** La whitelist de comandos shell se almacena en una columna dedicada `shell_whitelist_json` (JSON array de strings) en `project_capability_profiles`. Migración 009 añade la columna para bases existentes. El seed "standard" la puebla con `["ls","cat","grep","find","pwd","echo"]`. `DEFAULT_SHELL_WHITELIST` en `capability_service.py` queda como fallback cuando la columna es NULL.
+**Motivo:** Configurable por proyecto sin redeploy. Auditable: `capability_snapshot_json` en backend_runs puede capturar el valor real que regía en ese run. Separación limpia: `shell_mode` define la política (`disabled|whitelist|free`), `shell_whitelist_json` define los comandos permitidos.
+**Alternativas consideradas:** (a) Constante Python — no configurable por proyecto, requiere redeploy, no auditable. (b) Codificar dentro de `shell_mode` (e.g., `"whitelist:ls,cat"`) — parsing frágil, mezcla semánticas.
+**Impacto:** Migration 009 (ALTER TABLE ADD COLUMN) para bases existentes. Schema.sql actualizado para fresh installs.
+
+### Decisión 2: secrets_scope_json — detección runtime no-op, validación pre-exec pendiente
+
+**Decisión:** La detección RUNTIME de acceso a secretos (identificar si un `tool_use` accede a un secret concreto) es no-op en PR-05. No se implementa trigger runtime para `secrets_scope_json`.
+**Motivo:** Detectar en runtime si un `Bash` tool_use lee una variable de entorno secreta o un `Read` accede a un archivo de credenciales requiere hooking del proceso o análisis semántico del comando shell — ambos fuera del alcance de PR-05 y con alta tasa de falsos positivos.
+**Lo que SÍ queda posible (pendiente):** La validación PRE-EJECUCIÓN contra `secret_bindings` (tabla existente en schema) es viable: antes de arrancar un run, se puede verificar que el proyecto tiene bindings configurados para los secrets que necesita, y denegar si faltan. Esta validación pre-exec queda pendiente para un PR futuro que implemente el flujo de `secret_bindings`.
+**Alternativas consideradas:** Implementar checklist de paths sensibles en Bash — complejo, alta tasa de falsos positivos. Regex sobre comandos shell para `$SECRET_NAME` — no fiable, los secrets pueden accederse indirectamente.
+**Impacto:** El campo `secrets_scope_json` se almacena, se propaga, y no rompe nada. La mitad del campo (runtime) es no-op; la otra mitad (pre-exec contra bindings) es implementable y queda pendiente.
+
+### Decisión 3: quota_risk y estimated_resource_cost son no-op hasta PR-06
+
+**Decisión:** La evaluación pre-ejecución (`evaluate()`) comprueba `quota_risk >= medium` y `estimated_resource_cost > max_cost_usd`, pero estos campos tienen valores `None`/`"unknown"` hasta que PR-06 (router determinista) los rellene. El trigger nunca se dispara en PR-05.
+**Motivo:** El SPEC asigna la estimación de costos y riesgos a PR-06. PR-05 implementa la lógica de evaluación pero no genera los datos que la alimentan.
+**Alternativas consideradas:** Hardcodear valores conservadores (e.g., `quota_risk="medium"` siempre) — rechazado porque bloquearía todas las ejecuciones sin beneficio.
+**Impacto:** PR-06 debe popular `quota_risk` y `estimated_resource_cost` en las routing_decisions/tasks para que los triggers pre-ejecución se activen.
+
+### Decisión 4: Seed de capability profiles para proyectos existentes, fallback para nuevos
+
+**Decisión:** `seed_capability_profiles(conn)` inserta un perfil "standard" para cada proyecto existente que no tenga uno. Para proyectos sin perfil en BD (nuevos, o en fresh install sin proyectos), `get_effective_profile()` retorna `DEFAULT_CAPABILITY_PROFILE` como fallback.
+**Motivo:** `project_capability_profiles.project_id` es `NOT NULL` con FK a `projects(id)`. No se puede insertar un perfil "global" sin un proyecto válido. El seed funciona para proyectos existentes; el fallback cubre el resto sin cambiar el schema.
+**Alternativas consideradas:** (a) Hacer `project_id` nullable para perfil global — cambia el schema del SPEC. (b) Crear un proyecto sentinel — añade datos artificiales sin valor semántico.
+**Impacto:** Cada arranque de la app seed automáticamente. Proyectos creados después del arranque usarán el fallback hasta el siguiente restart (o hasta que se cree su perfil explícitamente).
+
+### Decisión 5: Runtime monitoring inserta return en el streaming loop
+
+**Decisión:** Cuando se detecta una violación en el streaming loop, el adapter: (1) graba el evento en BD, (2) crea el approval, (3) transiciona el run a `waiting_approval`, (4) mata el proceso con SIGTERM→SIGKILL, (5) retorna inmediatamente desde `_execute()`.
+**Motivo:** El proceso Claude debe morir cuando se detecta una violación — no se puede permitir que siga ejecutando. El `return` sale del loop y del método `_execute()`, y el `finally` block se encarga de limpiar el heartbeat thread.
+**Alternativas consideradas:** (a) Pausar el proceso (SIGSTOP) y esperar resolución del approval — riesgo de procesos zombie, recursos de sistema ocupados indefinidamente. (b) Flag+break sin matar — el proceso seguiría ejecutando hasta terminar naturalmente.
+**Impacto:** Tras resolver el approval como 'approved', se necesita un nuevo run con `relation_type='resume'` y `--resume <session_id>` (nota 4 del PR-05).
+
+### Decisión 6: Terminal web movida a docker-compose.advanced.yml
+
+**Decisión:** El servicio `terminal` (ttyd con `privileged: true`, `pid: host`, `network_mode: host`, `/:/host`) se elimina del `docker-compose.yml.tmpl` principal y se mueve a `docker-compose.advanced.yml`. Para habilitarlo: `docker compose -f docker-compose.yml -f docker-compose.advanced.yml up`.
+**Motivo:** Instrucción explícita del humano (nota 5). El SPEC PR-05 dice "Desactivar terminal por defecto en install --quick" y "Mover a modo avanzado/operador".
+**Alternativas consideradas:** Comentar el servicio en el compose principal — rechazado por instrucción explícita del humano ("No lo comentes — bórralo").
+**Impacto:** Usuarios que necesiten el terminal deben usar el overlay. README actualizado con instrucciones.
+
+### Decisión 7: Pre-execution denial con transiciones `starting → waiting_approval|failed`
+
+**Decisión:** Se añaden `starting → waiting_approval` y `starting → failed` a la state machine de runs en `state_machines.py`. Cuando la evaluación pre-ejecución deniega el run, el adapter transiciona `queued → starting → waiting_approval` (o `starting → failed`). El run nunca pasa por `running`.
+**Motivo:** El estado `running` implica que un proceso Claude está activo. Un run denegado pre-ejecución nunca arrancó un proceso, así que `running` es semánticamente incorrecto. Añadir las transiciones a `starting` es más limpio que forzar un `running` ficticio.
+**Alternativas consideradas:** (a) Rapid transitions `queued → starting → running → target` — contamina el timeline con un `running` falso, confunde monitorización y métricas. (b) Denegar antes de crear el backend_run — pierde la trazabilidad del intento.
+**Impacto:** `state_machines.py` actualizado (fuente canónica). Los 3 runtimes del SPEC solo copian task transitions, no run transitions, así que no hay copias que actualizar. Los tests de PR-02 actualizados con las nuevas transiciones válidas.
