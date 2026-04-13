@@ -122,3 +122,40 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** No mezclar cambios de schema con modificaciones de datos en la misma migración. En el entorno de desarrollo actual no hay base de datos con tareas afectadas. Para instancias de producción futuras, la corrección de datos es un paso operacional manual.
 **Alternativas consideradas:** Añadir UPDATE condicional en la migración — rechazado por el principio de no mezclar DDL y DML de corrección.
 **Impacto:** Documentado en BUGS-FOUND.md como cleanup pendiente.
+
+## 2026-04-13 — PR-03
+
+### Decisión 1: Imports absolutos en módulos de backend, no relativos
+
+**Decisión:** Los nuevos módulos (`backend_registry.py`, `backend_adapters/*.py`) usan imports absolutos (`from backend_adapters.base import BackendAdapter`) en lugar de relativos (`from .backend_adapters.base import ...`).
+**Motivo:** El proyecto no trata `niwa-app/backend/` como un paquete Python instalable. Los archivos existentes (`state_machines.py`, `app.py`, etc.) se ejecutan con el directorio `niwa-app/backend/` en `sys.path`. Los imports relativos fallan en ese contexto porque Python no reconoce un paquete padre. Los tests de PR-02 siguen el mismo patrón: `sys.path.insert(0, BACKEND_DIR)` + imports absolutos.
+**Alternativas consideradas:** (a) Crear un `setup.py`/`pyproject.toml` para instalar `niwa-app/backend` como paquete — scope excesivo, afecta toda la infraestructura de distribución. (b) Usar imports relativos y forzar ejecución como paquete — rompería `app.py` y `task-executor.py` que se ejecutan como scripts directos.
+**Impacto:** Consistente con el resto del código. Si un PR futuro reorganiza la distribución, los imports se unificarán.
+
+### Decisión 2: Seed de backend_profiles vía INSERT OR IGNORE en init_db()
+
+**Decisión:** Los dos perfiles iniciales (`claude_code`, `codex`) se insertan con `INSERT OR IGNORE` en `seed_backend_profiles()`, llamada desde `init_db()` en `app.py`. No se usa una nueva migración SQL.
+**Motivo:** La tabla `backend_profiles` ya existe (migration 007, PR-01). Insertar datos seed en una migración mezclaría DDL con DML de inicialización. `INSERT OR IGNORE` keyed on `slug` (UNIQUE) es idempotente: seguro en fresh install y en actualizaciones. Se ejecuta al arrancar la app, igual que los kanban_columns seed existentes.
+**Alternativas consideradas:** (a) Migration 009 con INSERTs — rechazado porque mezcla schema con datos seed, y porque las migraciones de schema deben ser independientes de datos de aplicación. (b) Script de seed separado — añade complejidad operacional sin beneficio.
+**Impacto:** Instalaciones existentes obtienen los perfiles en el siguiente arranque de la app. Fresh installs los obtienen en el primer arranque.
+
+### Decisión 3: Eliminar --dangerously-skip-permissions sin romper el executor
+
+**Decisión:** Se elimina `base_flags = " --dangerously-skip-permissions"` de `save_agents_config()`. Se mantiene la generación de `claude -p --model ... --max-turns N` (sin el flag peligroso) con un `TODO PR-04` para su reemplazo completo por backend adapters.
+**Motivo:** `bin/task-executor.py` lee los settings `int.llm_command_*` directamente. Eliminar toda la generación de comandos rompería la ejecución antes de que PR-04 entregue el reemplazo basado en adapters. Eliminar solo el flag peligroso es seguro y cumple con el SPEC sin romper funcionalidad.
+**Alternativas consideradas:** (a) Eliminar toda la generación de comandos — rechazado porque rompe la ejecución actual. (b) Dejar el flag con un TODO — rechazado porque el SPEC exige eliminarlo.
+**Impacto:** Los comandos generados por la UI ya no incluyen `--dangerously-skip-permissions`. El flag en `setup.py` (inyección automática en Linux como root) queda fuera de scope de PR-03 — será atendido por PR-04/PR-05 con capability profiles.
+
+### Decisión 4: Codex profile deshabilitado por defecto
+
+**Decisión:** El seed de `codex` en `backend_profiles` se crea con `enabled=0` y `priority=0`. El seed de `claude_code` se crea con `enabled=1` y `priority=10`.
+**Motivo:** El adapter de Codex es un stub hasta PR-07. Habilitar un backend cuyo `start()` lanza `NotImplementedError` causaría fallos en routing. Claude Code es el backend principal y estará implementado en PR-04.
+**Alternativas consideradas:** Habilitar ambos — rechazado por el riesgo de routing a un backend no implementado.
+**Impacto:** PR-07 deberá habilitar el perfil codex al implementar el adapter real.
+
+### Decisión 5: Capabilities incluyen campos de budget con valores unknown
+
+**Decisión:** `capabilities()` de cada adapter incluye 4 campos adicionales de resource-budget (`estimated_resource_cost`, `cost_confidence`, `quota_risk`, `latency_tier`) con valores `None`/`"unknown"` por defecto.
+**Motivo:** Solicitud explícita del humano para anticipar la interfaz que PR-06 (routing determinista) necesitará. Los valores son inertes hasta PR-06.
+**Alternativas consideradas:** No incluirlos hasta PR-06 — rechazado porque rompe la expectativa de la interfaz y fuerza cambios retroactivos.
+**Impacto:** PR-06 reemplazará los defaults con lógica real de estimación.

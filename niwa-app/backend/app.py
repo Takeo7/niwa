@@ -232,6 +232,9 @@ def init_db():
                 "INSERT OR IGNORE INTO kanban_columns (id, status, label, position, color, is_terminal, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (column_id, status, label, position, color, is_terminal, ts, ts),
             )
+        # Seed default backend profiles (PR-03)
+        from backend_registry import seed_backend_profiles
+        seed_backend_profiles(conn)
         conn.commit()
 
 
@@ -2506,6 +2509,8 @@ def save_agents_config(data):
         c.commit()
 
         # Also update the old-style LLM_COMMAND settings for backward compat
+        # TODO PR-04: This code will be replaced when the executor uses
+        # backend adapters instead of precompiled commands.
         agents = get_agents_config()
         model_to_cmd = {
             "claude-haiku-4-5": "claude -p --model claude-haiku-4-5",
@@ -2513,15 +2518,13 @@ def save_agents_config(data):
             "claude-opus-4-6": "claude -p --model claude-opus-4-6",
         }
 
-        base_flags = " --dangerously-skip-permissions"
-
         for role, setting_key in [("chat", "int.llm_command_chat"), ("planner", "int.llm_command_planner"), ("executor", "int.llm_command_executor")]:
             agent = agents.get(role, {})
             model_id = agent.get("model", "")
             max_turns = agent.get("max_turns", 10 if role != "executor" else 50)
             if model_id and model_id != "auto":
                 cmd = model_to_cmd.get(model_id, f"claude -p --model {model_id}")
-                cmd += f" --max-turns {max_turns}{base_flags}"
+                cmd += f" --max-turns {max_turns}"
                 c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (setting_key, cmd))
 
         c.commit()
