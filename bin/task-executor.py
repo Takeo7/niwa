@@ -40,6 +40,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+# ── v0.2 routing imports (PR-06) ────────────────────────────────────
+# The executor must be able to import backend modules for v0.2 routing.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent / "niwa-app" / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
 
 # ────────────────────── task state machine ─────────────────────────
 # Canonical source of truth: niwa-app/backend/state_machines.py
@@ -879,12 +885,162 @@ def _run_with_heartbeat(task_id: str, prompt: str, cwd: Path, llm_cmd: str, time
         heartbeat.join(timeout=2)
 
 
-def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
-    """Run a task through the appropriate LLM tier.
+# ────────────────────────── v0.2 routing (PR-06) ──────────────────────────
 
-    Tier 1 (Chat): Haiku — fast responses, creates tasks
-    Tier 2 (Planner): Opus — analyzes complex tasks, splits into subtasks
-    Tier 3 (Executor): Sonnet — implements, codes, writes files
+def _get_routing_mode() -> str:
+    """Determine routing mode from settings.
+
+    Returns ``"v02"`` for the new routing pipeline, ``"legacy"`` for the
+    old 3-tier pipeline.
+
+    Logic:
+      - If ``routing_mode`` key exists in settings DB → use that value.
+      - If key is absent (pre-v0.2 DB that never ran init_db v0.2) → "legacy".
+      - Default for fresh installs (seeded by init_db) → "v02".
+    """
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT value FROM settings WHERE key = 'routing_mode'"
+            ).fetchone()
+            if row:
+                return row["value"]
+    except Exception:
+        pass
+    return "legacy"
+
+
+def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
+    """Execute a task through the v0.2 routing pipeline.
+
+    1. Call routing_service.decide() to get routing decision.
+    2. If approval required → leave task pending, return.
+    3. Create backend_run via runs_service.create_run().
+    4. Invoke adapter via backend_registry.get_execution_registry().
+    """
+    try:
+        import routing_service
+        import runs_service
+        from backend_registry import get_execution_registry
+    except ImportError as e:
+        log.warning("v0.2 modules not available (%s), falling back to legacy", e)
+        return _execute_task_legacy(task)
+
+    task_dict = dict(task)
+    task_id = task_dict["id"]
+
+    with _conn() as c:
+        # Step 1: Route
+        decision = routing_service.decide(task_dict, c)
+
+        if decision.get("approval_required"):
+            log.info(
+                "task %s: approval required (decision=%s, approval=%s). "
+                "Leaving in pendiente.",
+                task_id, decision["routing_decision_id"],
+                decision.get("approval_id"),
+            )
+            # Revert task to pendiente — it's blocked by approval
+            c.execute(
+                "UPDATE tasks SET status = 'pendiente', updated_at = ? "
+                "WHERE id = ?",
+                (_now_iso(), task_id),
+            )
+            c.commit()
+            return True, f"[routing] Approval required: {decision['reason_summary']}"
+
+        selected_profile_id = decision.get("selected_backend_profile_id")
+        if not selected_profile_id:
+            log.warning(
+                "task %s: no backend selected by router", task_id,
+            )
+            return False, "[routing] No backend profile available"
+
+        # Fetch profile info for the run
+        profile = c.execute(
+            "SELECT * FROM backend_profiles WHERE id = ?",
+            (selected_profile_id,),
+        ).fetchone()
+        if not profile:
+            return False, f"[routing] Profile {selected_profile_id} not found"
+        profile = dict(profile)
+
+        # Step 2: Create backend_run
+        project_dir = _resolve_project_dir(task_dict.get("project_id"))
+        artifact_root = None
+        if project_dir:
+            artifact_root = str(
+                project_dir / ".niwa" / "runs" / decision["routing_decision_id"]
+            )
+
+        run = runs_service.create_run(
+            task_id=task_id,
+            routing_decision_id=decision["routing_decision_id"],
+            backend_profile_id=selected_profile_id,
+            conn=c,
+            backend_kind=profile.get("backend_kind"),
+            runtime_kind=profile.get("runtime_kind"),
+            model_resolved=profile.get("default_model"),
+            artifact_root=artifact_root,
+        )
+
+        # Update task with current_run_id
+        c.execute(
+            "UPDATE tasks SET current_run_id = ?, updated_at = ? WHERE id = ?",
+            (run["id"], _now_iso(), task_id),
+        )
+        c.commit()
+
+        log.info(
+            "task %s: routed to %s (run=%s, decision=%s)",
+            task_id, profile["slug"], run["id"],
+            decision["routing_decision_id"],
+        )
+
+    # Step 3: Execute via adapter
+    try:
+        registry = get_execution_registry(_conn)
+        adapter = registry.resolve(profile["slug"])
+
+        # Get capability profile for pre-execution checks
+        import capability_service
+        with _conn() as c:
+            cap_profile = capability_service.get_effective_profile(
+                task_dict.get("project_id"), c,
+            )
+
+        result = adapter.start(task_dict, run, profile, cap_profile)
+        return True, f"[v02] Backend {profile['slug']} completed: {str(result)[:500]}"
+
+    except NotImplementedError:
+        # Backend not yet implemented (e.g. Codex before PR-07)
+        log.warning(
+            "task %s: adapter %s not implemented, "
+            "falling back to legacy execution",
+            task_id, profile["slug"],
+        )
+        return _execute_task_legacy(task)
+
+    except Exception as e:
+        log.exception("task %s: v0.2 execution failed: %s", task_id, e)
+        # Mark run as failed
+        try:
+            with _conn() as c:
+                runs_service.finish_run(
+                    run["id"], "failure", c,
+                    error_code="executor_error",
+                    exit_code=1,
+                )
+        except Exception:
+            log.exception("Failed to mark run %s as failed", run["id"])
+        return False, f"[v02] Execution error: {e}"
+
+
+def _execute_task_legacy(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
+    """Legacy 3-tier pipeline (Haiku→Opus→Sonnet).
+
+    Preserved for backward compatibility. Used when routing_mode='legacy'
+    or when v0.2 modules are unavailable.
     """
     is_chat = dict(task).get("source") == "chat"
     project_dir = _resolve_project_dir(task["project_id"])
@@ -901,9 +1057,7 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
         log.info("chat task %s (tier-1 haiku)", task["id"])
         return _run_with_heartbeat(task["id"], prompt, cwd, LLM_COMMAND_CHAT, CHAT_TIMEOUT_SECONDS)
 
-    # Tier 2: Planner → Opus (analyze + split if needed)
-    # Skip planner in worker mode — OpenClaw is the orchestrator
-    # Only run planner for non-retry, non-chat tasks when planner is configured
+    # Tier 2: Planner → Opus
     if LLM_COMMAND_PLANNER and not retry_prompt and not WORKER_MODE:
         log.info("task %s planning phase (tier-2 planner)", task["id"])
         _record_event(task["id"], "comment", {
@@ -916,13 +1070,11 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
         )
 
         if success and "SPLIT_INTO_SUBTASKS" in planner_output:
-            # Planner decided to split — the subtasks were created via MCP
             log.info("task %s split into subtasks by planner", task["id"])
             _record_event(task["id"], "comment", {
                 "author": "executor", "kind": "decision",
                 "message": f"Planner split task into subtasks. Planning output:\n{planner_output[:1000]}"
             })
-            # Mark parent task as done — subtasks will execute independently
             return True, f"[planner] Task split into subtasks.\n{planner_output}"
 
         if success and "EXECUTE_DIRECTLY" in planner_output:
@@ -931,10 +1083,8 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
                 "author": "executor", "kind": "progress",
                 "message": "Planner: task is simple, executing directly."
             })
-            # Fall through to executor tier
         elif not success:
             log.warning("task %s planner failed, falling back to direct execution", task["id"])
-            # Fall through to executor tier
 
     # Tier 3: Executor → Sonnet (or default LLM_COMMAND)
     if retry_prompt:
@@ -945,6 +1095,30 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
     executor_cmd = LLM_COMMAND_EXECUTOR or LLM_COMMAND
     log.info("task %s executing (tier-3 executor)", task["id"])
     return _run_with_heartbeat(task["id"], prompt, cwd, executor_cmd, TIMEOUT_SECONDS)
+
+
+def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
+    """Run a task through the appropriate pipeline.
+
+    Dispatches to v0.2 routing pipeline or legacy 3-tier based on
+    the ``routing_mode`` setting.
+
+    Chat tasks always use the legacy path (fast Haiku response).
+    Retry prompts always use the legacy path.
+    """
+    is_chat = dict(task).get("source") == "chat"
+
+    # Chat tasks and retries always go through legacy pipeline
+    if is_chat or retry_prompt:
+        return _execute_task_legacy(task, retry_prompt=retry_prompt)
+
+    routing_mode = _get_routing_mode()
+    if routing_mode == "v02":
+        log.info("task %s: using v0.2 routing pipeline", task["id"])
+        return _execute_task_v02(task)
+
+    # Legacy mode (default for pre-v0.2 installs)
+    return _execute_task_legacy(task, retry_prompt=retry_prompt)
 
 
 def _handle_task_result(task_id: str, success: bool, output: str, was_retry: bool, task_row) -> tuple[bool, int]:

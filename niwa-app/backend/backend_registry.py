@@ -94,6 +94,22 @@ _SEED_PROFILES: list[dict[str, Any]] = [
 ]
 
 
+def get_execution_registry(db_conn_factory) -> BackendRegistry:
+    """Return a registry with adapters wired to *db_conn_factory*.
+
+    Unlike ``get_default_registry()`` (which creates adapters without
+    a DB factory — suitable only for ``capabilities()``), this registry
+    creates adapters that can execute real runs with DB persistence.
+
+    Each call creates a fresh registry.  The caller decides the lifecycle
+    (e.g. one per executor loop, or singleton in the task-executor process).
+    """
+    registry = BackendRegistry()
+    registry.register("claude_code", ClaudeCodeAdapter(db_conn_factory=db_conn_factory))
+    registry.register("codex", CodexAdapter())
+    return registry
+
+
 def seed_backend_profiles(conn) -> int:
     """Insert seed backend profiles if they don't already exist.
 
