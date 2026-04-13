@@ -81,6 +81,8 @@ Static website hosting on subdomains with guided DNS setup, configurable domain 
 
 Dynamic detection + auto-config. Modes: disabled, MCP client, bidirectional. Configures gateway URL, token, and exposed domains.
 
+> **v0.2 note:** OpenClaw integration uses `streamable-http` as the standard MCP transport (not SSE). The legacy SSE gateway remains available for older clients. See `docs/adr/0002-v02-architecture.md` for the full rationale.
+
 ## 3-Tier Autonomous Executor
 
 The task executor (`bin/task-executor.py`) runs on the host and polls the database for pending tasks. It uses a 3-tier LLM system:
@@ -169,7 +171,7 @@ Full PKCE OAuth flow for ChatGPT subscription authentication. The web UI provide
 - Node.js 22+ (used in the Docker multi-stage build for the React frontend)
 
 ```bash
-git clone https://github.com/yumewagener/niwa
+git clone https://github.com/Takeo7/niwa
 cd niwa
 python3 setup.py install
 ```

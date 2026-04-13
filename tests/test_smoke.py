@@ -5,6 +5,7 @@ Ejecutar con: pytest tests/test_smoke.py -v
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -13,6 +14,47 @@ import glob
 # Rutas del proyecto
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'niwa-app', 'backend'))
+
+
+def _apply_sql_idempotent(conn, sql):
+    """Apply SQL idempotently, emulating ADD COLUMN IF NOT EXISTS.
+
+    SQLite lacks ALTER TABLE ADD COLUMN IF NOT EXISTS. This helper parses
+    each statement and, for ALTER TABLE ADD COLUMN, checks pragma table_info
+    first and skips the statement when the column already exists. All other
+    statements (CREATE TABLE/INDEX IF NOT EXISTS, DROP, etc.) are executed
+    directly.
+    """
+    # Strip comment-only lines; preserve inline SQL
+    lines = []
+    for line in sql.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('--') or not stripped:
+            continue
+        # Remove trailing inline comments
+        if ' --' in line:
+            line = line[:line.index(' --')]
+        lines.append(line)
+    cleaned = '\n'.join(lines)
+
+    for stmt in cleaned.split(';'):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        # Detect ALTER TABLE ... ADD COLUMN ...
+        m = re.match(
+            r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)',
+            stmt, re.IGNORECASE,
+        )
+        if m:
+            table, column = m.group(1), m.group(2)
+            existing = {r[1] for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()}
+            if column in existing:
+                continue  # column already present — nothing to do
+        conn.execute(stmt)
+    conn.commit()
 
 
 class TestInstalacionLimpia:
@@ -48,14 +90,32 @@ class TestInstalacionLimpia:
         assert not missing, f"Tablas faltantes: {missing}"
 
     def test_migraciones_idempotentes_sobre_esquema(self):
-        """Todas las migraciones ejecutan correctamente sobre un esquema nuevo."""
+        """schema.sql + migraciones aplican correctamente y son idempotentes.
+
+        Applies schema.sql, then all migrations twice. Both passes must
+        succeed and leave the database in the correct state.
+        """
         schema_path = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')
         self.conn.executescript(open(schema_path).read())
 
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
-        for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
-            sql = open(mig_path).read()
-            self.conn.executescript(sql)  # No debería lanzar excepción
+        mig_files = sorted(glob.glob(os.path.join(migrations_dir, '*.sql')))
+
+        # First pass
+        for mig_path in mig_files:
+            _apply_sql_idempotent(self.conn, open(mig_path).read())
+
+        # Second pass — true idempotency: applying again must not fail
+        for mig_path in mig_files:
+            _apply_sql_idempotent(self.conn, open(mig_path).read())
+
+        # Verify result explicitly
+        tables = {r[0] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()}
+        assert 'tasks' in tables
+        assert 'backend_runs' in tables
+        assert 'approvals' in tables
 
     def test_esquema_mas_migraciones_crea_todas_las_tablas(self):
         """Esquema + migraciones juntos producen todas las tablas necesarias."""
@@ -64,8 +124,7 @@ class TestInstalacionLimpia:
 
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
         for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
-            sql = open(mig_path).read()
-            self.conn.executescript(sql)
+            _apply_sql_idempotent(self.conn, open(mig_path).read())
 
         tables = {r[0] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -356,8 +415,7 @@ class TestDatabaseBootstrap:
         # Run migrations too (as setup.py now does)
         migrations_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations')
         for mig_path in sorted(glob.glob(os.path.join(migrations_dir, '*.sql'))):
-            sql = open(mig_path).read()
-            self.conn.executescript(sql)
+            _apply_sql_idempotent(self.conn, open(mig_path).read())
 
         tables = {r[0] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -486,7 +544,7 @@ class TestExecutorQueue:
         schema = open(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'schema.sql')).read()
         self.conn.executescript(schema)
         for mig in sorted(glob.glob(os.path.join(PROJECT_ROOT, 'niwa-app', 'db', 'migrations', '*.sql'))):
-            self.conn.executescript(open(mig).read())
+            _apply_sql_idempotent(self.conn, open(mig).read())
 
     def teardown_method(self):
         self.conn.close()

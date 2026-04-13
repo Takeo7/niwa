@@ -5,7 +5,7 @@
 #
 # Uso:
 #   1. Descarga SPEC-v0.2.md, DECISIONS-LOG.md y BUGS-FOUND.md al mismo directorio que este script.
-#   2. Ejecuta este script desde la raíz del repo clonado (yumewagener/niwa).
+#   2. Ejecuta este script desde la raíz del repo clonado (Takeo7/niwa).
 #   3. El script crea la rama v0.2 si no existe, coloca los archivos en docs/,
 #      hace commit y (opcionalmente) push.
 

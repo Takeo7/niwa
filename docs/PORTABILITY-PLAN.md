@@ -361,13 +361,13 @@ Si confirma, ejecuta:
 ## 7. Distribución
 
 ### 7.1 Repo público / privado
-- Crear `github.com/yumewagener/niwa` (privado primero, público después si tiene sentido)
+- Crear `github.com/Takeo7/niwa` (privado primero, público después si tiene sentido)
 - Tags semver: `v0.1.0` (alpha), `v1.0.0` (stable)
 
 ### 7.2 Métodos de instalación
 1. **Git clone** (default):
    ```bash
-   git clone https://github.com/yumewagener/niwa ~/niwa-pack
+   git clone https://github.com/Takeo7/niwa ~/niwa-pack
    cd ~/niwa-pack && ./niwa install
    ```
 2. **Curl one-liner** (cómodo, riesgoso): para v1.0.0+

@@ -8,6 +8,7 @@ from tasks_helpers import (
     load_delegations_index, enrich_tasks_with_agent_info,
     record_task_event,
 )
+from state_machines import assert_task_transition
 
 # Set by _make_deps() from app.py — must be called before using any function in this module.
 # These module-level mutable globals avoid circular imports but make testing harder.
@@ -100,6 +101,8 @@ def update_task(task_id, payload):
     current_task = get_task(task_id)
     if not current_task:
         raise ValueError('task_not_found')
+    if status_value:
+        assert_task_transition(current_task['status'], status_value)
     merged_task = dict(current_task)
     merged_task.update({k: payload.get(k) for k in allowed if k in payload})
     updated_at = _now_iso()

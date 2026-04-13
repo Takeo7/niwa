@@ -28,6 +28,28 @@ VALID_AREAS = ("personal", "empresa", "proyecto", "sistema")
 VALID_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "waiting_input", "hecha", "archivada")
 VALID_PRIORITIES = ("baja", "media", "alta", "critica", "low", "medium", "high", "critical")
 
+# Canonical task state machine (source of truth: niwa-app/backend/state_machines.py)
+_TASK_TRANSITIONS: dict[str, frozenset[str]] = {
+    'inbox':         frozenset({'pendiente'}),
+    'pendiente':     frozenset({'en_progreso', 'bloqueada', 'archivada'}),
+    'en_progreso':   frozenset({'waiting_input', 'revision', 'bloqueada', 'hecha', 'archivada'}),
+    'waiting_input': frozenset({'pendiente', 'archivada'}),
+    'revision':      frozenset({'pendiente', 'hecha', 'archivada'}),
+    'bloqueada':     frozenset({'pendiente', 'archivada'}),
+    'hecha':         frozenset(),
+    'archivada':     frozenset(),
+}
+
+
+def _assert_task_transition(from_status: str, to_status: str) -> None:
+    """Raise ValueError if the task transition is not allowed."""
+    allowed = _TASK_TRANSITIONS.get(from_status, frozenset())
+    if to_status not in allowed:
+        raise ValueError(
+            f"Invalid task transition: {from_status!r} → {to_status!r}. "
+            f"Allowed from {from_status!r}: {sorted(allowed) if allowed else '(terminal state)'}"
+        )
+
 server = Server("tasks")
 
 
@@ -344,7 +366,7 @@ def _pipeline_status() -> dict[str, Any]:
             for r in c.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status")
         }
         total = sum(by_status.values())
-        active = sum(by_status.get(s, 0) for s in ("inbox", "pendiente", "en_progreso", "bloqueada", "revision"))
+        active = sum(by_status.get(s, 0) for s in ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "waiting_input"))
         return {"total": total, "active": active, "by_status": by_status}
 
 
@@ -398,6 +420,7 @@ def _task_update_status(args: dict[str, Any]) -> dict[str, Any]:
         row = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             raise ValueError(f"task not found: {task_id}")
+        _assert_task_transition(row["status"], new_status)
         current_notes = row["notes"] or ""
         merged_notes = (current_notes + ("\n" if current_notes and extra_notes else "") + extra_notes) or None
         now = _now_iso()
@@ -718,17 +741,19 @@ def _task_request_input(args):
     if not question:
         raise ValueError("question cannot be empty")
     with _rw_conn() as c:
-        if not c.execute("SELECT id FROM tasks WHERE id=?", (task_id,)).fetchone():
+        row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not row:
             raise ValueError(f"task not found: {task_id}")
+        _assert_task_transition(row["status"], "waiting_input")
         now = _now_iso()
-        c.execute("UPDATE tasks SET status='revision', updated_at=? WHERE id=?", (now, task_id))
+        c.execute("UPDATE tasks SET status='waiting_input', updated_at=? WHERE id=?", (now, task_id))
         eid = str(uuid.uuid4())
         c.execute(
             "INSERT INTO task_events(id,task_id,type,payload_json,created_at) VALUES(?,?,?,?,?)",
             (eid, task_id, "alerted", json.dumps({"author":"claude","question":question,"context":context},ensure_ascii=False), now),
         )
         c.commit()
-    return {"ok": True, "status": "revision", "event_id": eid, "question": question}
+    return {"ok": True, "status": "waiting_input", "event_id": eid, "question": question}
 
 def _deploy_web(args):
     project_id = args["project_id"]

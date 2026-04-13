@@ -41,6 +41,30 @@ from pathlib import Path
 from typing import Optional
 
 
+# ────────────────────── task state machine ─────────────────────────
+# Canonical source of truth: niwa-app/backend/state_machines.py
+_TASK_TRANSITIONS: dict[str, frozenset[str]] = {
+    'inbox':         frozenset({'pendiente'}),
+    'pendiente':     frozenset({'en_progreso', 'bloqueada', 'archivada'}),
+    'en_progreso':   frozenset({'waiting_input', 'revision', 'bloqueada', 'hecha', 'archivada'}),
+    'waiting_input': frozenset({'pendiente', 'archivada'}),
+    'revision':      frozenset({'pendiente', 'hecha', 'archivada'}),
+    'bloqueada':     frozenset({'pendiente', 'archivada'}),
+    'hecha':         frozenset(),
+    'archivada':     frozenset(),
+}
+
+
+def _assert_task_transition(from_status: str, to_status: str) -> None:
+    """Raise ValueError if the task transition is not allowed."""
+    allowed = _TASK_TRANSITIONS.get(from_status, frozenset())
+    if to_status not in allowed:
+        raise ValueError(
+            f"Invalid task transition: {from_status!r} → {to_status!r}. "
+            f"Allowed from {from_status!r}: {sorted(allowed) if allowed else '(terminal state)'}"
+        )
+
+
 # ────────────────────────── env / config ──────────────────────────
 def _read_env_file(path: Path) -> dict:
     out = {}
@@ -438,7 +462,7 @@ def _build_prompt(task: sqlite3.Row, project_dir: Optional[Path]) -> str:
         parts.append("2. If the user asks for something that requires DOING WORK (coding, creating files,")
         parts.append("   refactoring, building, analysis, scripts, web pages, etc.):")
         parts.append("   a) Use the task_create MCP tool to create a task with a clear title and description")
-        parts.append("   b) Set assigned_to_claude=1 so it gets auto-executed by the main model")
+        parts.append("   b) Set status='pendiente' so it gets picked up by the executor")
         parts.append("   b2) If working within a project context, pass project_id to task_create")
         parts.append("   c) Tell the user: 'He creado la tarea [title]. Se ejecutara automaticamente.'")
         parts.append("   d) STOP. Do NOT attempt the work yourself. Do NOT read/write files.")
@@ -593,7 +617,9 @@ def _finish_task(task_id: str, status: str, output: str) -> None:
         truncated += "\n[output truncated]"
 
     with _conn() as c:
-        row = c.execute("SELECT completed_at FROM tasks WHERE id=?", (task_id,)).fetchone()
+        row = c.execute("SELECT status, completed_at FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row:
+            _assert_task_transition(row["status"], status)
         completed_at = now if status == "hecha" else (row["completed_at"] if row else None)
         c.execute(
             "UPDATE tasks SET status=?, updated_at=?, completed_at=? WHERE id=?",
@@ -827,9 +853,8 @@ def _build_planner_prompt(task: sqlite3.Row, project_dir) -> str:
     parts.append("  Use task_create MCP tool to create 2-5 subtasks, each with:")
     parts.append("    - Clear, specific title")
     parts.append("    - Detailed description of what to do")
-    parts.append("    - assigned_to_claude=true")
     parts.append("    - Same project_id as the parent task")
-    parts.append("    - status=pendiente")
+    parts.append("    - status=pendiente (so the executor picks them up)")
     parts.append("  Then reply with: SPLIT_INTO_SUBTASKS")
     parts.append("  Use this for: multi-file changes, projects with multiple components,")
     parts.append("  tasks requiring research + implementation, anything taking >10 min.")
