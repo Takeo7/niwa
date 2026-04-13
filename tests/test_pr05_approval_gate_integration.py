@@ -378,9 +378,9 @@ class TestApprovalResumeFlow:
 
 class TestComposeSecurity:
 
-    def test_main_compose_has_no_dangerous_settings(self):
-        """docker-compose.yml.tmpl must not contain privileged, pid:host,
-        or network_mode:host in any service AFTER terminal removal."""
+    def test_main_compose_no_privileged(self):
+        """docker-compose.yml.tmpl must not contain 'privileged: true'
+        outside of comments."""
         compose_path = os.path.join(
             ROOT_DIR, "docker-compose.yml.tmpl",
         )
@@ -388,47 +388,66 @@ class TestComposeSecurity:
             pytest.skip("docker-compose.yml.tmpl not found")
 
         with open(compose_path) as f:
-            content = f.read()
+            lines = f.readlines()
 
-        # These should not appear after terminal is removed (Block E)
-        # For now, the terminal service may still exist — this test
-        # will pass after Block E removes it.  Check only non-terminal
-        # services.
-        import yaml  # noqa: might not be available
-
-    def test_compose_parseable_no_privileged(self):
-        """Parse the compose template and verify no service uses
-        privileged, pid:host, or network_mode:host."""
-        compose_path = os.path.join(
-            ROOT_DIR, "docker-compose.yml.tmpl",
-        )
-        if not os.path.exists(compose_path):
-            pytest.skip("docker-compose.yml.tmpl not found")
-
-        with open(compose_path) as f:
-            content = f.read()
-
-        # Simple text-based check (works without PyYAML)
-        # After Block E removes the terminal service, these
-        # should not appear anywhere in the file.
-        lines = content.splitlines()
-        dangerous = []
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
-            # Skip comments
             if stripped.startswith("#"):
                 continue
-            if "privileged: true" in stripped:
-                dangerous.append(f"Line {i}: {stripped}")
-            if "pid: host" in stripped:
-                dangerous.append(f"Line {i}: {stripped}")
-            if "network_mode: host" in stripped:
-                dangerous.append(f"Line {i}: {stripped}")
-
-        # This assertion will fail until Block E removes the terminal.
-        # Mark it as expected failure for now, it passes after Block E.
-        if dangerous:
-            pytest.xfail(
-                f"Dangerous settings found (expected until Block E "
-                f"removes terminal): {dangerous}"
+            assert "privileged: true" not in stripped, (
+                f"Line {i}: privileged found in main compose"
             )
+
+    def test_main_compose_no_pid_host(self):
+        """docker-compose.yml.tmpl must not contain 'pid: host'
+        outside of comments."""
+        compose_path = os.path.join(
+            ROOT_DIR, "docker-compose.yml.tmpl",
+        )
+        if not os.path.exists(compose_path):
+            pytest.skip("docker-compose.yml.tmpl not found")
+
+        with open(compose_path) as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            assert "pid: host" not in stripped, (
+                f"Line {i}: pid:host found in main compose"
+            )
+
+    def test_main_compose_no_network_mode_host(self):
+        """docker-compose.yml.tmpl must not contain 'network_mode: host'
+        outside of comments."""
+        compose_path = os.path.join(
+            ROOT_DIR, "docker-compose.yml.tmpl",
+        )
+        if not os.path.exists(compose_path):
+            pytest.skip("docker-compose.yml.tmpl not found")
+
+        with open(compose_path) as f:
+            lines = f.readlines()
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            assert "network_mode: host" not in stripped, (
+                f"Line {i}: network_mode:host found in main compose"
+            )
+
+    def test_advanced_compose_exists(self):
+        """docker-compose.advanced.yml must exist and contain the
+        terminal service."""
+        advanced_path = os.path.join(
+            ROOT_DIR, "docker-compose.advanced.yml",
+        )
+        assert os.path.exists(advanced_path), (
+            "docker-compose.advanced.yml not found"
+        )
+        with open(advanced_path) as f:
+            content = f.read()
+        assert "terminal" in content
+        assert "privileged: true" in content
