@@ -923,8 +923,8 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         import runs_service
         from backend_registry import get_execution_registry
     except ImportError as e:
-        log.warning("v0.2 modules not available (%s), falling back to legacy", e)
-        return _execute_task_legacy(task)
+        log.error("v0.2 modules not available — cannot execute in v02 mode", exc_info=True)
+        return False, f"[v02] missing module: {e}"
 
     task_dict = dict(task)
     task_id = task_dict["id"]
@@ -1013,13 +1013,21 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         return True, f"[v02] Backend {profile['slug']} completed: {str(result)[:500]}"
 
     except NotImplementedError:
-        # Backend not yet implemented (e.g. Codex before PR-07)
-        log.warning(
-            "task %s: adapter %s not implemented, "
-            "falling back to legacy execution",
+        log.error(
+            "task %s: adapter %s not implemented — failing task",
             task_id, profile["slug"],
         )
-        return _execute_task_legacy(task)
+        # Mark run as failed
+        try:
+            with _conn() as c:
+                runs_service.finish_run(
+                    run["id"], "failure", c,
+                    error_code="adapter_not_implemented",
+                    exit_code=1,
+                )
+        except Exception:
+            log.exception("Failed to mark run %s as failed", run["id"])
+        return False, f"[v02] adapter not implemented: {profile['slug']}"
 
     except Exception as e:
         log.exception("task %s: v0.2 execution failed: %s", task_id, e)

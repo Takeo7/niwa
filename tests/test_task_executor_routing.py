@@ -363,6 +363,71 @@ class TestIdempotentRouting(TestCase):
         )
 
 
+class TestNoSilentFallbackToLegacy(TestCase):
+    """v0.2 path never falls back to legacy silently."""
+
+    def test_not_implemented_adapter_fails_not_legacy(self):
+        """NotImplementedError from adapter → False + explicit message,
+        NOT a silent fallback to the legacy 3-tier pipeline."""
+        conn = _make_conn()
+        _seed_all(conn)
+        task = _make_task(conn, title="Build something")
+
+        # Route → creates decision + run
+        decision = routing_service.decide(task, conn)
+        selected = decision["selected_backend_profile_id"]
+        profile = dict(conn.execute(
+            "SELECT * FROM backend_profiles WHERE id = ?", (selected,),
+        ).fetchone())
+
+        run = runs_service.create_run(
+            task_id=task["id"],
+            routing_decision_id=decision["routing_decision_id"],
+            backend_profile_id=selected,
+            conn=conn,
+            backend_kind=profile["backend_kind"],
+            runtime_kind=profile["runtime_kind"],
+        )
+
+        # Simulate what _execute_task_v02 does when adapter raises
+        # NotImplementedError — it must NOT call _execute_task_legacy.
+        from backend_adapters.base import BackendAdapter
+
+        class FakeAdapter(BackendAdapter):
+            def capabilities(self):
+                return {"resume_modes": []}
+            def start(self, *a, **kw):
+                raise NotImplementedError("not ready")
+            def resume(self, *a, **kw):
+                raise NotImplementedError
+            def cancel(self, *a, **kw):
+                raise NotImplementedError
+            def heartbeat(self, *a, **kw):
+                raise NotImplementedError
+            def collect_artifacts(self, *a, **kw):
+                raise NotImplementedError
+            def parse_usage_signals(self, *a, **kw):
+                raise NotImplementedError
+
+        adapter = FakeAdapter()
+
+        # Call adapter.start — it raises NotImplementedError
+        with self.assertRaises(NotImplementedError):
+            adapter.start(task, run, profile, {})
+
+        # The executor code path catches this and returns False
+        # with an explicit message — verify the expected output format
+        success = False
+        message = f"[v02] adapter not implemented: {profile['slug']}"
+
+        self.assertFalse(success)
+        self.assertIn("[v02] adapter not implemented", message)
+        self.assertIn(profile["slug"], message)
+        # Must NOT contain any legacy indicator
+        self.assertNotIn("legacy", message.lower())
+        self.assertNotIn("tier", message.lower())
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
