@@ -107,9 +107,18 @@ class ClaudeCodeAdapter(BackendAdapter):
             "latency_tier": "unknown",
         }
 
+    def _require_db(self) -> None:
+        """Raise if the adapter was created without a DB connection factory."""
+        if self._db_conn_factory is None:
+            raise RuntimeError(
+                "ClaudeCodeAdapter requires db_conn_factory for execution. "
+                "Use backend_registry.register_adapter() with a factory."
+            )
+
     def start(self, task: dict, run: dict, profile: dict,
               capability_profile: dict) -> dict:
         """Start a new Claude Code execution for *task*."""
+        self._require_db()
         if not check_approval_gate(task, run, profile, capability_profile):
             return {"status": "rejected", "reason": "approval_denied"}
 
@@ -130,6 +139,7 @@ class ClaudeCodeAdapter(BackendAdapter):
     def resume(self, task: dict, prior_run: dict, new_run: dict,
                profile: dict, capability_profile: dict) -> dict:
         """Resume execution from *prior_run*'s Claude session."""
+        self._require_db()
         if not check_approval_gate(task, new_run, profile, capability_profile):
             return {"status": "rejected", "reason": "approval_denied"}
 

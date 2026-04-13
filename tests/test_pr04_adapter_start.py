@@ -361,7 +361,37 @@ class TestCommandSafety:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. Approval gate
+# 4. db_conn_factory guard
+# ═══════════════════════════════════════════════════════════════════
+
+class TestRequireDbFactory:
+
+    def test_start_raises_without_factory(self):
+        """start() raises RuntimeError when adapter has no db_conn_factory."""
+        adapter = ClaudeCodeAdapter()  # no factory
+        with pytest.raises(RuntimeError, match="requires db_conn_factory"):
+            adapter.start(
+                {"id": "t1", "title": "T"},
+                {"id": "r1", "artifact_root": None},
+                {"default_model": "claude-sonnet-4-6"},
+                {},
+            )
+
+    def test_resume_raises_without_factory(self):
+        """resume() raises RuntimeError when adapter has no db_conn_factory."""
+        adapter = ClaudeCodeAdapter()
+        with pytest.raises(RuntimeError, match="requires db_conn_factory"):
+            adapter.resume(
+                {"id": "t1", "title": "T"},
+                {"id": "r0", "session_handle": "sess-1"},
+                {"id": "r1", "artifact_root": None},
+                {"default_model": "claude-sonnet-4-6"},
+                {},
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Approval gate
 # ═══════════════════════════════════════════════════════════════════
 
 class TestApprovalGate:
