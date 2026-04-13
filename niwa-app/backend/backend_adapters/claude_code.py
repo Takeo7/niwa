@@ -1,4 +1,4 @@
-"""Claude Code backend adapter — PR-04 Niwa v0.2.
+"""Claude Code backend adapter — PR-04/PR-05 Niwa v0.2.
 
 Real implementation of the Claude Code CLI backend.  Uses
 ``claude -p --output-format stream-json`` for execution and
@@ -11,6 +11,14 @@ persisted at the appropriate lifecycle points.
 Resource-budget fields (``estimated_resource_cost``, ``cost_confidence``,
 ``quota_risk``, ``latency_tier``) default to unknowns here.  PR-06 will
 populate them with deterministic routing logic.
+
+PR-05 adds:
+  - Real approval gate replacing the PR-04 stub.  Pre-execution
+    evaluation via ``capability_service.evaluate()``.
+  - Runtime monitoring of ``tool_use`` events via
+    ``capability_service.evaluate_runtime_event()`` — when a policy
+    violation is detected the adapter creates an approval, transitions
+    the run to ``waiting_approval``, and kills the Claude process.
 """
 
 import hashlib
@@ -53,19 +61,26 @@ USAGE_SIGNAL_FIELDS = (
 )
 
 
-# ── Approval gate stub (TODO PR-05) ──────────────────────────────
+# ── Approval gate (PR-05) ────────────────────────────────────────
 
 def check_approval_gate(task: dict, run: dict, profile: dict,
-                        capability_profile: dict) -> bool:
-    """Check whether execution is approved.
+                        capability_profile: dict) -> dict:
+    """Pre-execution evaluation of the task against the capability profile.
 
-    TODO PR-05: Replace with real capability_profiles + approvals
-    system.  PR-05 will implement risk-based approval gating based
-    on ``project_capability_profiles`` and ``approval_service``.
+    Delegates to ``capability_service.evaluate()`` which returns::
 
-    Currently always returns True (execution permitted).
+        {
+            "allowed": bool,
+            "reason": str,
+            "approval_required": bool,
+            "triggers": [{"type": str, "detail": str}, ...],
+        }
+
+    If ``allowed`` is True, execution proceeds.  Otherwise the caller
+    handles denial (approval creation or capability_denied failure).
     """
-    return True
+    import capability_service
+    return capability_service.evaluate(task, run, profile, capability_profile)
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -119,8 +134,12 @@ class ClaudeCodeAdapter(BackendAdapter):
               capability_profile: dict) -> dict:
         """Start a new Claude Code execution for *task*."""
         self._require_db()
-        if not check_approval_gate(task, run, profile, capability_profile):
-            return {"status": "rejected", "reason": "approval_denied"}
+
+        eval_result = check_approval_gate(task, run, profile, capability_profile)
+        if not eval_result["allowed"]:
+            return self._handle_pre_execution_denial(
+                task, run, eval_result,
+            )
 
         artifact_root = run.get("artifact_root")
         if artifact_root:
@@ -134,14 +153,19 @@ class ClaudeCodeAdapter(BackendAdapter):
         return self._execute(
             cmd=cmd, cwd=cwd, run=run, task=task,
             prompt_text=prompt, artifact_root=artifact_root,
+            capability_profile=capability_profile,
         )
 
     def resume(self, task: dict, prior_run: dict, new_run: dict,
                profile: dict, capability_profile: dict) -> dict:
         """Resume execution from *prior_run*'s Claude session."""
         self._require_db()
-        if not check_approval_gate(task, new_run, profile, capability_profile):
-            return {"status": "rejected", "reason": "approval_denied"}
+
+        eval_result = check_approval_gate(task, new_run, profile, capability_profile)
+        if not eval_result["allowed"]:
+            return self._handle_pre_execution_denial(
+                task, new_run, eval_result,
+            )
 
         session_id = prior_run.get("session_handle")
         if not session_id:
@@ -165,6 +189,7 @@ class ClaudeCodeAdapter(BackendAdapter):
         return self._execute(
             cmd=cmd, cwd=cwd, run=new_run, task=task,
             prompt_text=prompt, artifact_root=artifact_root,
+            capability_profile=capability_profile,
         )
 
     def cancel(self, run: dict) -> dict:
@@ -337,6 +362,103 @@ class ClaudeCodeAdapter(BackendAdapter):
         signals["turns"] = turns if turns > 0 else None
         return signals
 
+    # ── Approval gate helpers (PR-05) ─────────────────────────────
+
+    def _handle_pre_execution_denial(self, task: dict, run: dict,
+                                     eval_result: dict) -> dict:
+        """Handle a pre-execution denial from the approval gate.
+
+        If ``eval_result["approval_required"]`` is True, creates an
+        approval and transitions the run to ``waiting_approval``.
+        Otherwise transitions to ``failed`` with ``capability_denied``.
+
+        Rapid state transitions (queued→starting→running→target) are
+        needed because the state machine has no direct queued→failed
+        or queued→waiting_approval path.
+        """
+        import approval_service
+        import runs_service
+
+        run_id = run["id"]
+        conn = self._db_conn_factory()
+
+        try:
+            # Rapid transitions to reach an actionable state
+            runs_service.transition_run(run_id, "starting", conn)
+            runs_service.transition_run(
+                run_id, "running", conn, started_at=_now_iso(),
+            )
+
+            if eval_result.get("approval_required"):
+                runs_service.record_event(
+                    run_id, "approval_gate_triggered", conn,
+                    message=eval_result["reason"],
+                    payload_json=json.dumps(eval_result),
+                )
+                runs_service.transition_run(
+                    run_id, "waiting_approval", conn,
+                )
+                trigger_type = (
+                    eval_result["triggers"][0]["type"]
+                    if eval_result.get("triggers")
+                    else "pre_execution_denied"
+                )
+                approval_service.request_approval(
+                    task["id"], run_id,
+                    trigger_type,
+                    eval_result["reason"],
+                    "medium",
+                    conn,
+                )
+                return {
+                    "status": "waiting_approval",
+                    "reason": eval_result["reason"],
+                    "triggers": eval_result.get("triggers", []),
+                }
+            else:
+                runs_service.finish_run(
+                    run_id, "failure", conn,
+                    error_code="capability_denied",
+                )
+                return {
+                    "status": "failed",
+                    "outcome": "failure",
+                    "error_code": "capability_denied",
+                    "reason": eval_result["reason"],
+                }
+        finally:
+            conn.close()
+
+    def _terminate_process(self, run_id: str) -> None:
+        """Kill the process for *run_id*.
+
+        SIGTERM → wait ``CANCEL_SIGTERM_WAIT_SECONDS`` → SIGKILL.
+        Removes the process from the internal tracking dict.
+        """
+        with self._lock:
+            proc = self._processes.pop(run_id, None)
+
+        if proc is None:
+            return
+
+        try:
+            proc.terminate()
+            logger.info("terminate: SIGTERM run %s pid %d", run_id, proc.pid)
+        except OSError:
+            pass
+
+        try:
+            proc.wait(timeout=CANCEL_SIGTERM_WAIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+                logger.warning(
+                    "terminate: SIGKILL run %s pid %d", run_id, proc.pid,
+                )
+            except OSError:
+                pass
+
     # ── Private helpers ────────────────────────────────────────────
 
     @staticmethod
@@ -498,7 +620,8 @@ class ClaudeCodeAdapter(BackendAdapter):
 
     def _execute(self, *, cmd: list[str], cwd: str, run: dict,
                  task: dict, prompt_text: str,
-                 artifact_root: str | None) -> dict:
+                 artifact_root: str | None,
+                 capability_profile: dict | None = None) -> dict:
         """Core execution loop: spawn process, stream events, finish run.
 
         This method blocks until the Claude process exits.  The caller
@@ -600,6 +723,42 @@ class ClaudeCodeAdapter(BackendAdapter):
                             runs_service.update_session_handle(
                                 run_id, session_handle, conn,
                             )
+
+                # ── Runtime capability check (PR-05) ─────────────
+                if event_type == "tool_use" and capability_profile:
+                    import capability_service
+                    rt_check = capability_service.evaluate_runtime_event(
+                        msg, capability_profile, workspace_path=cwd,
+                    )
+                    if not rt_check["allowed"]:
+                        if conn:
+                            import approval_service
+                            runs_service.record_event(
+                                run_id, "approval_gate_triggered", conn,
+                                message=rt_check["reason"],
+                                payload_json=json.dumps(rt_check),
+                            )
+                            trigger_type = (
+                                rt_check["triggers"][0]["type"]
+                                if rt_check.get("triggers")
+                                else "runtime_violation"
+                            )
+                            approval_service.request_approval(
+                                task["id"], run_id,
+                                trigger_type,
+                                rt_check["reason"],
+                                "medium",
+                                conn,
+                            )
+                            runs_service.transition_run(
+                                run_id, "waiting_approval", conn,
+                            )
+                        self._terminate_process(run_id)
+                        return {
+                            "status": "waiting_approval",
+                            "reason": rt_check["reason"],
+                            "triggers": rt_check.get("triggers", []),
+                        }
 
             # Wait for process to finish
             proc.wait()
