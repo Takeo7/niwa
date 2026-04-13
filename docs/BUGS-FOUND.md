@@ -55,3 +55,33 @@ Formato sugerido:
 **Ubicación:** `tests/test_e2e.py:19` — `sqlite3.connect(DB, timeout=10)` donde `DB` apunta a la ruta de producción.
 **Severidad:** baja (no afecta funcionalidad, solo la suite de tests en CI).
 **PR futuro donde se arreglará:** pendiente de asignar (PR-12 reescribe tests).
+
+## 2026-04-13 — encontrado durante PR-06
+
+### Bug 6: _extract_commands en capability_service no maneja pipes correctamente
+
+**Descripción:** `_extract_commands()` usa `re.split(r'\s*(?:[;&|]{1,2})\s*', command_str)` que trata `|` (pipe) igual que `||` (or). Un comando como `cat file | grep pattern` extraería correctamente `cat` y `grep`, pero `echo "a|b"` dentro de comillas podría generar un split incorrecto. La regex no distingue operadores dentro de strings entrecomillados.
+**Ubicación:** `niwa-app/backend/capability_service.py:91`
+**Severidad:** baja.
+**PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de capability_service).
+
+### Bug 7: NETWORK_COMMANDS incluye nslookup/dig/ping como comandos de red
+
+**Descripción:** `NETWORK_COMMANDS` incluye `ping`, `nslookup` y `dig` que son herramientas de diagnóstico, no de transferencia de datos. En un contexto de desarrollo, bloquearlos con `network_mode="off"` es demasiado restrictivo — un desarrollador podría querer verificar DNS sin transferir datos.
+**Ubicación:** `niwa-app/backend/capability_service.py:47-50`
+**Severidad:** baja (política, no bug funcional).
+**PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de capability_service).
+
+### Bug 8: Bloque post-wait de session_id en claude_code.py
+
+**Descripción:** En `ClaudeCodeAdapter._execute()`, el session_id se extrae del stream JSON y se persiste via `runs_service.update_session_handle()`. Si el stream no emite un evento con session_id (error temprano, timeout antes del primer mensaje), `session_handle` queda como `NULL` en la BD. No hay manejo explícito de este caso — un resume posterior fallaría con `--resume None`.
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py` (bloque de streaming)
+**Severidad:** baja (edge case, requiere fallo muy temprano del proceso Claude).
+**PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de claude_code.py).
+
+### Bug 9: Validación de risk_level en approval_service
+
+**Descripción:** `request_approval()` acepta cualquier string en `risk_level` sin validar contra los valores esperados (`low`, `medium`, `high`, `critical`). Un caller podría pasar un valor arbitrario que se persiste en la BD sin error.
+**Ubicación:** `niwa-app/backend/approval_service.py:31-56`
+**Severidad:** baja (no causa errores funcionales, pero permite datos inconsistentes).
+**PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de approval_service).

@@ -238,6 +238,16 @@ def init_db():
         # Seed default capability profiles for existing projects (PR-05)
         from capability_service import seed_capability_profiles
         seed_capability_profiles(conn)
+        # Seed default routing rules if table is empty (PR-06)
+        from routing_service import seed_routing_rules
+        seed_routing_rules(conn)
+        # Seed routing_mode setting: "v02" for fresh installs (PR-06)
+        # Pre-v0.2 DBs that upgrade via migrations won't have this key,
+        # so the executor infers "legacy" when the key is absent.
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            ("routing_mode", "v02"),
+        )
         conn.commit()
 
 

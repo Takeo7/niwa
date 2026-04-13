@@ -290,3 +290,68 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** El estado `running` implica que un proceso Claude está activo. Un run denegado pre-ejecución nunca arrancó un proceso, así que `running` es semánticamente incorrecto. Añadir las transiciones a `starting` es más limpio que forzar un `running` ficticio.
 **Alternativas consideradas:** (a) Rapid transitions `queued → starting → running → target` — contamina el timeline con un `running` falso, confunde monitorización y métricas. (b) Denegar antes de crear el backend_run — pierde la trazabilidad del intento.
 **Impacto:** `state_machines.py` actualizado (fuente canónica). Los 3 runtimes del SPEC solo copian task transitions, no run transitions, así que no hay copias que actualizar. Los tests de PR-02 actualizados con las nuevas transiciones válidas.
+
+## 2026-04-13 — PR-06
+
+### Decisión 1: API pública del router — `routing_service.decide(task, conn)`
+
+**Decisión:** El router expone una función única `decide(task, conn) -> dict` que retorna `routing_decision_id`, `selected_backend_profile_id`, `fallback_chain`, `reason_summary`, `matched_rules`, `approval_required`, `approval_id`. Es idempotente: si la tarea ya tiene una routing_decision activa (con `selected_profile_id` set), la reusa.
+**Motivo:** Interfaz mínima y autocontenida. El caller (task-executor) solo necesita llamar a `decide()` y actuar sobre el resultado. La idempotencia previene decisiones duplicadas si el executor re-procesa la misma tarea.
+**Alternativas consideradas:** (a) Dos funciones separadas (route + persist) — más complejo sin beneficio. (b) Retornar solo el profile_id — pierde trazabilidad de la decisión.
+**Impacto:** `decide()` es el único punto de entrada al router. `get_fallback_chain()` es un helper de consulta sobre decisiones ya persistidas.
+
+### Decisión 2: Orden de evaluación determinista — 5 pasos
+
+**Decisión:** El orden es: (1) pin explícito, (2) capability check, (3) resume-aware, (4) reglas persistidas, (5) default por prioridad. Primera coincidencia gana. El orden es fijo e inmutable sin cambio de código.
+**Motivo:** Instrucción explícita del humano (nota 4). El pin siempre gana porque es intención directa del usuario. El capability check antes de las reglas porque si el coste/quota impide la ejecución, no tiene sentido seleccionar backend. Resume-aware antes de reglas porque la continuidad de sesión es más valiosa que una regla genérica.
+**Alternativas consideradas:** Hacer el orden configurable via DB — rechazado por complejidad innecesaria y riesgo de configuraciones incoherentes.
+**Impacto:** Cualquier cambio en el orden requiere modificar `routing_service.decide()`.
+
+### Decisión 3: Resolución backend_slug → profile_id en tiempo de decisión
+
+**Decisión:** Las reglas usan `backend_slug` en `action_json`, no `profile_id`. La resolución a `profile_id` ocurre en `_resolve_backend_slug()` en tiempo de decisión. Si el profile existe pero `enabled=0`, la regla se considera "no aplicable" y se evalúa la siguiente.
+**Motivo:** Instrucción explícita del humano (nota 7). Desacopla las reglas de los IDs de backend. Cuando PR-07 habilite Codex (`enabled=1`), las reglas que apuntan a `codex` empezarán a funcionar sin cambios en el router ni en las reglas.
+**Alternativas consideradas:** Almacenar `profile_id` directamente en `action_json` — rechazado porque acoplaría las reglas a IDs generados en seed, frágil ante reinstalaciones.
+**Impacto:** Las reglas son portables entre instalaciones. El slug es la clave estable.
+
+### Decisión 4: Seed de routing_rules — solo si tabla vacía
+
+**Decisión:** `seed_routing_rules()` solo inserta las 3 reglas iniciales si `routing_rules` tiene 0 filas. No usa `INSERT OR IGNORE` por nombre — comprueba el count total. Si el usuario ha añadido, modificado o eliminado reglas, el seed no las toca.
+**Motivo:** Instrucción explícita del humano (nota 6): "Las reglas son editables después por el usuario vía UI de PR-10. El seed solo se ejecuta si la tabla routing_rules está vacía." `INSERT OR IGNORE` por nombre podría reinsertar reglas que el usuario eliminó intencionalmente.
+**Alternativas consideradas:** `INSERT OR IGNORE` keyed on name — rechazado porque re-insertaría reglas eliminadas por el usuario.
+**Impacto:** Un usuario que borre todas las reglas y reinicie la app recuperará las 3 reglas seed. Comportamiento deseado.
+
+### Decisión 5: Capability check pre-routing con approval sin backend_run_id
+
+**Decisión:** Cuando el capability check deniega (quota_risk >= medium o estimated_resource_cost > budget), el router crea un approval via `approval_service.request_approval()` con `backend_run_id=None`. No se crea backend_run ni se selecciona backend.
+**Motivo:** El approval bloquea antes de seleccionar backend — no hay run que asociar. La columna `approvals.backend_run_id` es nullable en el schema (`TEXT REFERENCES ... ON DELETE SET NULL`, sin `NOT NULL`). Verificado en `schema.sql:335` y `migrations/007:109`.
+**Alternativas consideradas:** (a) Crear un backend_run "phantom" solo para tener un ID — contamina la tabla de runs con registros sin ejecución real. (b) No crear approval, solo retornar el flag — pierde la trazabilidad del bloqueo y la posibilidad de resolución humana.
+**Impacto:** `approval_service.request_approval()` acepta `backend_run_id=None` sin error. El approval queda vinculado solo al task_id.
+
+### Decisión 6: Feature flag routing_mode — "v02" vs "legacy"
+
+**Decisión:** El setting `routing_mode` en la tabla `settings` controla qué pipeline usa el executor. Valores: `"v02"` (router determinista + adapters) y `"legacy"` (pipeline 3-tier Haiku→Opus→Sonnet). Fresh installs seed `"v02"` via `INSERT OR IGNORE` en `init_db()`. DBs pre-v0.2 que nunca ejecutaron init_db v0.2 no tienen la key → el executor infiere `"legacy"`.
+**Motivo:** Instrucción explícita del humano (nota 10). Permite coexistencia sin romper installs existentes. La transición es opt-in para installs existentes (cambiar el setting a `"v02"`) y automática para fresh installs.
+**Alternativas consideradas:** (a) Detectar automáticamente si hay backend_profiles en DB — frágil, los profiles existen desde PR-03 pero no implican que el routing funcione. (b) Variable de entorno — no persistente, se pierde entre reinicios.
+**Impacto:** El executor lee `routing_mode` una vez por tarea (no por iteración del worker loop). Chat tasks y retries siempre usan legacy independientemente del flag.
+
+### Decisión 7: No fallback silencioso de v02 a legacy
+
+**Decisión:** Una vez que `_execute_task_v02()` empieza, si algo falla (ImportError de módulos, NotImplementedError del adapter, cualquier otra excepción), la tarea falla en v0.2 — no se redirige silenciosamente al pipeline legacy. La única ruta a legacy es la decisión explícita del dispatcher al inicio de `_execute_task()`.
+**Motivo:** Revisión del humano durante la implementación. Un fallback implícito ocultaría bugs del sistema v0.2 y haría imposible saber si las tareas se ejecutaron por el camino correcto. Si el adapter de Codex lanza NotImplementedError, la tarea debe fallar visiblemente, no ejecutarse silenciosamente por el pipeline legacy.
+**Alternativas consideradas:** Fallback a legacy en ImportError (para installs incompletos) — rechazado porque enmascara problemas de deployment.
+**Impacto:** En routing_mode="v02", si un adapter no está implementado (Codex pre-PR-07), las tareas ruteadas a ese adapter fallan con `[v02] adapter not implemented: codex`. El run se marca como `failed` con `error_code="adapter_not_implemented"`.
+
+### Decisión 8: get_execution_registry(db_conn_factory) — factory fresca, no singleton
+
+**Decisión:** `backend_registry.get_execution_registry(db_conn_factory)` crea una nueva instancia de `BackendRegistry` con adapters instanciados con el factory. No es singleton. `get_default_registry()` (singleton, sin factory) se preserva intacta para queries de `capabilities()`.
+**Motivo:** Instrucción explícita del humano (nota 11). El executor necesita un registry con adapters capaces de escribir en DB. Separar los dos registries evita contaminar el singleton con un factory de DB que no todos los callers necesitan. Un fresh registry por llamada evita estado compartido entre ejecuciones.
+**Alternativas consideradas:** (a) Añadir factory al singleton — acopla todos los callers a la DB. (b) Pasar factory en cada llamada a `start()` — rompe la interfaz `BackendAdapter`.
+**Impacto:** `_execute_task_v02()` llama a `get_execution_registry(_conn)` donde `_conn` es el factory del executor. El lifecycle del registry es una instancia por invocación de `_execute_task_v02()`.
+
+### Decisión 9: _execute_task() como dispatcher de 12 líneas
+
+**Decisión:** `_execute_task()` se convierte en un dispatcher que decide entre v02 y legacy. El cuerpo original se extrae a `_execute_task_legacy()` sin modificaciones semánticas (solo se eliminaron comentarios redundantes). La lógica nueva va en `_execute_task_v02()`.
+**Motivo:** Separación limpia entre los dos pipelines. El legacy es código probado en producción que no debe tocarse. El v02 es código nuevo que puede evolucionar independientemente.
+**Alternativas consideradas:** (a) Meter un `if` al inicio de `_execute_task()` — mezcla dos flujos en una función de 150 líneas. (b) Reemplazar `_execute_task()` enteramente — rompe el legacy.
+**Impacto:** El main loop del executor no cambia. Sigue llamando a `_execute_task(task)`. La decisión de pipeline es interna.
