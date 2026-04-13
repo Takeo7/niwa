@@ -43,7 +43,7 @@ RUN_STATUSES = frozenset({
 
 RUN_TRANSITIONS: dict[str, frozenset[str]] = {
     'queued':           frozenset({'starting'}),
-    'starting':         frozenset({'running'}),
+    'starting':         frozenset({'running', 'waiting_approval', 'failed'}),
     'running':          frozenset({'waiting_approval', 'waiting_input',
                                    'succeeded', 'failed', 'cancelled', 'timed_out'}),
     'waiting_approval': frozenset({'running', 'rejected'}),

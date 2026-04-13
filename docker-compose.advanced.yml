@@ -1,0 +1,38 @@
+# Niwa advanced services — PR-05
+#
+# Contains services with elevated privileges that are NOT safe for
+# default/quick deployments.  To enable them, overlay this file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.advanced.yml up
+#
+# ⚠️  SECURITY WARNING: the terminal service has full host access
+# (privileged, host PID/network, root filesystem mounted).
+# Only expose it over HTTPS with strong credentials.
+
+services:
+  terminal:
+    # Web terminal — provides a real host shell via the browser.
+    # Uses chroot /host to access the host filesystem from inside the container.
+    # Protected with the same Niwa username/password (basic auth).
+    #
+    # network_mode: host is required for chroot /host to work correctly.
+    # Docker ignores `ports:` with host networking, so we bind ttyd directly
+    # to the configured terminal port.  Use NIWA_TERMINAL_PORT to change it.
+    image: tsl0922/ttyd:1.7.7
+    container_name: ${INSTANCE_NAME}-terminal
+    restart: unless-stopped
+    command: >-
+      ttyd -W -p ${NIWA_TERMINAL_PORT}
+      -c ${NIWA_APP_USERNAME}:${NIWA_APP_PASSWORD}
+      chroot /host bash -l
+    pid: host
+    privileged: true
+    network_mode: host
+    volumes:
+      - /:/host
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "1"

@@ -70,6 +70,8 @@ SPEC_TASK_TRANSITIONS = {
 SPEC_RUN_TRANSITIONS = {
     ('queued', 'starting'),
     ('starting', 'running'),
+    ('starting', 'waiting_approval'),  # PR-05: pre-exec denial
+    ('starting', 'failed'),            # PR-05: pre-exec denial
     ('running', 'waiting_approval'),
     ('running', 'waiting_input'),
     ('running', 'succeeded'),
