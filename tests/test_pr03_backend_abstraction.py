@@ -400,3 +400,53 @@ class TestSaveAgentsConfigNoDangerousFlags:
         assert "--dangerously-skip-permissions" not in func_source, (
             "save_agents_config() still contains --dangerously-skip-permissions"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. init_db() integration: seeds backend_profiles
+# ═══════════════════════════════════════════════════════════════════
+
+class TestInitDbSeedsBackendProfiles:
+    """Verify init_db() calls seed_backend_profiles() on a fresh DB."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path, self.conn = _make_db()
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_init_db_seeds_backend_profiles(self):
+        """Replicate init_db()'s code path: schema.sql + seed → 2 profiles."""
+        # schema.sql was already applied by _make_db(). Now call seed
+        # exactly as init_db() does.
+        seed_backend_profiles(self.conn)
+        self.conn.commit()
+
+        count = self.conn.execute(
+            "SELECT COUNT(*) AS cnt FROM backend_profiles"
+        ).fetchone()["cnt"]
+        assert count == 2
+
+        slugs = sorted(
+            r["slug"]
+            for r in self.conn.execute(
+                "SELECT slug FROM backend_profiles"
+            ).fetchall()
+        )
+        assert slugs == ["claude_code", "codex"]
+
+    def test_init_db_source_calls_seed(self):
+        """init_db() source code must contain the seed_backend_profiles call."""
+        app_path = os.path.join(ROOT_DIR, "niwa-app", "backend", "app.py")
+        source = open(app_path).read()
+
+        start = source.find("def init_db(")
+        assert start != -1, "init_db not found in app.py"
+        next_def = source.find("\ndef ", start + 1)
+        func_source = source[start:next_def] if next_def != -1 else source[start:]
+
+        assert "seed_backend_profiles" in func_source, (
+            "init_db() does not call seed_backend_profiles()"
+        )
