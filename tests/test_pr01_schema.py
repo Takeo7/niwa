@@ -131,28 +131,39 @@ def _apply_migration_007(conn):
     conn.executescript(sql)
 
 
-def _apply_migration_007_tolerant(conn):
-    """Apply migration 007 statement-by-statement, tolerating duplicate column
-    errors for idempotency testing."""
-    sql = open(MIGRATION_007).read()
-    # Strip comment-only lines before splitting on semicolons
+def _apply_sql_idempotent(conn, sql):
+    """Apply SQL idempotently, emulating ADD COLUMN IF NOT EXISTS.
+
+    For ALTER TABLE ADD COLUMN, checks pragma table_info first and skips
+    the statement when the column already exists. All other statements
+    are executed directly.
+    """
     lines = []
     for line in sql.split('\n'):
         stripped = line.strip()
         if stripped.startswith('--') or not stripped:
             continue
-        # Remove inline trailing comments
         if ' --' in line:
             line = line[:line.index(' --')]
         lines.append(line)
     cleaned = '\n'.join(lines)
-    statements = [s.strip() for s in cleaned.split(';') if s.strip()]
-    for stmt in statements:
-        try:
-            conn.execute(stmt)
-        except sqlite3.OperationalError as e:
-            if 'duplicate column name' not in str(e):
-                raise
+
+    for stmt in cleaned.split(';'):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        m = re.match(
+            r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)',
+            stmt, re.IGNORECASE,
+        )
+        if m:
+            table, column = m.group(1), m.group(2)
+            existing = {r[1] for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()}
+            if column in existing:
+                continue
+        conn.execute(stmt)
     conn.commit()
 
 
@@ -240,14 +251,13 @@ class TestMigration007Idempotent:
         os.unlink(self.db_path)
 
     def test_migration_idempotent(self):
-        """Running migration 007 twice does not produce errors beyond expected
-        'duplicate column name' for ALTER TABLE (SQLite limitation)."""
+        """Running migration 007 twice produces the same correct state."""
         _apply_pre_migration_schema(self.conn)
         _apply_migration_007(self.conn)
 
-        # Second application: CREATE TABLE/INDEX IF NOT EXISTS are no-ops.
-        # ALTER TABLE ADD COLUMN will raise 'duplicate column name' which we tolerate.
-        _apply_migration_007_tolerant(self.conn)
+        # Second application — column-existence check skips ALTER TABLE,
+        # CREATE TABLE/INDEX IF NOT EXISTS are no-ops.
+        _apply_sql_idempotent(self.conn, open(MIGRATION_007).read())
 
         # Verify final state is correct
         tables = _get_tables(self.conn)
@@ -262,8 +272,8 @@ class TestMigration007Idempotent:
         """Full schema.sql + migration 007 works (fresh install path)."""
         self.conn.executescript(open(SCHEMA_PATH).read())
         # Migration on top of full schema: tables exist (IF NOT EXISTS = no-op),
-        # but ALTER TABLE will hit duplicate columns.
-        _apply_migration_007_tolerant(self.conn)
+        # ALTER TABLE columns already present — skipped by existence check.
+        _apply_sql_idempotent(self.conn, open(MIGRATION_007).read())
 
         tables = _get_tables(self.conn)
         missing = V02_TABLES - tables

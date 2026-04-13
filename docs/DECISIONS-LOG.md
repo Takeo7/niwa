@@ -69,15 +69,15 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 
 ## 2026-04-12 — PR-01
 
-### Decisión 1: ALTER TABLE idempotency en tests existentes
+### Decisión 1: Invariante schema.sql ↔ migraciones
 
-**Decisión:** Modificar 4 tests existentes en `test_smoke.py` para tolerar errores `duplicate column name` de SQLite al aplicar migraciones sobre `schema.sql`.
-**Motivo:** SQLite no soporta `ALTER TABLE ADD COLUMN IF NOT EXISTS`. La migración 007 usa `ALTER TABLE ADD COLUMN` (requisito del humano para installs existentes), pero `schema.sql` ya contiene las columnas nuevas (requisito de ser el schema autoritativo). Cuando los tests aplican `schema.sql` + migraciones, el ALTER TABLE falla porque las columnas ya existen. El migration runner de producción (`app.py _run_migrations`) no tiene este problema porque trackea versiones aplicadas en `schema_version` y no re-ejecuta migraciones.
+**Decisión:** `schema.sql` representa el estado post-migración de un fresh install. Las migraciones que añaden tablas o columnas deben reflejarse también en `schema.sql`. `CREATE TABLE IF NOT EXISTS` y la comprobación explícita de existencia de columna antes de `ALTER TABLE ADD COLUMN` hacen que aplicar ambos sea seguro e idempotente.
+**Motivo:** SQLite no soporta `ALTER TABLE ADD COLUMN IF NOT EXISTS`. Para mantener la invariante (schema.sql = estado completo), los tests usan un helper `_apply_sql_idempotent()` que comprueba `PRAGMA table_info()` antes de cada `ALTER TABLE ADD COLUMN` y lo salta si la columna ya existe. Esto es el equivalente funcional de `IF NOT EXISTS` para columnas.
 **Alternativas consideradas:**
-- No incluir columnas nuevas en `schema.sql` → rompe la convención de schema autoritativo.
-- No usar ALTER TABLE en la migración → installs existentes no obtienen las columnas nuevas.
-- Usar recreación de tabla (CREATE TABLE nuevo, copiar datos, DROP, RENAME) → destructivo, rompe FKs e índices.
-**Impacto:** Los 4 tests modificados siguen validando lo mismo (schema + migraciones aplican sin errores); solo toleran el caso esperado de columna duplicada. Tests afectados: `test_migraciones_idempotentes_sobre_esquema`, `test_esquema_mas_migraciones_crea_todas_las_tablas`, `test_deployments_table_from_schema`, `TestExecutorQueue.setup_method`.
+- try/except blanket para `duplicate column name` → tolerancia pasiva, no verificación. Rechazada.
+- No incluir columnas nuevas en `schema.sql` → rompe la invariante de schema autoritativo. Rechazada.
+- No usar ALTER TABLE en la migración → installs existentes no obtienen las columnas nuevas. Rechazada.
+**Impacto:** Los 4 tests que aplican `schema.sql` + migraciones usan `_apply_sql_idempotent()` que verifica existencia de columna activamente. El test `test_migraciones_idempotentes_sobre_esquema` ahora aplica dos pases para verificar idempotencia real. Las migraciones 003, 005 y 004 violan esta invariante (ver BUGS-FOUND.md).
 
 ### Decisión 2: CHECK constraints solo para enums explícitos en SPEC PR-01
 
