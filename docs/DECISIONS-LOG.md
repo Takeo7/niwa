@@ -217,3 +217,24 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** Instrucción explícita del humano. El intervalo de 5s es estándar para graceful shutdown.
 **Alternativas consideradas:** Solo SIGKILL — rechazado porque no permite cleanup del proceso.
 **Impacto:** Ninguno fuera de PR-04.
+
+### Decisión 9: db_conn_factory en constructor del adapter — escritura directa en DB
+
+**Decisión:** El adapter escribe directamente en DB desde el loop de streaming en lugar de reportar vía callback y que el caller persista.
+**Motivo:** El requisito exige "logs parciales escritos a backend_run_events **durante** la ejecución". Si el adapter devolviera eventos vía callback, el caller necesitaría recibirlos en tiempo real mientras `start()` bloquea, requiriendo async o threads adicionales en el caller. Escribir directamente desde el loop es más simple y cumple la granularidad en tiempo real. `start()` y `resume()` lanzan `RuntimeError` si no se proporciona factory — nunca fallan silenciosamente.
+**Alternativas consideradas:** `event_callback: Callable` inyectado en `start()` — descartado por complejidad innecesaria, el caller aún necesitaría un thread para recibir callbacks mientras `start()` bloquea. La interfaz abstracta `base.py` no cambia: `__init__` no forma parte de la interfaz.
+**Impacto:** Adapter acoplado a factory de DB. PR-06 (router) inyecta el factory al crear el adapter para ejecución real. `get_default_registry()` crea instancias sin factory (solo para `capabilities()`).
+
+### Decisión 10: artifact_root lo construye el caller, no el adapter
+
+**Decisión:** El adapter recibe `artifact_root` como campo del dict `run`, no lo construye internamente. Solo crea el directorio (`mkdir -p`) y lo escanea en `collect_artifacts()`.
+**Motivo:** Evitar acoplar el adapter a la configuración de paths del sistema. El SPEC dice "ruta determinista basada en run_id (ej: workspace/.niwa/runs/<run_id>/)", pero quién la construye no está especificado. El caller tiene el contexto necesario (workspace root, run_id).
+**Alternativas consideradas:** Que el adapter calcule la ruta internamente — rechazado porque requeriría inyectar `WORKSPACE_ROOT` como configuración adicional del adapter.
+**Impacto:** PR-06 (router) debe construir la ruta `workspace/.niwa/runs/<run_id>/` al crear el run via `runs_service.create_run()`.
+
+### Decisión 11: Invocación de claude CLI no validada contra binario real
+
+**Decisión:** El adapter usa `claude -p --output-format stream-json` con el prompt enviado por stdin (pipe). Probado solo contra `fake_claude.py`, no contra la CLI real. La CLI de Claude Code en modo `-p` (print) lee de stdin cuando no recibe argumento posicional.
+**Motivo:** El requisito dice "No llames a la CLI real en CI." La validación real requiere credenciales de Anthropic y no es posible en el entorno de test.
+**Alternativas consideradas:** Escribir el prompt en archivo temporal como hace `task-executor.py` — descartado porque stdin pipe es más limpio y evita archivos temporales huérfanos.
+**Impacto:** Validación manual pendiente antes de PR-06. Si la CLI real exige el prompt como argumento posicional en lugar de stdin, `_build_command()` necesitará ajuste.
