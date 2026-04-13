@@ -159,3 +159,61 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** Solicitud explícita del humano para anticipar la interfaz que PR-06 (routing determinista) necesitará. Los valores son inertes hasta PR-06.
 **Alternativas consideradas:** No incluirlos hasta PR-06 — rechazado porque rompe la expectativa de la interfaz y fuerza cambios retroactivos.
 **Impacto:** PR-06 reemplazará los defaults con lógica real de estimación.
+
+## 2026-04-13 — PR-04
+
+### Decisión 1: Mecanismo de ejecución — `claude -p --output-format stream-json`
+
+**Decisión:** El adapter ejecuta `claude -p --output-format stream-json` como subproceso. El prompt se envía por stdin (pipe). Para resume se añade `--resume <session_id>`. `session_handle` = session_id devuelto por la CLI en los mensajes del stream.
+**Motivo:** Es la forma documentada de usar Claude Code en modo no-interactivo con salida estructurada. El flag `-p` (print mode) consume stdin y produce respuesta. `--output-format stream-json` da JSON newline-delimited con tipos de evento que permiten streaming granular.
+**Alternativas consideradas:** (a) PTY como task-executor.py — innecesariamente complejo para stream-json que ya va por stdout. (b) Escribir prompt en archivo temporal — stdin pipe es más limpio y evita archivos temporales huérfanos.
+**Impacto:** El adapter depende de que `claude` esté en PATH. PR-06 (router) conectará esto al pipeline real.
+
+### Decisión 2: Esquema de parse_usage_signals
+
+**Decisión:** Esquema mínimo con 8 campos: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `model`, `cost_usd`, `duration_ms`, `turns`. Campos que la CLI no expone quedan como `null`.
+**Motivo:** Sugerencia explícita del humano. Los tokens se extraen de `result.usage.*`, cost/duration de `result.cost_usd`/`result.duration_ms`, model de `result.model`, turns contando mensajes `assistant` en el stream.
+**Alternativas consideradas:** Esquema más amplio con campos especulativos — rechazado por la regla de no fabricar datos.
+**Impacto:** El esquema se serializa como JSON en `backend_runs.observed_usage_signals_json`. PR-06 puede extenderlo si necesita más señales.
+
+### Decisión 3: Approval gate como stub en PR-04
+
+**Decisión:** `check_approval_gate()` es una función libre en `claude_code.py` que siempre retorna `True`. Marcada con `TODO PR-05`.
+**Motivo:** Instrucción explícita del humano: "deja un hook stub claramente marcado con TODO PR-05 que el adapter consulta antes de start(). Por defecto que devuelva permitido."
+**Alternativas consideradas:** Implementar el sistema de approvals aquí — rechazado, es scope de PR-05.
+**Impacto:** PR-05 reemplaza esta función con lógica real basada en capability_profiles y approval_service.
+
+### Decisión 4: ClaudeCodeAdapter acepta db_conn_factory opcional
+
+**Decisión:** El constructor toma `db_conn_factory: Callable | None = None`. Cuando se proporciona, el adapter escribe eventos/heartbeats/usage a la BD en tiempo real. Cuando es `None` (tests unitarios, queries de capabilities), no hace I/O de BD.
+**Motivo:** La interfaz `BackendAdapter` de PR-03 no incluye `conn` en los métodos. El adapter necesita acceso a BD para streaming de eventos (requisito del SPEC). Un factory inyectable es la forma más limpia sin romper la interfaz base ni acoplar el adapter a una BD global.
+**Alternativas consideradas:** (a) Pasar conn en cada método — rompe la interfaz del SPEC. (b) Singleton de BD global — acoplamiento innecesario. (c) Recopilar eventos en memoria y retornarlos — no cumple "logs parciales durante ejecución".
+**Impacto:** `get_default_registry()` crea `ClaudeCodeAdapter()` sin factory (para capabilities). El caller real (PR-06) inyectará el factory al crear el adapter para ejecución.
+
+### Decisión 5: runs_service.py implementa el ciclo de vida completo
+
+**Decisión:** `runs_service.py` pasa de stubs a implementación real con: `create_run()`, `transition_run()`, `record_heartbeat()`, `record_event()`, `finish_run()`, `register_artifact()`, `update_session_handle()`.
+**Motivo:** El adapter necesita estas operaciones para persistir el estado del run durante la ejecución. Son la capa de servicio entre el adapter y la BD.
+**Alternativas consideradas:** Poner la lógica de BD directamente en el adapter — rechazado por separación de responsabilidades.
+**Impacto:** PR-06 y PR-07 reutilizarán estas funciones para sus respectivos adapters.
+
+### Decisión 6: artifact_root = workspace/.niwa/runs/<run_id>/
+
+**Decisión:** Ruta determinista basada en run_id. Se crea en `start()`. Se escanea en `collect_artifacts()` para registrar archivos con sha256 y size.
+**Motivo:** Instrucción explícita del humano. Ruta determinista permite localizar artifacts sin consultar BD.
+**Alternativas consideradas:** Ruta basada en task_id — rechazado porque un task puede tener múltiples runs.
+**Impacto:** El caller es responsable de pasar `artifact_root` en el dict `run`. El adapter crea el directorio si no existe.
+
+### Decisión 7: Streaming de eventos — un evento por chunk relevante
+
+**Decisión:** Cada línea JSON del stream se clasifica por `type` y se inserta como fila en `backend_run_events` con `event_type` descriptivo: `system_init`, `assistant_message`, `tool_use`, `tool_result`, `result`, `error`, `raw_output`.
+**Motivo:** Instrucción explícita del humano: "No metas todo en un solo evento gigante al final." El streaming granular permite monitorización en tiempo real desde la UI (PR-10).
+**Alternativas consideradas:** Agrupar mensajes por turno — más compacto pero pierde granularidad.
+**Impacto:** La tabla `backend_run_events` acumulará muchas filas por run. PR-10 (UI) podrá paginar/filtrar por event_type.
+
+### Decisión 8: Cancel idempotente con SIGTERM → SIGKILL
+
+**Decisión:** `cancel()` envía SIGTERM, espera 5s, escala a SIGKILL si el proceso no respondió. Actualiza status a 'cancelled'. Es idempotente: llamar cancel sobre un run sin proceso activo retorna éxito.
+**Motivo:** Instrucción explícita del humano. El intervalo de 5s es estándar para graceful shutdown.
+**Alternativas consideradas:** Solo SIGKILL — rechazado porque no permite cleanup del proceso.
+**Impacto:** Ninguno fuera de PR-04.
