@@ -372,9 +372,9 @@ class ClaudeCodeAdapter(BackendAdapter):
         approval and transitions the run to ``waiting_approval``.
         Otherwise transitions to ``failed`` with ``capability_denied``.
 
-        Rapid state transitions (queued→starting→running→target) are
-        needed because the state machine has no direct queued→failed
-        or queued→waiting_approval path.
+        Uses ``starting → waiting_approval`` or ``starting → failed``
+        (added to the state machine in PR-05).  The run never reaches
+        ``running`` state when denied pre-execution.
         """
         import approval_service
         import runs_service
@@ -383,11 +383,8 @@ class ClaudeCodeAdapter(BackendAdapter):
         conn = self._db_conn_factory()
 
         try:
-            # Rapid transitions to reach an actionable state
+            # queued → starting
             runs_service.transition_run(run_id, "starting", conn)
-            runs_service.transition_run(
-                run_id, "running", conn, started_at=_now_iso(),
-            )
 
             if eval_result.get("approval_required"):
                 runs_service.record_event(
@@ -395,6 +392,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                     message=eval_result["reason"],
                     payload_json=json.dumps(eval_result),
                 )
+                # starting → waiting_approval (no running state)
                 runs_service.transition_run(
                     run_id, "waiting_approval", conn,
                 )
@@ -416,6 +414,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                     "triggers": eval_result.get("triggers", []),
                 }
             else:
+                # starting → failed (no running state)
                 runs_service.finish_run(
                     run_id, "failure", conn,
                     error_code="capability_denied",

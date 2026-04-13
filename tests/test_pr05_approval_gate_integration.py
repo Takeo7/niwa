@@ -256,6 +256,118 @@ class TestWriteViolation:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 2b. Pre-execution denial — never reaches 'running'
+# ═══════════════════════════════════════════════════════════════════
+
+class TestPreExecDenialNoRunningState:
+
+    def setup_method(self):
+        self.db_fd, self.db_path, self.conn = _make_db()
+        self.tmpdir = tempfile.mkdtemp()
+        self.task_id, self.profile_id, self.rd_id, self.proj_id = _seed(
+            self.conn, project_dir=self.tmpdir,
+        )
+
+        def _factory():
+            c = sqlite3.connect(self.db_path, timeout=10)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA foreign_keys=ON")
+            return c
+        self.adapter = ClaudeCodeAdapter(db_conn_factory=_factory)
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_pre_exec_denied_with_approval_skips_running(self):
+        """When pre-exec check denies with approval_required=True,
+        run goes queued→starting→waiting_approval — never 'running'."""
+        from unittest.mock import patch
+
+        denial = {
+            "allowed": False,
+            "approval_required": True,
+            "reason": "quota_risk=high",
+            "triggers": [{"type": "quota_risk", "detail": "quota_risk=high"}],
+        }
+
+        run = runs_service.create_run(
+            self.task_id, self.rd_id, self.profile_id, self.conn,
+            backend_kind="claude_code", runtime_kind="cli",
+        )
+
+        with patch(
+            "backend_adapters.claude_code.check_approval_gate",
+            return_value=denial,
+        ):
+            result = self.adapter.start(
+                {"id": self.task_id, "title": "T"}, run,
+                {"default_model": "claude-sonnet-4-6"}, {},
+            )
+
+        assert result["status"] == "waiting_approval"
+
+        # Verify the run's event timeline has NO 'running' transition
+        events = self.conn.execute(
+            "SELECT event_type, message FROM backend_run_events "
+            "WHERE backend_run_id = ? ORDER BY created_at",
+            (run["id"],),
+        ).fetchall()
+        event_types = [e["event_type"] for e in events]
+        # Should have approval_gate_triggered but NOT any running-phase events
+        assert "approval_gate_triggered" in event_types
+
+        # The run's final status is waiting_approval, and it was never 'running'
+        db_run = self.conn.execute(
+            "SELECT status, started_at FROM backend_runs WHERE id = ?",
+            (run["id"],),
+        ).fetchone()
+        assert db_run["status"] == "waiting_approval"
+        # started_at should be None (never started execution)
+        assert db_run["started_at"] is None
+
+    def test_pre_exec_denied_without_approval_skips_running(self):
+        """When pre-exec check denies with approval_required=False,
+        run goes queued→starting→failed — never 'running'."""
+        from unittest.mock import patch
+
+        denial = {
+            "allowed": False,
+            "approval_required": False,
+            "reason": "capability_denied",
+            "triggers": [],
+        }
+
+        run = runs_service.create_run(
+            self.task_id, self.rd_id, self.profile_id, self.conn,
+            backend_kind="claude_code", runtime_kind="cli",
+        )
+
+        with patch(
+            "backend_adapters.claude_code.check_approval_gate",
+            return_value=denial,
+        ):
+            result = self.adapter.start(
+                {"id": self.task_id, "title": "T"}, run,
+                {"default_model": "claude-sonnet-4-6"}, {},
+            )
+
+        assert result["status"] == "failed"
+        assert result["error_code"] == "capability_denied"
+
+        db_run = self.conn.execute(
+            "SELECT status, started_at FROM backend_runs WHERE id = ?",
+            (run["id"],),
+        ).fetchone()
+        assert db_run["status"] == "failed"
+        # started_at should be None (never started execution)
+        assert db_run["started_at"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 3. Approval resolved → resume with new run + inherited session
 # ═══════════════════════════════════════════════════════════════════
 

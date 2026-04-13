@@ -283,9 +283,9 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Alternativas consideradas:** Comentar el servicio en el compose principal — rechazado por instrucción explícita del humano ("No lo comentes — bórralo").
 **Impacto:** Usuarios que necesiten el terminal deben usar el overlay. README actualizado con instrucciones.
 
-### Decisión 7: Pre-execution denial con rapid state transitions
+### Decisión 7: Pre-execution denial con transiciones `starting → waiting_approval|failed`
 
-**Decisión:** Cuando la evaluación pre-ejecución deniega el run (con `approval_required=True`), el adapter hace transiciones rápidas `queued → starting → running → waiting_approval`. Si `approval_required=False`, la cadena es `queued → starting → running → failed`.
-**Motivo:** La state machine no tiene caminos directos `queued → waiting_approval` ni `queued → failed`. Las únicas transiciones válidas son las definidas en PR-02. Las transiciones rápidas respetan la state machine sin requerir cambios.
-**Alternativas consideradas:** (a) Añadir `queued → failed` a la state machine — fuera de scope de PR-05, cambia diseño de PR-02. (b) No hacer transiciones y solo retornar dict — deja el run en estado inconsistente (queued pero no ejecutable).
-**Impacto:** En PR-05, la evaluación pre-ejecución siempre pasa (valores son None/unknown), así que las transiciones rápidas no se ejecutan realmente hasta PR-06.
+**Decisión:** Se añaden `starting → waiting_approval` y `starting → failed` a la state machine de runs en `state_machines.py`. Cuando la evaluación pre-ejecución deniega el run, el adapter transiciona `queued → starting → waiting_approval` (o `starting → failed`). El run nunca pasa por `running`.
+**Motivo:** El estado `running` implica que un proceso Claude está activo. Un run denegado pre-ejecución nunca arrancó un proceso, así que `running` es semánticamente incorrecto. Añadir las transiciones a `starting` es más limpio que forzar un `running` ficticio.
+**Alternativas consideradas:** (a) Rapid transitions `queued → starting → running → target` — contamina el timeline con un `running` falso, confunde monitorización y métricas. (b) Denegar antes de crear el backend_run — pierde la trazabilidad del intento.
+**Impacto:** `state_machines.py` actualizado (fuente canónica). Los 3 runtimes del SPEC solo copian task transitions, no run transitions, así que no hay copias que actualizar. Los tests de PR-02 actualizados con las nuevas transiciones válidas.
