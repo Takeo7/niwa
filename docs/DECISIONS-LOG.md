@@ -238,3 +238,54 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** El requisito dice "No llames a la CLI real en CI." La validación real requiere credenciales de Anthropic y no es posible en el entorno de test.
 **Alternativas consideradas:** Escribir el prompt en archivo temporal como hace `task-executor.py` — descartado porque stdin pipe es más limpio y evita archivos temporales huérfanos.
 **Impacto:** Validación manual pendiente antes de PR-06. Si la CLI real exige el prompt como argumento posicional en lugar de stdin, `_build_command()` necesitará ajuste.
+
+## 2026-04-13 — PR-05
+
+### Decisión 1: Shell whitelist almacenada como constante Python, no en BD
+
+**Decisión:** La whitelist de comandos shell (`ls`, `cat`, `grep`, `find`) para `shell_mode=whitelist` es una constante `DEFAULT_SHELL_WHITELIST` en `capability_service.py`. No se almacena en un campo dedicado de `project_capability_profiles`.
+**Motivo:** El schema define `shell_mode TEXT` con valores `disabled|whitelist|free`. No hay columna dedicada para la lista de comandos permitidos. Añadir una columna `shell_whitelist_json` excede el scope del SPEC de PR-05.
+**Alternativas consideradas:** (a) Codificar la lista en el valor del campo `shell_mode` (e.g., `"whitelist:ls,cat,grep,find"`) — parsing frágil, el campo es TEXT no JSON. (b) Añadir columna `shell_whitelist_json` — cambia el schema sin justificación en el SPEC.
+**Impacto:** Per-project shell whitelists no son posibles hasta un PR futuro que añada el campo. La whitelist por defecto es suficiente para el MVP.
+
+### Decisión 2: secrets_scope_json es no-op en PR-05
+
+**Decisión:** El campo `secrets_scope_json` se almacena y se propaga, pero no se evalúa en runtime. No hay trigger asociado.
+**Motivo:** Detectar acceso a secretos en runtime (variables de entorno, archivos sensibles) requiere hooking de procesos o análisis semántico del prompt — ambos fuera del alcance de PR-05. Los tests verifican que el campo no rompe nada.
+**Alternativas consideradas:** Implementar checklist de paths sensibles en Bash — complejo, alta tasa de falsos positivos.
+**Impacto:** El campo existe y se puede configurar. Un PR futuro puede implementar la evaluación cuando haya mecanismo fiable de detección.
+
+### Decisión 3: quota_risk y estimated_resource_cost son no-op hasta PR-06
+
+**Decisión:** La evaluación pre-ejecución (`evaluate()`) comprueba `quota_risk >= medium` y `estimated_resource_cost > max_cost_usd`, pero estos campos tienen valores `None`/`"unknown"` hasta que PR-06 (router determinista) los rellene. El trigger nunca se dispara en PR-05.
+**Motivo:** El SPEC asigna la estimación de costos y riesgos a PR-06. PR-05 implementa la lógica de evaluación pero no genera los datos que la alimentan.
+**Alternativas consideradas:** Hardcodear valores conservadores (e.g., `quota_risk="medium"` siempre) — rechazado porque bloquearía todas las ejecuciones sin beneficio.
+**Impacto:** PR-06 debe popular `quota_risk` y `estimated_resource_cost` en las routing_decisions/tasks para que los triggers pre-ejecución se activen.
+
+### Decisión 4: Seed de capability profiles para proyectos existentes, fallback para nuevos
+
+**Decisión:** `seed_capability_profiles(conn)` inserta un perfil "standard" para cada proyecto existente que no tenga uno. Para proyectos sin perfil en BD (nuevos, o en fresh install sin proyectos), `get_effective_profile()` retorna `DEFAULT_CAPABILITY_PROFILE` como fallback.
+**Motivo:** `project_capability_profiles.project_id` es `NOT NULL` con FK a `projects(id)`. No se puede insertar un perfil "global" sin un proyecto válido. El seed funciona para proyectos existentes; el fallback cubre el resto sin cambiar el schema.
+**Alternativas consideradas:** (a) Hacer `project_id` nullable para perfil global — cambia el schema del SPEC. (b) Crear un proyecto sentinel — añade datos artificiales sin valor semántico.
+**Impacto:** Cada arranque de la app seed automáticamente. Proyectos creados después del arranque usarán el fallback hasta el siguiente restart (o hasta que se cree su perfil explícitamente).
+
+### Decisión 5: Runtime monitoring inserta return en el streaming loop
+
+**Decisión:** Cuando se detecta una violación en el streaming loop, el adapter: (1) graba el evento en BD, (2) crea el approval, (3) transiciona el run a `waiting_approval`, (4) mata el proceso con SIGTERM→SIGKILL, (5) retorna inmediatamente desde `_execute()`.
+**Motivo:** El proceso Claude debe morir cuando se detecta una violación — no se puede permitir que siga ejecutando. El `return` sale del loop y del método `_execute()`, y el `finally` block se encarga de limpiar el heartbeat thread.
+**Alternativas consideradas:** (a) Pausar el proceso (SIGSTOP) y esperar resolución del approval — riesgo de procesos zombie, recursos de sistema ocupados indefinidamente. (b) Flag+break sin matar — el proceso seguiría ejecutando hasta terminar naturalmente.
+**Impacto:** Tras resolver el approval como 'approved', se necesita un nuevo run con `relation_type='resume'` y `--resume <session_id>` (nota 4 del PR-05).
+
+### Decisión 6: Terminal web movida a docker-compose.advanced.yml
+
+**Decisión:** El servicio `terminal` (ttyd con `privileged: true`, `pid: host`, `network_mode: host`, `/:/host`) se elimina del `docker-compose.yml.tmpl` principal y se mueve a `docker-compose.advanced.yml`. Para habilitarlo: `docker compose -f docker-compose.yml -f docker-compose.advanced.yml up`.
+**Motivo:** Instrucción explícita del humano (nota 5). El SPEC PR-05 dice "Desactivar terminal por defecto en install --quick" y "Mover a modo avanzado/operador".
+**Alternativas consideradas:** Comentar el servicio en el compose principal — rechazado por instrucción explícita del humano ("No lo comentes — bórralo").
+**Impacto:** Usuarios que necesiten el terminal deben usar el overlay. README actualizado con instrucciones.
+
+### Decisión 7: Pre-execution denial con rapid state transitions
+
+**Decisión:** Cuando la evaluación pre-ejecución deniega el run (con `approval_required=True`), el adapter hace transiciones rápidas `queued → starting → running → waiting_approval`. Si `approval_required=False`, la cadena es `queued → starting → running → failed`.
+**Motivo:** La state machine no tiene caminos directos `queued → waiting_approval` ni `queued → failed`. Las únicas transiciones válidas son las definidas en PR-02. Las transiciones rápidas respetan la state machine sin requerir cambios.
+**Alternativas consideradas:** (a) Añadir `queued → failed` a la state machine — fuera de scope de PR-05, cambia diseño de PR-02. (b) No hacer transiciones y solo retornar dict — deja el run en estado inconsistente (queued pero no ejecutable).
+**Impacto:** En PR-05, la evaluación pre-ejecución siempre pasa (valores son None/unknown), así que las transiciones rápidas no se ejecutan realmente hasta PR-06.
