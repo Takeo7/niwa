@@ -110,7 +110,7 @@ class TestShellMode:
 
     def test_whitelist_allows_whitelisted_command(self):
         profile = _make_profile(shell_mode="whitelist")
-        for cmd in ["ls", "cat", "grep", "find"]:
+        for cmd in ["ls", "cat", "grep", "find", "pwd", "echo"]:
             event = _tool_use_event("Bash", {"command": cmd})
             result = cs.evaluate_runtime_event(event, profile)
             assert result["allowed"] is True, f"{cmd} should be allowed"
@@ -152,6 +152,74 @@ class TestShellMode:
         event = _tool_use_event("Bash", {"command": f"{cmd} somefile"})
         result = cs.evaluate_runtime_event(event, profile)
         assert any(t["type"] == "deletion" for t in result["triggers"])
+
+    def test_custom_whitelist_from_profile(self):
+        """A custom shell_whitelist_json in the profile overrides the
+        default whitelist — allows python3 if listed."""
+        profile = _make_profile(
+            shell_mode="whitelist",
+            shell_whitelist_json=json.dumps(["ls", "python3"]),
+        )
+        event = _tool_use_event("Bash", {"command": "python3 script.py"})
+        result = cs.evaluate_runtime_event(event, profile)
+        assert result["allowed"] is True
+
+    def test_custom_whitelist_blocks_unlisted(self):
+        """Custom whitelist blocks commands not in the list."""
+        profile = _make_profile(
+            shell_mode="whitelist",
+            shell_whitelist_json=json.dumps(["ls"]),
+        )
+        event = _tool_use_event("Bash", {"command": "cat file.txt"})
+        result = cs.evaluate_runtime_event(event, profile)
+        assert result["allowed"] is False
+
+    def test_db_whitelist_change_takes_effect(self):
+        """Changing shell_whitelist_json in a DB-backed profile changes
+        behavior without restart — verifies the value is read live."""
+        db_fd, db_path, conn = _make_db()
+        now = cs._now_iso()
+        proj_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO projects (id, slug, name, area, created_at, updated_at) "
+            "VALUES (?, 'test', 'Test', 'proyecto', ?, ?)",
+            (proj_id, now, now),
+        )
+        conn.execute(
+            "INSERT INTO project_capability_profiles "
+            "(id, project_id, name, repo_mode, shell_mode, "
+            " shell_whitelist_json, web_mode, network_mode, "
+            " filesystem_scope_json, secrets_scope_json, "
+            " resource_budget_json, created_at, updated_at) "
+            "VALUES (?, ?, 'custom', 'read-write', 'whitelist', "
+            " ?, 'off', 'off', '{}', '{}', '{}', ?, ?)",
+            (str(uuid.uuid4()), proj_id,
+             json.dumps(["ls"]), now, now),
+        )
+        conn.commit()
+
+        # With ["ls"], cat is blocked
+        profile = cs.get_effective_profile(proj_id, conn)
+        event = _tool_use_event("Bash", {"command": "cat file"})
+        r1 = cs.evaluate_runtime_event(event, profile)
+        assert r1["allowed"] is False
+
+        # Update whitelist to include cat
+        conn.execute(
+            "UPDATE project_capability_profiles "
+            "SET shell_whitelist_json = ? WHERE project_id = ?",
+            (json.dumps(["ls", "cat"]), proj_id),
+        )
+        conn.commit()
+
+        # Re-fetch profile — cat now allowed
+        profile2 = cs.get_effective_profile(proj_id, conn)
+        r2 = cs.evaluate_runtime_event(event, profile2)
+        assert r2["allowed"] is True
+
+        conn.close()
+        os.close(db_fd)
+        os.unlink(db_path)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -500,6 +568,11 @@ class TestProfileRetrieval:
         assert profile["name"] == "standard"
         assert profile["repo_mode"] == "read-write"
         assert profile["shell_mode"] == "whitelist"
+        whitelist = json.loads(profile["shell_whitelist_json"])
+        assert "ls" in whitelist
+        assert "cat" in whitelist
+        assert "pwd" in whitelist
+        assert "echo" in whitelist
 
     def test_seed_idempotent(self):
         proj_id = str(uuid.uuid4())

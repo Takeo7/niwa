@@ -241,12 +241,12 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 
 ## 2026-04-13 — PR-05
 
-### Decisión 1: Shell whitelist almacenada como constante Python, no en BD
+### Decisión 1: Shell whitelist almacenada en columna `shell_whitelist_json`
 
-**Decisión:** La whitelist de comandos shell (`ls`, `cat`, `grep`, `find`) para `shell_mode=whitelist` es una constante `DEFAULT_SHELL_WHITELIST` en `capability_service.py`. No se almacena en un campo dedicado de `project_capability_profiles`.
-**Motivo:** El schema define `shell_mode TEXT` con valores `disabled|whitelist|free`. No hay columna dedicada para la lista de comandos permitidos. Añadir una columna `shell_whitelist_json` excede el scope del SPEC de PR-05.
-**Alternativas consideradas:** (a) Codificar la lista en el valor del campo `shell_mode` (e.g., `"whitelist:ls,cat,grep,find"`) — parsing frágil, el campo es TEXT no JSON. (b) Añadir columna `shell_whitelist_json` — cambia el schema sin justificación en el SPEC.
-**Impacto:** Per-project shell whitelists no son posibles hasta un PR futuro que añada el campo. La whitelist por defecto es suficiente para el MVP.
+**Decisión:** La whitelist de comandos shell se almacena en una columna dedicada `shell_whitelist_json` (JSON array de strings) en `project_capability_profiles`. Migración 009 añade la columna para bases existentes. El seed "standard" la puebla con `["ls","cat","grep","find","pwd","echo"]`. `DEFAULT_SHELL_WHITELIST` en `capability_service.py` queda como fallback cuando la columna es NULL.
+**Motivo:** Configurable por proyecto sin redeploy. Auditable: `capability_snapshot_json` en backend_runs puede capturar el valor real que regía en ese run. Separación limpia: `shell_mode` define la política (`disabled|whitelist|free`), `shell_whitelist_json` define los comandos permitidos.
+**Alternativas consideradas:** (a) Constante Python — no configurable por proyecto, requiere redeploy, no auditable. (b) Codificar dentro de `shell_mode` (e.g., `"whitelist:ls,cat"`) — parsing frágil, mezcla semánticas.
+**Impacto:** Migration 009 (ALTER TABLE ADD COLUMN) para bases existentes. Schema.sql actualizado para fresh installs.
 
 ### Decisión 2: secrets_scope_json es no-op en PR-05
 

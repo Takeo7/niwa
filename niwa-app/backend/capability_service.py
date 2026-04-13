@@ -25,21 +25,19 @@ logger = logging.getLogger(__name__)
 # ── Default "standard" capability profile ────────────────────────
 # Used as fallback when no project-specific profile exists in the DB.
 
+DEFAULT_SHELL_WHITELIST = ["ls", "cat", "grep", "find", "pwd", "echo"]
+
 DEFAULT_CAPABILITY_PROFILE = {
     "name": "standard",
     "repo_mode": "read-write",
     "shell_mode": "whitelist",
+    "shell_whitelist_json": json.dumps(DEFAULT_SHELL_WHITELIST),
     "web_mode": "off",
     "network_mode": "off",
     "filesystem_scope_json": json.dumps({"allow": ["<workspace>"], "deny": []}),
     "secrets_scope_json": json.dumps({"allow": []}),
     "resource_budget_json": json.dumps({"max_cost_usd": 5.0, "max_duration_ms": 600000}),
 }
-
-# Shell commands allowed in "whitelist" mode.  The list is intentionally
-# minimal (read-only, non-destructive).  Future PRs may store per-project
-# whitelists in a dedicated column; for now this constant is authoritative.
-DEFAULT_SHELL_WHITELIST = frozenset(["ls", "cat", "grep", "find"])
 
 # Commands that imply file/directory deletion — always trigger approval
 # regardless of shell_mode setting.
@@ -66,6 +64,20 @@ def _parse_json(raw: str | None) -> dict:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError, ValueError):
         return {}
+
+
+def _parse_json_list(raw: str | None) -> list | None:
+    """Safely parse a JSON string expected to be a list.
+
+    Returns ``None`` on failure so callers can fall back to defaults.
+    """
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        return result if isinstance(result, list) else None
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 def _extract_commands(command_str: str) -> list[str]:
@@ -137,10 +149,11 @@ def seed_capability_profiles(conn) -> int:
         row_id = str(uuid.uuid4())
         cursor = conn.execute(
             "INSERT OR IGNORE INTO project_capability_profiles "
-            "(id, project_id, name, repo_mode, shell_mode, web_mode, "
+            "(id, project_id, name, repo_mode, shell_mode, "
+            " shell_whitelist_json, web_mode, "
             " network_mode, filesystem_scope_json, secrets_scope_json, "
             " resource_budget_json, created_at, updated_at) "
-            "SELECT ?, ?, 'standard', ?, ?, ?, ?, ?, ?, ?, ?, ? "
+            "SELECT ?, ?, 'standard', ?, ?, ?, ?, ?, ?, ?, ?, ?, ? "
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM project_capability_profiles "
             "  WHERE project_id = ? AND name = 'standard'"
@@ -149,6 +162,7 @@ def seed_capability_profiles(conn) -> int:
                 row_id, pid,
                 DEFAULT_CAPABILITY_PROFILE["repo_mode"],
                 DEFAULT_CAPABILITY_PROFILE["shell_mode"],
+                DEFAULT_CAPABILITY_PROFILE["shell_whitelist_json"],
                 DEFAULT_CAPABILITY_PROFILE["web_mode"],
                 DEFAULT_CAPABILITY_PROFILE["network_mode"],
                 DEFAULT_CAPABILITY_PROFILE["filesystem_scope_json"],
@@ -345,14 +359,20 @@ def _check_shell_whitelist(commands: list[str],
     if shell_mode == "free":
         return None
 
-    # whitelist mode
+    # whitelist mode — read from profile, fall back to default
+    whitelist_raw = capability_profile.get("shell_whitelist_json")
+    whitelist = _parse_json_list(whitelist_raw) if whitelist_raw else None
+    if whitelist is None:
+        whitelist = list(DEFAULT_SHELL_WHITELIST)
+    whitelist_set = frozenset(whitelist)
+
     for cmd in commands:
-        if cmd not in DEFAULT_SHELL_WHITELIST:
+        if cmd not in whitelist_set:
             return {
                 "type": "shell_not_whitelisted",
                 "detail": (
                     f"Command '{cmd}' not in shell whitelist "
-                    f"{sorted(DEFAULT_SHELL_WHITELIST)}"
+                    f"{sorted(whitelist_set)}"
                 ),
             }
 
