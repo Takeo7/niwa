@@ -385,3 +385,69 @@ class TestResume:
         ).fetchone()
         assert row["status"] == "succeeded"
         assert row["relation_type"] == "resume"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. Heartbeat daemon thread
+# ═══════════════════════════════════════════════════════════════════
+
+FAKE_CLAUDE_SLOW = os.path.join(
+    ROOT_DIR, "tests", "fixtures", "fake_claude_slow.py",
+)
+
+
+class TestHeartbeatThread:
+    """Verify heartbeat updates even when stdout is blocked."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path, self.conn = _make_db()
+        self.task_id, self.profile_id, self.rd_id = _seed(self.conn)
+        self.adapter = ClaudeCodeAdapter(db_conn_factory=_db_factory(self.db_path))
+        self.tmpdir = __import__("tempfile").mkdtemp()
+        # Override heartbeat interval to 1s for fast test
+        import backend_adapters.claude_code as cc_mod
+        self._orig_interval = cc_mod.HEARTBEAT_INTERVAL_SECONDS
+        cc_mod.HEARTBEAT_INTERVAL_SECONDS = 1
+        self._orig_cli = cc_mod.CLAUDE_CLI_COMMAND
+        cc_mod.CLAUDE_CLI_COMMAND = __import__("sys").executable
+
+    def teardown_method(self):
+        import backend_adapters.claude_code as cc_mod
+        cc_mod.HEARTBEAT_INTERVAL_SECONDS = self._orig_interval
+        cc_mod.CLAUDE_CLI_COMMAND = self._orig_cli
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+        __import__("shutil").rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_heartbeat_fires_during_blocked_stdout(self):
+        """Heartbeat thread updates heartbeat_at while process produces no output."""
+        run = runs_service.create_run(
+            self.task_id, self.rd_id, self.profile_id, self.conn,
+            artifact_root=self.tmpdir,
+        )
+        task = {"id": self.task_id, "title": "Slow task"}
+        # fake_claude_slow sleeps 3s between init and result
+        profile = {
+            "default_model": "claude-sonnet-4-6",
+            "command_template": f"{__import__('sys').executable} {FAKE_CLAUDE_SLOW}",
+        }
+        import os as _os
+        env_backup = _os.environ.get("FAKE_CLAUDE_DELAY_SECONDS")
+        _os.environ["FAKE_CLAUDE_DELAY_SECONDS"] = "3"
+        try:
+            result = self.adapter.start(task, run, profile, {})
+        finally:
+            if env_backup is None:
+                _os.environ.pop("FAKE_CLAUDE_DELAY_SECONDS", None)
+            else:
+                _os.environ["FAKE_CLAUDE_DELAY_SECONDS"] = env_backup
+
+        assert result["status"] == "succeeded"
+
+        # With 3s sleep and 1s heartbeat interval, should have at least 2 heartbeats
+        row = self.conn.execute(
+            "SELECT heartbeat_at FROM backend_runs WHERE id = ?",
+            (run["id"],),
+        ).fetchone()
+        assert row["heartbeat_at"] is not None

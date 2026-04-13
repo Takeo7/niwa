@@ -473,6 +473,29 @@ class ClaudeCodeAdapter(BackendAdapter):
 
         return (None, None, None)
 
+    def _heartbeat_worker(self, run_id: str, proc: subprocess.Popen,
+                          stop_event: threading.Event) -> None:
+        """Daemon thread: update heartbeat_at every HEARTBEAT_INTERVAL_SECONDS.
+
+        Runs independently of stdout activity.  Stops when *stop_event*
+        is set or when the process exits (``proc.poll() is not None``).
+        Exceptions are logged but never propagate.
+        """
+        import runs_service
+
+        while not stop_event.wait(timeout=HEARTBEAT_INTERVAL_SECONDS):
+            if proc.poll() is not None:
+                break
+            try:
+                hb_conn = self._db_conn_factory()
+                try:
+                    runs_service.record_heartbeat(run_id, hb_conn)
+                finally:
+                    hb_conn.close()
+            except Exception:
+                logger.debug("heartbeat_worker: failed for run %s", run_id,
+                             exc_info=True)
+
     def _execute(self, *, cmd: list[str], cwd: str, run: dict,
                  task: dict, prompt_text: str,
                  artifact_root: str | None) -> dict:
@@ -480,11 +503,17 @@ class ClaudeCodeAdapter(BackendAdapter):
 
         This method blocks until the Claude process exits.  The caller
         (PR-06 task-executor) is expected to call it from a worker thread.
+
+        A daemon heartbeat thread runs independently, updating
+        ``heartbeat_at`` every ``HEARTBEAT_INTERVAL_SECONDS`` regardless
+        of stdout activity.
         """
         import runs_service
 
         run_id = run["id"]
         conn = self._db_conn_factory() if self._db_conn_factory else None
+        heartbeat_stop = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
 
         try:
             # queued → starting
@@ -522,23 +551,24 @@ class ClaudeCodeAdapter(BackendAdapter):
                     started_at=_now_iso(),
                 )
 
+            # Start heartbeat daemon thread
+            heartbeat_thread = threading.Thread(
+                target=self._heartbeat_worker,
+                args=(run_id, proc, heartbeat_stop),
+                daemon=True,
+                name=f"heartbeat-{run_id[:8]}",
+            )
+            heartbeat_thread.start()
+
             # Stream stdout line by line
             session_handle = None
             raw_lines: list[str] = []
-            last_heartbeat = time.monotonic()
 
             for raw_line in proc.stdout:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
                 raw_lines.append(line)
-
-                # Periodic heartbeat
-                now_mono = time.monotonic()
-                if now_mono - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-                    if conn:
-                        runs_service.record_heartbeat(run_id, conn)
-                    last_heartbeat = now_mono
 
                 # Parse JSON
                 try:
@@ -668,5 +698,9 @@ class ClaudeCodeAdapter(BackendAdapter):
             }
 
         finally:
+            # Stop heartbeat thread
+            heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=1)
             if conn:
                 conn.close()

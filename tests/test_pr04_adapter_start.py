@@ -401,7 +401,7 @@ class TestApprovalGate:
 
     @patch("backend_adapters.claude_code.check_approval_gate", return_value=False)
     def test_start_returns_rejected_when_denied(self, mock_gate):
-        adapter = ClaudeCodeAdapter()
+        adapter = ClaudeCodeAdapter(db_conn_factory=lambda: None)
         result = adapter.start(
             {"id": "t1", "title": "T"},
             {"id": "r1", "artifact_root": None},
