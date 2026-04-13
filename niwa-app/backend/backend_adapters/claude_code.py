@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import subprocess
 import threading
 import time
@@ -352,11 +353,11 @@ class ClaudeCodeAdapter(BackendAdapter):
         Never includes ``--dangerously-skip-permissions``.  That flag
         is deferred to PR-05 behind capability_profile + approval gate.
         """
-        cli = CLAUDE_CLI_COMMAND
+        cli_parts = [CLAUDE_CLI_COMMAND]
         if profile and profile.get("command_template"):
-            cli = profile["command_template"]
+            cli_parts = shlex.split(profile["command_template"])
 
-        cmd = [cli, "-p", "--output-format", "stream-json"]
+        cmd = cli_parts + ["-p", "--output-format", "stream-json"]
         if model:
             cmd.extend(["--model", model])
         if resume_session_id:
