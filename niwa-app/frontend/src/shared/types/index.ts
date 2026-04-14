@@ -405,3 +405,33 @@ export interface RoutingDecision {
   approval_required: boolean;
   approval: RoutingApproval | null;
 }
+
+// ── Approvals (PR-10b) ──
+//
+// The canonical status set.  ``approval_service.resolve_approval``
+// only ever writes ``approved`` or ``rejected``.  ``pending`` is the
+// initial state set by ``request_approval``.
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+// Canonical risk levels per the PR-05 SPEC.  Backend validation is
+// not enforced (BUGS-FOUND Bug 9) so the UI may receive values that
+// fall outside this union — render them as-is with a neutral style.
+export type CanonicalRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export interface Approval {
+  id: string;
+  task_id: string;
+  task_title: string | null;
+  task_status: string | null;
+  backend_run_id: string | null;
+  approval_type: string;
+  reason: string | null;
+  risk_level: string | null;
+  status: ApprovalStatus;
+  requested_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+}
+
+export type ApprovalDecision = 'approve' | 'reject';

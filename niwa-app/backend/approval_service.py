@@ -164,6 +164,87 @@ def resolve_approval(approval_id: str, status: str, resolved_by: str,
     return _get_approval(approval_id, conn)
 
 
+# ── Read-only query helpers for the Web UI (PR-10b) ──────────────
+#
+# Mirror of ``runs_service``'s read-only helpers: LEFT JOIN the
+# ``tasks`` table so the UI can render a task title / status next to
+# the approval without a second round-trip.  Leave the legacy
+# ``list_approvals`` / ``get_approval`` untouched — they're called
+# from internal code paths (capability_service, routing_service)
+# that don't need the enrichment.
+
+
+def _approval_row_to_api(row: dict) -> dict:
+    """Normalise an approval row (optionally joined with tasks) for
+    the HTTP API.
+
+    ``task_title`` / ``task_status`` are surfaced inline when
+    available — they come from the LEFT JOIN in
+    ``list_approvals_enriched`` / ``get_approval_enriched``.
+    """
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "task_title": row.get("task_title"),
+        "task_status": row.get("task_status"),
+        "backend_run_id": row.get("backend_run_id"),
+        "approval_type": row["approval_type"],
+        "reason": row.get("reason"),
+        "risk_level": row.get("risk_level"),
+        "status": row["status"],
+        "requested_at": row["requested_at"],
+        "resolved_at": row.get("resolved_at"),
+        "resolved_by": row.get("resolved_by"),
+        "resolution_note": row.get("resolution_note"),
+    }
+
+
+def list_approvals_enriched(conn, *, status: str | None = None,
+                            task_id: str | None = None) -> list[dict]:
+    """Return approvals joined with their task, ordered ``requested_at DESC``.
+
+    Same filter semantics as :func:`list_approvals`.  Task fields
+    come from a LEFT JOIN so approvals whose task was deleted still
+    surface (task_title is ``None`` in that case).
+    """
+    clauses: list[str] = []
+    params: list = []
+    if status is not None:
+        clauses.append("a.status = ?")
+        params.append(status)
+    if task_id is not None:
+        clauses.append("a.task_id = ?")
+        params.append(task_id)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    rows = conn.execute(
+        "SELECT a.*, "
+        "       t.title  AS task_title, "
+        "       t.status AS task_status "
+        "FROM approvals a "
+        "LEFT JOIN tasks t ON t.id = a.task_id"
+        f"{where} "
+        "ORDER BY a.requested_at DESC",
+        params,
+    ).fetchall()
+    return [_approval_row_to_api(dict(r)) for r in rows]
+
+
+def get_approval_enriched(approval_id: str, conn) -> dict | None:
+    """Fetch a single enriched approval.  Returns ``None`` if absent."""
+    row = conn.execute(
+        "SELECT a.*, "
+        "       t.title  AS task_title, "
+        "       t.status AS task_status "
+        "FROM approvals a "
+        "LEFT JOIN tasks t ON t.id = a.task_id "
+        "WHERE a.id = ?",
+        (approval_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _approval_row_to_api(dict(row))
+
+
 # ── Internal ─────────────────────────────────────────────────────
 
 def _get_approval(approval_id: str, conn) -> dict:

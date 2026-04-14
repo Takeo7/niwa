@@ -35,6 +35,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 function tabFromPath(pathname: string, taskId: string): string {
   if (pathname.endsWith(`/tasks/${taskId}/runs`)) return 'runs';
   if (pathname.endsWith(`/tasks/${taskId}/routing`)) return 'routing';
+  if (pathname.endsWith(`/tasks/${taskId}/approvals`)) return 'approvals';
   return 'details';
 }
 
@@ -131,6 +132,7 @@ export function TaskDetailPage() {
           <Tabs.Tab value="details">Detalles</Tabs.Tab>
           <Tabs.Tab value="runs">Runs</Tabs.Tab>
           <Tabs.Tab value="routing">Routing</Tabs.Tab>
+          <Tabs.Tab value="approvals">Approvals</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value={active} pt="md">
           <Outlet context={{ task }} />

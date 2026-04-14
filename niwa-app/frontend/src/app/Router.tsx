@@ -5,6 +5,7 @@ import { TaskDetailPage } from '../features/tasks/components/TaskDetailPage';
 import { TaskDetailsTab } from '../features/tasks/components/TaskDetailsTab';
 import { RunsTab } from '../features/runs/components/RunsTab';
 import { RoutingTab } from '../features/runs/components/RoutingTab';
+import { ApprovalsTab } from '../features/approvals/components/ApprovalsTab';
 import { KanbanBoard } from '../features/kanban/components/KanbanBoard';
 import { ProjectList } from '../features/projects/components/ProjectList';
 import { ProjectDetail } from '../features/projects/components/ProjectDetail';
@@ -13,6 +14,7 @@ import { MetricsDashboard } from '../features/metrics/components/MetricsDashboar
 import { NotesList } from '../features/notes/components/NotesList';
 import { DashboardView } from '../features/dashboard/components/DashboardView';
 import { HistoryView } from '../features/history/components/HistoryView';
+import { ApprovalsPage } from '../features/approvals/components/ApprovalsPage';
 
 export function AppRouter() {
   return (
@@ -25,6 +27,7 @@ export function AppRouter() {
         <Route index element={<TaskDetailsTab />} />
         <Route path="runs" element={<RunsTab />} />
         <Route path="routing" element={<RoutingTab />} />
+        <Route path="approvals" element={<ApprovalsTab />} />
       </Route>
       <Route path="/kanban" element={<KanbanBoard />} />
       <Route path="/projects" element={<ProjectList />} />
@@ -33,6 +36,7 @@ export function AppRouter() {
       <Route path="/metrics" element={<MetricsDashboard />} />
       <Route path="/notes" element={<NotesList />} />
       <Route path="/history" element={<HistoryView />} />
+      <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
