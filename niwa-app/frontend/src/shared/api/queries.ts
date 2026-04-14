@@ -3,7 +3,7 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
-import { api, apiPost, apiPatch, apiDelete } from './client';
+import { api, apiPost, apiPatch, apiDelete, ApiError } from './client';
 import type {
   Task,
   Project,
@@ -27,6 +27,9 @@ import type {
   Routine,
   SearchResult,
   TaskAttachment,
+  BackendRun,
+  BackendRunEvent,
+  RoutingDecision,
 } from '../types';
 
 // ── Tasks ──
@@ -597,6 +600,58 @@ export function useRemoveTaskLabel() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['task-labels', vars.taskId] });
     },
+  });
+}
+
+// ── Backend Runs & Routing (v0.2 — PR-10a) ──
+export function useTaskRuns(taskId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['task-runs', taskId],
+    queryFn: () => api<BackendRun[]>(`tasks/${taskId}/runs`),
+    enabled: !!taskId,
+    refetchInterval: 5000,
+  });
+}
+
+export function useRun(runId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['run', runId],
+    queryFn: () => api<BackendRun>(`runs/${runId}`),
+    enabled: !!runId,
+    refetchInterval: 5000,
+  });
+}
+
+export function useRunEvents(runId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['run-events', runId],
+    queryFn: () => api<BackendRunEvent[]>(`runs/${runId}/events`),
+    enabled: !!runId,
+    refetchInterval: 3000,
+  });
+}
+
+export function useTaskRoutingDecision(
+  taskId: string | null | undefined,
+) {
+  return useQuery<RoutingDecision | null>({
+    queryKey: ['task-routing', taskId],
+    // A task without a routing decision yet is a normal state (e.g.
+    // status='inbox' or created pre-v0.2).  Map 404 → null so callers
+    // can render an empty state instead of an error.
+    queryFn: async () => {
+      try {
+        return await api<RoutingDecision>(
+          `tasks/${taskId}/routing-decision`,
+        );
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    enabled: !!taskId,
   });
 }
 
