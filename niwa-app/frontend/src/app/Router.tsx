@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { ChatView } from '../features/chat/components/ChatView';
+import { ChatPage } from '../features/chat/components/ChatPage';
 import { TaskList } from '../features/tasks/components/TaskList';
 import { TaskDetailPage } from '../features/tasks/components/TaskDetailPage';
 import { TaskDetailsTab } from '../features/tasks/components/TaskDetailsTab';
@@ -22,7 +22,7 @@ export function AppRouter() {
     <Routes>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="/dashboard" element={<DashboardView />} />
-      <Route path="/chat" element={<ChatView />} />
+      <Route path="/chat" element={<ChatPage />} />
       <Route path="/tasks" element={<TaskList />} />
       <Route path="/tasks/:taskId" element={<TaskDetailPage />}>
         <Route index element={<TaskDetailsTab />} />
