@@ -5,6 +5,7 @@ import { TaskDetailPage } from '../features/tasks/components/TaskDetailPage';
 import { TaskDetailsTab } from '../features/tasks/components/TaskDetailsTab';
 import { RunsTab } from '../features/runs/components/RunsTab';
 import { RoutingTab } from '../features/runs/components/RoutingTab';
+import { ApprovalsTab } from '../features/approvals/components/ApprovalsTab';
 import { KanbanBoard } from '../features/kanban/components/KanbanBoard';
 import { ProjectList } from '../features/projects/components/ProjectList';
 import { ProjectDetail } from '../features/projects/components/ProjectDetail';
@@ -26,6 +27,7 @@ export function AppRouter() {
         <Route index element={<TaskDetailsTab />} />
         <Route path="runs" element={<RunsTab />} />
         <Route path="routing" element={<RoutingTab />} />
+        <Route path="approvals" element={<ApprovalsTab />} />
       </Route>
       <Route path="/kanban" element={<KanbanBoard />} />
       <Route path="/projects" element={<ProjectList />} />
