@@ -139,11 +139,18 @@ def _build_fallback_chain(selected_profile_id: str, conn) -> list[str]:
 # ── Core decision logic ─────────────────────────────────────────────
 
 
-def decide(task: dict, conn) -> dict:
+def decide(task: dict, conn, *, contract_version: str | None = None) -> dict:
     """Evaluate routing rules for *task* and return a routing decision.
 
     Idempotent: if the task already has an active routing decision
     (with ``selected_profile_id`` set), returns it.
+
+    Parameters
+    ----------
+    contract_version : str | None
+        Active MCP contract (e.g. ``"v02-assistant"``).  Persisted in
+        ``routing_decisions.contract_version`` for audit (PR-09).
+        ``None`` in core mode or when the caller doesn't set it.
 
     Returns::
 
@@ -260,8 +267,8 @@ def decide(task: dict, conn) -> dict:
                 "(id, task_id, decision_index, requested_profile_id, "
                 " selected_profile_id, reason_summary, matched_rules_json, "
                 " fallback_chain_json, estimated_resource_cost, "
-                " quota_risk, created_at) "
-                "VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?)",
+                " quota_risk, contract_version, created_at) "
+                "VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?)",
                 (
                     decision_id, task_id, decision_index,
                     requested_profile_id,
@@ -270,6 +277,7 @@ def decide(task: dict, conn) -> dict:
                                  "triggers": eval_result["triggers"]}]),
                     task.get("estimated_resource_cost"),
                     task.get("quota_risk"),
+                    contract_version,
                     now,
                 ),
             )
@@ -409,8 +417,8 @@ def decide(task: dict, conn) -> dict:
         "(id, task_id, decision_index, requested_profile_id, "
         " selected_profile_id, reason_summary, matched_rules_json, "
         " fallback_chain_json, estimated_resource_cost, "
-        " quota_risk, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " quota_risk, contract_version, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             decision_id, task_id, decision_index,
             task.get("requested_backend_profile_id"),
@@ -420,6 +428,7 @@ def decide(task: dict, conn) -> dict:
             json.dumps(fallback_chain),
             task.get("estimated_resource_cost"),
             task.get("quota_risk"),
+            contract_version,
             now,
         ),
     )

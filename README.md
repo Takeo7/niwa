@@ -12,7 +12,7 @@ Niwa is a self-contained Docker stack you install on your machine. It gives you:
 - **A React 19 web app** (Vite + TypeScript + Mantine v7) with 9 views: Dashboard, Chat, Tasks, Kanban, Projects, Notes, History, Metrics, System.
 - **21 MCP tools** in the tasks-mcp server, organized in 3 domains (core 14, ops 5, files 2).
 - **13 configurable services** with guided setup: 7 LLM providers, 5 image generators, 4 search engines, notifications (Telegram + webhook), hosting, and OpenClaw orchestration.
-- **Two MCP gateway transports** (streamable HTTP + legacy SSE) for both modern and older MCP clients.
+- **Two MCP gateway transports**: streamable-http (recommended) + SSE (legacy, for older clients).
 - **3-tier autonomous executor**: Haiku (chat) → Opus (planner) → Sonnet (executor), with automatic retry and heartbeat.
 - **OAuth support**: Anthropic (API key + setup token) and OpenAI (API key + OAuth with PKCE for ChatGPT subscriptions).
 - **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.

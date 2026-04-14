@@ -96,3 +96,12 @@ Formato sugerido:
 **Ubicación:** `bin/task-executor.py:_execute_task_v02()` — faltaba `_prepare_backend_env()`.
 **Severidad:** alta para Codex (bloqueante), baja para Claude (funciona por herencia de env).
 **PR donde se arregla:** PR-07 — se añade `_prepare_backend_env()` que inyecta credenciales en el profile como `_extra_env`, y los adapters lo mergen en el subprocess env.
+
+## 2026-04-14 — encontrado durante PR-09
+
+### Bug 11: _tool_run_explain lee reason_summary_json pero la columna es reason_summary
+
+**Descripción:** `_tool_run_explain()` en `assistant_service.py` hace `d.get("reason_summary_json")` para leer la razón de la routing decision, pero la columna real en `routing_decisions` se llama `reason_summary` (sin sufijo `_json`). Como `d` es un `dict` construido desde un `sqlite3.Row`, la clave `reason_summary_json` no existe — `d.get()` retorna `None` siempre. El campo `matched_rules_json` en la línea siguiente SÍ es correcto (la columna se llama `matched_rules_json`). Resultado: `_tool_run_explain` siempre devuelve `reason_summary: null` en su output, incluso cuando la routing decision tiene un reason_summary poblado.
+**Ubicación:** `niwa-app/backend/assistant_service.py:468` (`d.get("reason_summary_json")` debería ser `d.get("reason_summary")`). Columna real: `niwa-app/db/schema.sql:287` y `niwa-app/db/migrations/007_v02_execution_core.sql:60`.
+**Severidad:** media (la tool run_explain pierde información de auditoría en su output; no causa crash pero devuelve datos incompletos).
+**PR futuro donde se arreglará:** pendiente de asignar (fix trivial: cambiar `"reason_summary_json"` a `"reason_summary"` en assistant_service.py).

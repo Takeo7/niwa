@@ -24,6 +24,14 @@ from mcp.types import TextContent, Tool
 
 DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 
+# ── PR-09: v02-assistant HTTP proxy config ───────────────────────────
+# When NIWA_MCP_CONTRACT is set, the server only exposes tools listed
+# in the contract JSON.  The v02-assistant tools proxy to the Niwa app
+# HTTP API instead of accessing the DB directly.
+_MCP_CONTRACT = os.environ.get("NIWA_MCP_CONTRACT", "")
+_APP_BASE_URL = os.environ.get("NIWA_APP_URL", "http://app:8080")
+_S2S_TOKEN = os.environ.get("NIWA_MCP_SERVER_TOKEN", "")
+
 VALID_AREAS = ("personal", "empresa", "proyecto", "sistema")
 VALID_STATUSES = ("inbox", "pendiente", "en_progreso", "bloqueada", "revision", "waiting_input", "hecha", "archivada")
 VALID_PRIORITIES = ("baja", "media", "alta", "critica", "low", "medium", "high", "critical")
@@ -80,7 +88,17 @@ def _now_iso() -> str:
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    return [
+    # PR-09: contract-based filtering.
+    # When NIWA_MCP_CONTRACT is set, only expose tools in the contract.
+    if _CONTRACT_TOOLS is not None:
+        return [t for t in _V02_TOOL_DEFS if t.name in _CONTRACT_TOOLS]
+
+    # No contract → expose legacy (v0.1) tools.
+    return _LEGACY_TOOL_DEFS
+
+
+# Legacy v0.1 tool definitions — preserved verbatim.
+_LEGACY_TOOL_DEFS = [
         Tool(
             name="task_list",
             description="List tasks. Optional filters: status, area, project_id, limit (default 50, max 200).",
@@ -905,9 +923,280 @@ def _generate_image_stability(prompt, api_key, model, size):
         return {"error": f"Error generando imagen: {e}"}
 
 
+# ── PR-09: v02-assistant tool definitions ────────────────────────────
+
+_V02_TOOL_DEFS: list[Tool] = [
+    Tool(
+        name="assistant_turn",
+        description=(
+            "Process one conversational turn. The LLM interprets user intent "
+            "and may invoke domain tools (create task, check status, etc.). "
+            "Can take up to 30s. Requires routing_mode=v02."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Chat session identifier."},
+                "project_id": {"type": "string", "description": "Project scope."},
+                "message": {"type": "string", "description": "User message text."},
+                "channel": {
+                    "type": "string",
+                    "enum": ["web", "telegram", "cli", "other"],
+                    "description": "Origin channel. OpenClaw passes 'telegram', web chat passes 'web', smoke test passes 'cli'.",
+                },
+                "metadata": {"type": "object", "description": "Channel-specific data (optional)."},
+            },
+            "required": ["session_id", "project_id", "message", "channel"],
+        },
+    ),
+    Tool(
+        name="task_list",
+        description="List tasks for a project, optionally filtered by status.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": list(VALID_STATUSES),
+                },
+                "limit": {"type": "integer", "description": "Max results (default 20, max 50)."},
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
+        name="task_get",
+        description="Get detailed information about a specific task.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "task_id": {"type": "string"},
+            },
+            "required": ["project_id", "task_id"],
+        },
+    ),
+    Tool(
+        name="task_create",
+        description="Create a new task. Executed by the backend engine asynchronously.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "priority": {"type": "string", "enum": ["baja", "media", "alta", "critica"]},
+            },
+            "required": ["project_id", "title"],
+        },
+    ),
+    Tool(
+        name="task_cancel",
+        description="Cancel a task and its active run (archives the task).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "task_id": {"type": "string"},
+            },
+            "required": ["project_id", "task_id"],
+        },
+    ),
+    Tool(
+        name="task_resume",
+        description="Resume a blocked or waiting task (transitions to pendiente).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "task_id": {"type": "string"},
+            },
+            "required": ["project_id", "task_id"],
+        },
+    ),
+    Tool(
+        name="approval_list",
+        description="List approval requests, optionally filtered by status or task.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["pending", "approved", "rejected"]},
+                "task_id": {"type": "string"},
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
+        name="approval_respond",
+        description="Respond to a pending approval (approve or reject).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "approval_id": {"type": "string"},
+                "decision": {"type": "string", "enum": ["approved", "rejected"]},
+                "note": {"type": "string"},
+            },
+            "required": ["project_id", "approval_id", "decision"],
+        },
+    ),
+    Tool(
+        name="run_tail",
+        description="Get recent events from a backend execution run.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "run_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max events (default 20)."},
+            },
+            "required": ["project_id", "run_id"],
+        },
+    ),
+    Tool(
+        name="run_explain",
+        description="Explain routing decision and execution history for a task.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "task_id": {"type": "string"},
+            },
+            "required": ["project_id", "task_id"],
+        },
+    ),
+    Tool(
+        name="project_context",
+        description="Get project metadata, task summary, and recent activity.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+            },
+            "required": ["project_id"],
+        },
+    ),
+]
+
+_V02_TOOL_NAMES = {t.name for t in _V02_TOOL_DEFS}
+
+
+def _load_contract_tools() -> set[str] | None:
+    """Load the tool allow-list from the contract file.
+
+    Returns None if no contract is configured (expose all legacy tools).
+    Returns a set of tool names if a contract is active.
+    """
+    if not _MCP_CONTRACT:
+        return None
+    # Contract files are under config/mcp-contract/
+    # In Docker the config is mounted at /config.
+    for base in ("/config/mcp-contract", "config/mcp-contract"):
+        path = os.path.join(base, f"{_MCP_CONTRACT}.json")
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return set(data.get("tools", []))
+    # Fallback: parse tool names from the env var itself if comma-separated
+    # (defensive — primary path is the JSON file)
+    return None
+
+
+_CONTRACT_TOOLS: set[str] | None = _load_contract_tools()
+
+
+# ── PR-09: HTTP proxy for v02-assistant tools ────────────────────────
+
+def _http_proxy(path: str, body: dict) -> dict:
+    """POST to Niwa app and return the parsed JSON response.
+
+    On HTTP errors, returns a dict with error_code and message instead
+    of raising — the MCP layer translates to structured MCP errors.
+    """
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    url = f"{_APP_BASE_URL}{path}"
+    data = json.dumps(body).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if _S2S_TOKEN:
+        headers["Authorization"] = f"Bearer {_S2S_TOKEN}"
+
+    req = _ur.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with _ur.urlopen(req, timeout=35) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except _ue.HTTPError as exc:
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            result = json.loads(body_text)
+        except (json.JSONDecodeError, Exception):
+            result = {}
+
+        status = exc.code
+        if status == 409:
+            error_code = result.get("error", "routing_mode_mismatch")
+        elif status == 401:
+            error_code = "auth_failure"
+        elif status == 404:
+            error_code = result.get("error", "not_found")
+        elif status >= 500:
+            error_code = "internal_error"
+        else:
+            error_code = result.get("error", "request_error")
+
+        return {
+            "error_code": error_code,
+            "message": result.get("message", result.get("error", f"HTTP {status}")),
+            "http_status": status,
+        }
+    except _ue.URLError as exc:
+        return {
+            "error_code": "connection_error",
+            "message": f"Cannot reach Niwa app: {exc.reason}",
+        }
+    except Exception as exc:
+        return {
+            "error_code": "internal_error",
+            "message": str(exc),
+        }
+
+
+def _call_v02_tool(name: str, arguments: dict) -> dict:
+    """Dispatch a v02-assistant tool call via HTTP proxy."""
+    if name == "assistant_turn":
+        return _http_proxy("/api/assistant/turn", {
+            "session_id": arguments.get("session_id", ""),
+            "project_id": arguments.get("project_id", ""),
+            "message": arguments.get("message", ""),
+            "channel": arguments.get("channel", "other"),
+            "metadata": arguments.get("metadata"),
+        })
+
+    # All other v02 tools use /api/assistant/tools/{name}
+    project_id = arguments.pop("project_id", "")
+    return _http_proxy(f"/api/assistant/tools/{name}", {
+        "project_id": project_id,
+        "params": arguments,
+    })
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
+        # PR-09: v02-assistant tools → HTTP proxy
+        if name in _V02_TOOL_NAMES and _CONTRACT_TOOLS is not None and name in _CONTRACT_TOOLS:
+            payload = _call_v02_tool(name, dict(arguments or {}))
+            # Translate error_code to MCP structured error
+            if isinstance(payload, dict) and "error_code" in payload:
+                error_text = json.dumps(payload, ensure_ascii=False)
+                return [TextContent(type="text", text=error_text)]
+            return [TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, default=str))]
+
         if name == "task_list":
             payload = _task_list(arguments or {})
         elif name == "task_get":

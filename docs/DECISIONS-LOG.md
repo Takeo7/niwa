@@ -408,3 +408,60 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** El tier conversacional v0.2 (`assistant_turn`) es un subsistema nuevo que no tiene relación con el Tier 1 legacy (Haiku chat vía CLI). Reutilizar directamente `agent.chat.model` acoplaría ambos: cambiar el modelo del pipeline legacy afectaría al cerebro conversacional v0.2 y viceversa. Un setting aislado permite divergir sin interferencia. El fallback a `agent.chat.model` cubre installs que no hayan configurado el nuevo setting.
 **Alternativas consideradas:** (a) Reutilizar `agent.chat.model` directamente — rechazado por el acoplamiento legacy↔v0.2. (b) Crear un setting completamente nuevo sin fallback a agent.chat — rechazado porque forzaría configuración manual en toda instalación existente.
 **Impacto:** Installs existentes sin `agent.assistant` en settings funcionan sin cambios (fallback). La UI de PR-10 podrá exponer la configuración del modelo conversacional como setting separado.
+
+## 2026-04-14 — PR-09
+
+### Decisión 1: MCP server como proxy HTTP (no import directo de assistant_service)
+
+**Decisión:** El MCP server (`servers/tasks-mcp/server.py`) actúa como traductor fino de protocolo MCP→HTTP. Las 11 tools v02-assistant se implementan como proxies HTTP que llaman a los endpoints de la app (`/api/assistant/turn` y `/api/assistant/tools/{name}`). No se importa `assistant_service` ni se accede a la BD directamente para tools v02.
+**Motivo:** Evitar fallback silencioso (import disponible → import, no disponible → HTTP). Viola la lección del proyecto "fail loud" (PR-06 Dec 7). Además, un solo path HTTP hace los tests honestos: lo que se testea es lo que se usa en producción. El MCP server no necesita la API key ni acceso directo a la BD para las tools v02.
+**Alternativas consideradas:** (a) Import condicional con fallback a HTTP — rechazado por fallback silencioso. (b) Import directo sin fallback — requiere backend en sys.path del contenedor, acopla el MCP server a los módulos del app.
+**Impacto:** Las tools legacy (v0.1) siguen con acceso directo a BD. Las tools v02 pasan por HTTP. Requiere NIWA_APP_URL y NIWA_MCP_SERVER_TOKEN configurados.
+
+### Decisión 2: Auth service-to-service vía Bearer token
+
+**Decisión:** La app acepta `Authorization: Bearer <token>` como alternativa a la cookie de sesión. El token se configura via `NIWA_MCP_SERVER_TOKEN` (env var, preferido) o `svc.mcp_server.token` (setting en BD, fallback). Comparación con `hmac.compare_digest` (constant-time).
+**Motivo:** El MCP server necesita autenticarse contra la app para llamar los endpoints HTTP. Las cookies de sesión no son prácticas para comunicación server-to-server. Bearer token es el mecanismo más simple y estándar. Sin JWT/OAuth/complejidad adicional.
+**Alternativas consideradas:** (a) Sin auth (confiar en la red Docker) — rechazado porque no es zero-trust y no funciona fuera de Docker. (b) API key en query string — rechazado por riesgo de logs/leaks.
+**Impacto:** La función `is_authenticated()` ahora acepta bearer tokens además de cookies. La autenticación existente por cookie no se afecta.
+
+### Decisión 3: Un solo MCP server con filtrado por contract
+
+**Decisión:** El MCP server de v0.1 (`servers/tasks-mcp/server.py`) se extiende con las 11 tools v02. El filtrado por contract se implementa server-side via la variable de entorno `NIWA_MCP_CONTRACT`. Si está definida, el server lee el JSON del contract y solo registra las tools listadas. Sin la variable, expone las 21 tools legacy.
+**Motivo:** El SPEC y el humano piden un solo MCP server. El filtrado server-side evita refactorizar el gateway Docker (que no soporta filtrado por contract nativamente). La variable de entorno es el mecanismo de configuración estándar de Docker.
+**Alternativas consideradas:** (a) Dos MCP servers separados — rechazado por instrucción explícita del humano. (b) Filtrado en el gateway — requiere refactor del gateway Docker, fuera de scope.
+**Impacto:** En modo assistant (`NIWA_MCP_CONTRACT=v02-assistant`), el server expone solo 11 tools. En modo core (sin variable), expone las 21 legacy. No hay mezcla.
+
+### Decisión 4: Endpoints HTTP uno-por-tool en /api/assistant/tools/{name}
+
+**Decisión:** Se crea un endpoint genérico `POST /api/assistant/tools/{tool_name}` que despacha al `TOOL_DISPATCH[tool_name]()`. Input: `{project_id, params}`. El endpoint de `assistant_turn` (`/api/assistant/turn`) ya existía de PR-08 y se preserva intacto.
+**Motivo:** Un endpoint por tool permite al MCP server dirigir cada tool call a un path HTTP específico, con error mapping por tool. Un solo endpoint genérico con dispatch interno es más simple que 10 endpoints individuales y permite añadir tools futuras sin cambiar app.py.
+**Alternativas consideradas:** (a) 10 endpoints individuales (`/api/assistant/tools/task_list`, etc.) como funciones separadas en app.py — rechazado por volumen de código duplicado. (b) Un endpoint único `/api/assistant/dispatch` con tool_name en el body — funcional pero oscurece el routing en logs y métricas.
+**Impacto:** app.py gana ~30 líneas. Las tools se invocan con la misma signatura `(conn, project_id, params)` que usan internamente.
+
+### Decisión 5: contract_version en routing_decisions como kwarg de decide()
+
+**Decisión:** `routing_service.decide()` acepta `contract_version: str | None = None` como keyword argument. Se persiste en `routing_decisions.contract_version` (migration 011). NULL cuando no se especifica (modo core, callers existentes).
+**Motivo:** El SPEC sección 7 exige persistir la versión del contrato activo. Un kwarg opcional es retrocompatible: callers existentes no necesitan cambios. El valor es NULL para decisiones hechas fuera del modo assistant.
+**Alternativas consideradas:** Leer el contract_version desde settings en lugar de recibirlo como parámetro — rechazado porque el setting podría cambiar entre decisiones; el caller sabe qué contrato está activo.
+**Impacto:** Callers existentes (task-executor) no se afectan. PR-11 o futuro código que enrute via assistant mode pasará `contract_version="v02-assistant"`.
+
+### Decisión 6: Docker image tags no pinneados — anotado para PR-11
+
+**Decisión:** PR-09 deja sin pinnear estas imágenes en `docker-compose.yml.tmpl`:
+  - `docker/mcp-gateway:latest` (servicio `mcp-gateway`, línea 48) — gateway streamable-http principal para modo assistant.
+  - `docker/mcp-gateway:latest` (servicio `mcp-gateway-sse`, línea 88) — gateway SSE legacy, marcado como LEGACY en el comentario.
+
+No se tocan otras imágenes (`tecnativa/docker-socket-proxy:0.3.0` ya está pinneada, `caddy:2-alpine` está pinneada por rama major, `${INSTANCE_NAME}-app:${NIWA_VERSION}` es imagen local con versión).
+
+Se añaden comentarios `TODO PR-11: pin to a fixed tag` en ambas líneas. La razón del deferral: PR-11 (installer) es quien conoce el entorno target y puede resolver la versión semántica correcta del gateway en el momento del install — aquí en PR-09 no tenemos forma de validar que un tag concreto exista.
+**Motivo:** Pinnear a un tag arbitrario puede romper installs existentes si el tag no existe en Docker Hub. El SPEC PR-11 dice explícitamente "Pinned Docker images, not `latest` in quick mode (`mcp-gateway` y `mcp-gateway-sse` están en `:latest` hoy; operational drift innecesario)". Scope explícito del installer.
+**Alternativas consideradas:** (a) Pinnear a `:0.1.0` o similar — rechazado por riesgo de tag inexistente y acoplamiento a una versión sin validar. (b) Scripts de detección automática de tag — scope excesivo para PR-09.
+**Impacto:** PR-11 debe resolver la versión del `docker/mcp-gateway` y reemplazar `:latest` por el tag fijo en ambas líneas del template. El template actual sigue funcionando (Docker resuelve `:latest` a la imagen más reciente en el registry).
+
+### Decisión 7: OpenClaw skill file (niwa-skill.md) no actualizado — scope de PR-11
+
+**Decisión:** `config/openclaw/niwa-skill.md` sigue documentando las tools v0.1. En v0.2 con contract v02-assistant, OpenClaw ve las 11 nuevas tools, no las 21 legacy. Actualizar el skill file es scope de PR-11 (installer), que es quien configura el modo assistant y registra el MCP.
+**Motivo:** El skill file es un documento instructivo para OpenClaw, no una configuración técnica. Su contenido debe reflejar las tools que OpenClaw realmente ve, que depende de cómo PR-11 configure el NIWA_MCP_CONTRACT.
+**Alternativas consideradas:** Actualizar ahora — rechazado porque sería trabajo de PR-11 y podría quedar stale si PR-11 cambia la configuración.
+**Impacto:** Ninguno inmediato. PR-11 debe actualizar el skill file.

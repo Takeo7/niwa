@@ -57,6 +57,10 @@ _COOKIE_DOMAIN_ATTR = f'Domain={NIWA_APP_COOKIE_DOMAIN}; ' if NIWA_APP_COOKIE_DO
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('NIWA_APP_LOGIN_ATTEMPTS', '5'))
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('NIWA_APP_LOGIN_WINDOW_SECONDS', '900'))
 NIWA_APP_PUBLIC_BASE_URL = os.environ.get('NIWA_APP_PUBLIC_BASE_URL', f'http://127.0.0.1:{PORT}')
+# ── Service-to-service auth (PR-09) ──
+# MCP server authenticates via Bearer token in Authorization header.
+# Priority: env var > settings table.  Empty = disabled (all s2s calls rejected).
+NIWA_MCP_SERVER_TOKEN = os.environ.get('NIWA_MCP_SERVER_TOKEN', '')
 _OPENCLAW_HOME = Path(os.environ.get('OPENCLAW_HOME', '/instance/.openclaw'))
 OPENCLAW_CONFIG_PATH = _OPENCLAW_HOME / 'openclaw.json'
 OPENCLAW_AGENTS_DIR = _OPENCLAW_HOME / 'agents'
@@ -162,8 +166,40 @@ def parse_cookies(handler):
     return cookie
 
 
+def _is_valid_s2s_token(handler) -> bool:
+    """Check Authorization: Bearer <token> for service-to-service auth.
+
+    The MCP server uses this to call Niwa's internal API endpoints.
+    Token source: env ``NIWA_MCP_SERVER_TOKEN`` or setting
+    ``svc.mcp_server.token``.  Empty token = s2s disabled.
+    """
+    auth_header = handler.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return False
+    bearer = auth_header[7:]
+    if not bearer:
+        return False
+    # 1. Try env var (preferred — avoids DB round-trip)
+    if NIWA_MCP_SERVER_TOKEN and hmac.compare_digest(bearer, NIWA_MCP_SERVER_TOKEN):
+        return True
+    # 2. Try settings table
+    try:
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'svc.mcp_server.token'",
+            ).fetchone()
+            if row and row['value'] and hmac.compare_digest(bearer, row['value']):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def is_authenticated(handler) -> bool:
     if not NIWA_APP_AUTH_REQUIRED:
+        return True
+    # Service-to-service bearer token (MCP server → app)
+    if _is_valid_s2s_token(handler):
         return True
     cookies = parse_cookies(handler)
     morsel = cookies.get(NIWA_APP_SESSION_COOKIE)
@@ -3695,6 +3731,41 @@ class Handler(BaseHTTPRequestHandler):
             if result.get('error') == 'routing_mode_mismatch':
                 status = 409
             return self._json(result, status)
+        # ── PR-09: v02-assistant tool endpoints (MCP server → app) ──
+        # Each tool delegates to the public function in assistant_service.
+        # project_id is required for all tools.
+        if path.startswith('/api/assistant/tools/'):
+            import assistant_service
+            tool_name = path.split('/api/assistant/tools/')[-1]
+            if tool_name not in assistant_service.TOOL_DISPATCH:
+                return self._json({'error': 'unknown_tool', 'tool': tool_name}, 404)
+            project_id = payload.get('project_id', '')
+            if not project_id:
+                return self._json({'error': 'project_id is required'}, 400)
+            params = payload.get('params', {})
+            try:
+                with db_conn() as conn:
+                    result = assistant_service.TOOL_DISPATCH[tool_name](
+                        conn, project_id, params,
+                    )
+                status_code = 200
+                if isinstance(result, dict) and 'error' in result:
+                    error = result['error']
+                    if error in ('task_not_found', 'run_not_found',
+                                 'approval_not_found', 'project_not_found'):
+                        status_code = 404
+                    elif error in ('cannot_cancel', 'cannot_resume',
+                                   'invalid_operation'):
+                        status_code = 409
+                    else:
+                        status_code = 400
+                return self._json(result, status_code)
+            except Exception as exc:
+                logger.exception("Tool %s error: %s", tool_name, exc)
+                return self._json({
+                    'error': 'internal_error',
+                    'message': 'Internal server error',
+                }, 500)
         if path == '/api/routines':
             rid = scheduler.create_routine(db_conn, payload)
             return self._json({'ok': True, 'id': rid}, 201)

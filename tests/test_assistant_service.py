@@ -528,20 +528,20 @@ class TestDomainTools:
     # ── task_list ────────────────────────────────────────────────
 
     def test_task_list_empty(self):
-        r = assistant_service._tool_task_list(self.conn, self.pid, {})
+        r = assistant_service.tool_task_list(self.conn, self.pid, {})
         assert r["count"] == 0
         assert r["tasks"] == []
 
     def test_task_list_returns_tasks(self):
         self._insert_task()
         self._insert_task()
-        r = assistant_service._tool_task_list(self.conn, self.pid, {})
+        r = assistant_service.tool_task_list(self.conn, self.pid, {})
         assert r["count"] == 2
 
     def test_task_list_filters_by_status(self):
         self._insert_task(status="pendiente")
         self._insert_task(status="en_progreso")
-        r = assistant_service._tool_task_list(
+        r = assistant_service.tool_task_list(
             self.conn, self.pid, {"status": "pendiente"},
         )
         assert r["count"] == 1
@@ -551,11 +551,11 @@ class TestDomainTools:
 
     def test_task_get_found(self):
         tid = self._insert_task(title="Hello")
-        r = assistant_service._tool_task_get(self.conn, self.pid, {"task_id": tid})
+        r = assistant_service.tool_task_get(self.conn, self.pid, {"task_id": tid})
         assert r["title"] == "Hello"
 
     def test_task_get_not_found(self):
-        r = assistant_service._tool_task_get(
+        r = assistant_service.tool_task_get(
             self.conn, self.pid, {"task_id": "nonexistent"},
         )
         assert r["error"] == "task_not_found"
@@ -563,7 +563,7 @@ class TestDomainTools:
     # ── task_create ──────────────────────────────────────────────
 
     def test_task_create_success(self):
-        r = assistant_service._tool_task_create(
+        r = assistant_service.tool_task_create(
             self.conn, self.pid, {"title": "New task", "priority": "alta"},
         )
         assert "task_id" in r
@@ -576,7 +576,7 @@ class TestDomainTools:
         assert row["project_id"] == self.pid
 
     def test_task_create_records_event(self):
-        r = assistant_service._tool_task_create(
+        r = assistant_service.tool_task_create(
             self.conn, self.pid, {"title": "Evented"},
         )
         evt = self.conn.execute(
@@ -586,14 +586,14 @@ class TestDomainTools:
         assert evt is not None
 
     def test_task_create_missing_title(self):
-        r = assistant_service._tool_task_create(self.conn, self.pid, {})
+        r = assistant_service.tool_task_create(self.conn, self.pid, {})
         assert r["error"] == "title is required"
 
     # ── task_cancel ──────────────────────────────────────────────
 
     def test_task_cancel_from_pendiente(self):
         tid = self._insert_task(status="pendiente")
-        r = assistant_service._tool_task_cancel(
+        r = assistant_service.tool_task_cancel(
             self.conn, self.pid, {"task_id": tid},
         )
         assert r["status"] == "archivada"
@@ -604,7 +604,7 @@ class TestDomainTools:
 
     def test_task_cancel_from_terminal_fails(self):
         tid = self._insert_task(status="hecha")
-        r = assistant_service._tool_task_cancel(
+        r = assistant_service.tool_task_cancel(
             self.conn, self.pid, {"task_id": tid},
         )
         assert r["error"] == "cannot_cancel"
@@ -613,14 +613,14 @@ class TestDomainTools:
 
     def test_task_resume_from_bloqueada(self):
         tid = self._insert_task(status="bloqueada")
-        r = assistant_service._tool_task_resume(
+        r = assistant_service.tool_task_resume(
             self.conn, self.pid, {"task_id": tid},
         )
         assert r["status"] == "pendiente"
 
     def test_task_resume_from_en_progreso_fails(self):
         tid = self._insert_task(status="en_progreso")
-        r = assistant_service._tool_task_resume(
+        r = assistant_service.tool_task_resume(
             self.conn, self.pid, {"task_id": tid},
         )
         assert r["error"] == "cannot_resume"
@@ -658,7 +658,7 @@ class TestDomainTools:
         )
         self.conn.commit()
 
-        r = assistant_service._tool_task_resume(
+        r = assistant_service.tool_task_resume(
             self.conn, self.pid, {"task_id": tid},
         )
         assert r["error"] == "session_handle_missing"
@@ -674,7 +674,7 @@ class TestDomainTools:
     def test_project_context(self):
         self._insert_task(status="pendiente")
         self._insert_task(status="hecha")
-        r = assistant_service._tool_project_context(self.conn, self.pid, {})
+        r = assistant_service.tool_project_context(self.conn, self.pid, {})
         assert r["project"]["name"] == "Test Project"
         assert r["task_summary"].get("pendiente", 0) == 1
         assert r["task_summary"].get("hecha", 0) == 1
