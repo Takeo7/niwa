@@ -80,7 +80,6 @@ def server():
     assistant_service._call_anthropic = fake_llm
 
     # Force app module to pick up new DB_PATH
-    import importlib
     if "app" in sys.modules:
         import app
         from pathlib import Path
@@ -90,6 +89,12 @@ def server():
 
     app.HOST = "127.0.0.1"
     app.PORT = port
+    # Bug 13 fix (PR-12): NIWA_APP_AUTH_REQUIRED se evalúa en app.py a
+    # nivel de módulo al importar. Si otro test importó ``app`` antes
+    # con auth=1, ``sys.modules["app"]`` queda cacheado y el env var
+    # que pusimos arriba se ignora. Fijar el atributo directamente es
+    # el patrón establecido en tests/test_runs_endpoints.py:79 (PR-10a).
+    app.NIWA_APP_AUTH_REQUIRED = False
 
     app.init_db()
 

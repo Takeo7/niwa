@@ -120,7 +120,7 @@ Formato sugerido:
 **Descripción:** `tests/test_assistant_turn_endpoint.py` confía en `os.environ["NIWA_APP_AUTH_REQUIRED"] = "0"` antes de `import app`, pero `NIWA_APP_AUTH_REQUIRED` en `app.py` se evalúa a nivel de módulo al importar. Si otro test (`test_assistant_tool_endpoints.py` u otros) ya importó `app` con auth=1 previamente, `sys.modules["app"]` está cacheado y el env var se ignora. Los 7 tests del archivo pasan cuando se ejecutan aislados pero fallan cuando `pytest tests/` recorre toda la suite. Reproducible en la rama sin cambios de PR-10a.
 **Ubicación:** `tests/test_assistant_turn_endpoint.py:62-95` (fixture `server`).
 **Severidad:** baja (falso negativo en CI full-suite; los tests son correctos en sí).
-**PR futuro donde se arreglará:** pendiente de asignar (fix: reemplazar el env var por `app.NIWA_APP_AUTH_REQUIRED = False` directamente tras el import, mismo patrón que aplica `test_runs_endpoints.py`).
+**Estado:** **ARREGLADO en PR-12.** La fixture `server` fija `app.NIWA_APP_AUTH_REQUIRED = False` directamente tras el import, replicando el patrón de `tests/test_runs_endpoints.py:79`. Verificado ejecutando `pytest tests/test_assistant_tool_endpoints.py tests/test_assistant_turn_endpoint.py` en ese orden (el orden que dispara la polución) — 26 passed.
 
 ### Bug 14: Bundle del frontend supera 1.47MB sin code splitting
 
