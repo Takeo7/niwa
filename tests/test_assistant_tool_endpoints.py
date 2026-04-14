@@ -280,6 +280,43 @@ class TestToolEndpoints:
         assert status == 200
         assert body["count"] == 0
 
+    # ── approval_respond ────────────────────────────────────────
+
+    def test_approval_respond_missing_id(self, server):
+        """Missing approval_id returns 400."""
+        status, body = _post(
+            server["base"], "/api/assistant/tools/approval_respond",
+            {"project_id": server["pid"], "params": {"decision": "approved"}},
+            token=S2S_TOKEN,
+        )
+        assert status == 400
+        assert body["error"] == "approval_id is required"
+
+    def test_approval_respond_invalid_decision(self, server):
+        """Decision must be 'approved' or 'rejected'."""
+        status, body = _post(
+            server["base"], "/api/assistant/tools/approval_respond",
+            {"project_id": server["pid"], "params": {
+                "approval_id": "any", "decision": "maybe",
+            }},
+            token=S2S_TOKEN,
+        )
+        assert status == 400
+        assert "approved" in body["error"]
+
+    def test_approval_respond_not_found(self, server):
+        """Nonexistent approval_id → approval_not_found."""
+        status, body = _post(
+            server["base"], "/api/assistant/tools/approval_respond",
+            {"project_id": server["pid"], "params": {
+                "approval_id": "nonexistent-uuid",
+                "decision": "approved",
+            }},
+            token=S2S_TOKEN,
+        )
+        assert status == 404
+        assert body["error"] == "approval_not_found"
+
     # ── run_tail not found ──────────────────────────────────────
 
     def test_run_tail_not_found(self, server):
