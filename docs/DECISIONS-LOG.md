@@ -865,6 +865,8 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 
 **Impacto:** El selector queda visible en el header del `ChatPage`. `localStorage` guarda el último proyecto tras el primer turn exitoso. Ninguna feature existente se toca.
 
+**Caveat (añadido en review):** `niwa.chat.lastProjectId` en localStorage es estado client-side global sin scope de usuario. Válido mientras la instalación sea mono-usuario (v0.2). Cuando v0.3+ introduzca multiusuario en el mismo navegador, el valor debe scoparse por user_id o moverse a server-side.
+
 ### Decisión 6: Manejo de errores estructurados en el cliente — `fetch` crudo en lugar de `apiPost`
 
 **Decisión:** El hook `useChat` no usa `apiPost()` de `shared/api/client.ts` para el turn del assistant. Usa `fetch()` directo para capturar el body completo (incluye `error`, `message`, `session_id`) incluso en respuestas 4xx/5xx. `apiPost()` lanza `ApiError` que preserva el status pero descarta el `message` humano estructurado.
@@ -876,6 +878,8 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 - Modificar `apiPost()` para devolver body completo en errores — rechazado: cambia contrato de todos los callers existentes, fuera de scope.
 
 **Impacto:** `useChat.ts` contiene la lógica de fetch directo (~30 líneas). Los demás hooks del chat (`useSessionMessages` para cargar historial al mount) sí usan `api()` normal porque esas rutas devuelven 200 o lanzan 404 sin body rico.
+
+**Caveat (añadido en review):** Esta excepción al patrón `apiPost` aplica exclusivamente a endpoints con contrato de error estructurado específico como `assistant_turn` (body con `{error, message}` a preservar). El resto de endpoints sigue usando `apiPost`. Si otra feature necesita fetch crudo, re-evaluar caso a caso — no asumir que "assistant_turn lo hace así" es precedente.
 
 ### Decisión 7: Registro visual editorial — sin bubbles, sin avatares, sin timestamps absolutos
 
