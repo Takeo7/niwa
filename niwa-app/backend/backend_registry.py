@@ -106,7 +106,7 @@ def get_execution_registry(db_conn_factory) -> BackendRegistry:
     """
     registry = BackendRegistry()
     registry.register("claude_code", ClaudeCodeAdapter(db_conn_factory=db_conn_factory))
-    registry.register("codex", CodexAdapter())
+    registry.register("codex", CodexAdapter(db_conn_factory=db_conn_factory))
     return registry
 
 
