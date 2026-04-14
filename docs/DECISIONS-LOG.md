@@ -355,3 +355,47 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** Separación limpia entre los dos pipelines. El legacy es código probado en producción que no debe tocarse. El v02 es código nuevo que puede evolucionar independientemente.
 **Alternativas consideradas:** (a) Meter un `if` al inicio de `_execute_task()` — mezcla dos flujos en una función de 150 líneas. (b) Reemplazar `_execute_task()` enteramente — rompe el legacy.
 **Impacto:** El main loop del executor no cambia. Sigue llamando a `_execute_task(task)`. La decisión de pipeline es interna.
+
+## 2026-04-14 — PR-07
+
+### Decisión 1: Codex CLI invocation — `codex exec --json` con prompt por stdin
+
+**Decisión:** El adapter invoca `codex exec --json` como subproceso. El prompt se envía por stdin (pipe). El output esperado es JSON lines por stdout, con tipos de evento (`status`, `message`, `command`, `command_output`, `result`, `error`).
+**Motivo:** Instrucción explícita del humano. La forma exacta de invocación no ha sido validada contra la CLI real de Codex.
+**Alternativas consideradas:** (a) Prompt como argumento posicional `codex exec --json "prompt"` — posible pero stdin es más limpio para prompts largos. (b) Usar la API de OpenAI directamente — fuera del scope (el SPEC dice CLI).
+**Impacto:** Pendiente validar con CLI real antes de PR-08. Si la CLI real exige otra forma de invocación, `_build_command()` necesitará ajuste. El fake_codex.py fixture emula el formato esperado.
+
+### Decisión 2: resume_modes=[] — Codex no soporta resume
+
+**Decisión:** `capabilities()` devuelve `resume_modes=[]`. El método `resume()` transiciona el run a `starting → failed` con `error_code="resume_not_supported"` y registra un evento explicativo. El router (paso 3 resume-aware de `decide()`) ya salta backends con `resume_modes` vacío.
+**Motivo:** La CLI de Codex no tiene un flag `--resume` ni equivalente. El stub PR-03 tenía `resume_modes=["new_session"]`, que era incorrecto — `new_session` implicaba que podía hacer algo, pero no hay mecanismo real.
+**Alternativas consideradas:** Mantener `resume_modes=["new_session"]` como en PR-03 — rechazado porque llevaría al router a intentar resume en Codex, que fallaría.
+**Impacto:** Tareas con `current_run_id` apuntando a un run de Codex no se reanudan vía Codex — el router busca otro backend o cae al default.
+
+### Decisión 3: Credenciales — el adapter asume env configurado por el caller
+
+**Decisión:** El adapter NO duplica `_get_openai_oauth_token()` de `bin/task-executor.py`. Asume que el caller (executor) ya configuró `CODEX_HOME` y `OPENAI_ACCESS_TOKEN` en el entorno del subproceso vía `os.environ`.
+**Motivo:** Opción (b) del humano. Extraer a función compartida (opción a) requiere refactorizar el executor y crear infraestructura de imports compartidos entre `bin/` y `niwa-app/backend/` — fuera del scope de PR-07.
+**Alternativas consideradas:** (a) Extraer `_get_openai_oauth_token()` a un módulo compartido — requiere refactor del executor, posible en un PR futuro de limpieza. (b) Duplicar la lógica en el adapter — rechazado por principio DRY.
+**Impacto:** El executor debe configurar las variables de entorno antes de llamar al adapter. Si falta `OPENAI_ACCESS_TOKEN`, el proceso Codex falla con error de auth — el adapter reporta el fallo limpio via `exit_code != 0`.
+
+### Decisión 4: Habilitación del perfil codex — INSERT OR IGNORE + UPDATE condicional
+
+**Decisión:** `_SEED_PROFILES` ahora tiene `enabled=1, priority=5` para codex (fresh installs). Para installs existentes, `upgrade_codex_profile()` hace `UPDATE ... SET enabled=1, priority=5 WHERE slug='codex' AND enabled=0 AND priority=0`. Si el usuario cambió cualquiera de esos campos, no se toca.
+**Motivo:** Instrucción explícita del humano (nota 6). El patrón respeta la configuración del usuario: solo actualiza si los valores son los defaults viejos de PR-03.
+**Alternativas consideradas:** (a) Solo cambiar `_SEED_PROFILES` sin UPDATE — installs existentes quedan con codex deshabilitado hasta que el usuario lo active manualmente. (b) UPDATE incondicional — pisaría la configuración del usuario.
+**Impacto:** `seed_backend_profiles()` llama a `upgrade_codex_profile()` en cada arranque. La función también actualiza `capabilities_json` para reflejar `resume_modes=[]`. Claude mantiene `priority=10`, así sigue siendo el default del paso 5 de `decide()`.
+
+### Decisión 5: Fallback escalation en _execute_task_v02 — primary + 1 fallback
+
+**Decisión:** `_execute_task_v02()` ahora itera sobre `fallback_chain[:2]` (primary + máximo 1 fallback). Si el adapter primary lanza una excepción (NotImplementedError, RuntimeError, etc.), crea un nuevo `backend_run` con `relation_type='fallback'` y ejecuta el siguiente adapter. Si el fallback también falla, la tarea falla con mensaje claro.
+**Motivo:** El SPEC PR-06 define la fallback_chain pero `_execute_task_v02()` no la usaba — si el adapter fallaba, la tarea se marcaba como failed sin intentar el fallback. El humano pidió evaluar si cabe en PR-07; cabe porque son ~50 líneas de cambio bien contenidas.
+**Alternativas consideradas:** (a) No implementar, dejar para PR de router avanzado — rechazado porque el test de fallback Claude↔Codex lo requiere. (b) Cascada ilimitada — rechazado por instrucción explícita del humano ("solo 1 escalado"). (c) Escalar también en returned failures — rechazado porque un adapter que completó ejecución (aunque con fallo) ya hizo su mejor intento.
+**Impacto:** Cada escalado se registra como evento `fallback_escalation` en `backend_run_events`. No hay fallback silencioso — cada paso se logea. Los returned failures (adapter.start() retorna `{"status": "failed"}`) NO se escalan; solo excepciones.
+
+### Decisión 6: Runtime capability monitoring — normalización de eventos Codex
+
+**Decisión:** Los eventos `command` de Codex se normalizan al formato `tool_use` de Claude antes de pasarlos a `capability_service.evaluate_runtime_event()`. La función `_normalize_for_runtime_check()` convierte `{"type": "command", "command": "rm -rf /"}` a `{"type": "tool_use", "name": "Bash", "input": {"command": "rm -rf /"}}`.
+**Motivo:** `evaluate_runtime_event()` solo evalúa eventos con `type="tool_use"`. Codex usa un formato diferente (`type="command"`). Normalizar permite reutilizar toda la infraestructura de capability checks (shell whitelist, deletion, network, filesystem scope) sin duplicar código.
+**Alternativas consideradas:** (a) Modificar `evaluate_runtime_event()` para aceptar ambos formatos — rechazado porque contamina el servicio de capabilities con lógica específica de un backend. (b) No hacer runtime monitoring en Codex — rechazado porque el SPEC dice "Runtime monitoring sobre los events que Codex emita".
+**Impacto:** Si la CLI real de Codex emite eventos en un formato diferente al esperado, `_normalize_for_runtime_check()` necesitará ajuste.
