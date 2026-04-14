@@ -724,7 +724,14 @@ export function useResolveApproval() {
       qc.invalidateQueries({
         queryKey: ['task-routing', data.task_id],
       });
+      // Single-task view: if the resolve unblocks the task and the
+      // executor transitions its status, the detail page reflects it
+      // on the next render without waiting for polling.
       qc.invalidateQueries({ queryKey: ['task', data.task_id] });
+      // Task list view shares the same reasoning — a resolved
+      // approval may push the task out of the 'waiting_approval'
+      // bucket once the backend resumes the run.
+      qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 }

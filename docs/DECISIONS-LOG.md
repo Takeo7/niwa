@@ -557,3 +557,102 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 - Exponer `routing_decision: null` dentro de un payload más ancho — obliga al cliente a diferenciar "no hay tarea" de "no hay decisión", complicando tipado.
 
 **Impacto:** La `RoutingTab` renderiza estado vacío con mensaje instructivo cuando no hay decisión; el resto de la UI no se rompe.
+
+## 2026-04-14 — PR-10b
+
+### Decisión 1: `POST /api/approvals/:id/resolve` con verbo explícito, no `PATCH /api/approvals/:id`
+
+**Decisión:** La resolución de un approval se expone como `POST /api/approvals/:id/resolve` con body `{decision: "approve"|"reject", resolution_note?: string}`. No se usa `PATCH /api/approvals/:id` con `{status: "approved"|"rejected"}`.
+
+**Motivo:** (a) Consistencia con el precedente del repo — `POST /api/tasks/:id/reject` ya usa la forma "verbo explícito" y aquí aplica la misma lógica. (b) El método backend se llama `approval_service.resolve_approval` — exponer el mismo verbo en HTTP evita la doble traducción mental "PATCH status → resolve". (c) Separa resoluciones de futuras mutaciones (si en v0.3+ se permite editar `resolution_note` post-hoc, ese cambio es PATCH; la acción de resolver nunca lo será).
+
+**Alternativas consideradas:**
+- `PATCH /api/approvals/:id` con `status` — más "RESTful" formalmente, pero ambigua: ¿permite también cambiar `resolution_note` de un approval ya resuelto? Abre preguntas innecesarias para v0.2.
+- `POST /api/approvals/:id/approve` y `POST /api/approvals/:id/reject` como dos endpoints distintos — redundante; ambos comparten body y validación.
+
+**Impacto:** La UI invoca un único endpoint. El mapeo `decision → status` (approve→approved, reject→rejected) vive exclusivamente en el handler del endpoint.
+
+### Decisión 2: `resolved_by = NIWA_APP_USERNAME` es proxy de identidad válido SOLO en v0.2 mono-usuario
+
+**Decisión:** El endpoint `POST /api/approvals/:id/resolve` escribe `approvals.resolved_by = NIWA_APP_USERNAME` (el valor del env var/setting global con el que se firma la cookie de sesión). No se añade columna nueva ni se introduce un modelo de usuarios en esta capa.
+
+**Motivo:** En v0.2 la instalación es mono-usuario por diseño — hay un único `NIWA_APP_USERNAME` y una única cookie válida. En ese régimen, el nombre del usuario global es un proxy aceptable de "quién resolvió": si la cookie es válida, fue ese usuario. La columna `resolved_by` es `TEXT` sin FK, así que cualquier string es válido como identificador.
+
+**Lo que esto NO es — aviso explícito para el futuro:**
+- `NIWA_APP_USERNAME` NO es identidad real. Es la etiqueta del único usuario configurado en el env var global, no un identificador de sujeto autenticado.
+- Los valores de `resolved_by` escritos en v0.2 NO son auditoría fiable retroactiva cuando v0.3+ introduzca multiusuario. Si se cambia `NIWA_APP_USERNAME` entre resoluciones (o se renombra la instancia), todos los registros previos quedan asociados al username *actual* del momento en que se leen los logs, no al del momento del resolve. Nada en v0.2 previene esa deriva.
+- Consumidores de los logs de approvals de v0.2 deben tratar `resolved_by` como "la instancia Niwa" o "el único operador", no como "el usuario humano X".
+
+**Pendiente para v0.3+:** Modelo real de usuarios (tabla `users`, sesiones con `user_id`, FK desde `approvals.resolved_by` al `users.id`), migración que trate los `resolved_by` legacy como strings opacos sin promocionarlos a FK, y documentación que marque la frontera entre los dos regímenes.
+
+**Alternativas consideradas:**
+- Hardcodear `"web-ui"` — pierde la información de qué instalación lo resolvió (si alguien migra la BD a otro host sigue siendo útil saberlo).
+- Dejar `resolved_by = NULL` — rompe el contrato del schema (columna documentada como "quién resolvió", aunque técnicamente nullable).
+- Añadir ya una tabla `users` mínima — fuera de scope de PR-10b y afecta migraciones y auth, mucho mayor que lo que el PR pide.
+
+**Impacto:** Documentado arriba. Código queda aceptable para v0.2 y marca la deuda clara para v0.3+.
+
+### Decisión 3: Tab "Approvals" en TaskDetailPage siempre visible con empty state
+
+**Decisión:** El tab "Approvals" en `/tasks/:taskId` aparece en la lista de tabs independientemente de si la tarea tiene approvals. Con cero approvals renderiza un estado vacío con copy explicativo.
+
+**Motivo:** Instrucción explícita del humano en el prompt de PR-10b (restricción D): "No lo escondas condicionalmente — rompería la estabilidad de URLs deep-linkables". Alineado con PR-10a Dec 1 (promoción de Modal a ruta): la razón para tener sub-rutas es precisamente que las URLs sobrevivan a back/forward/share, lo cual requiere que la ruta exista aunque el contenido sea vacío.
+
+**Alternativas consideradas:** Ocultar el tab si `approvals.length === 0` — rompe el deep-link `/tasks/:id/approvals` compartido (aparecería 404 o redirigiría a `/tasks/:id`), y fuerza al usuario a descubrir el tab solo cuando la tarea ya tiene approvals.
+
+**Impacto:** Añade un tab permanente en TaskDetailPage. El empty state es copy-only — sin coste de renderizado relevante.
+
+### Decisión 4: Enrichment helpers nuevos en `approval_service`, no JOIN en `app.py`
+
+**Decisión:** Se añaden `approval_service.list_approvals_enriched` y `approval_service.get_approval_enriched` con LEFT JOIN a `tasks` para exponer `task_title` y `task_status` inline. No se toca la firma existente de `list_approvals` / `get_approval` — los siguen usando rutas internas (`capability_service`, `routing_service`) que no necesitan el enrichment.
+
+**Motivo:** Consistencia con PR-10a Dec 4 (helpers de lectura en `runs_service.py`, no módulo aparte ni JOIN en el handler HTTP). Concentra la lógica de forma de datos en el módulo de dominio; el handler HTTP solo valida input y serializa.
+
+**Alternativas consideradas:**
+- Hacer el JOIN en `app.py` — mezcla dominio y transporte; el test unitario del join solo se alcanza vía tests end-to-end del endpoint en vez de tests de unit del service.
+- Extender `list_approvals` con un flag `enriched: bool` — firmas con flags "cambian de forma" son mala práctica; cada caller elegiría su variante y las refactorizaciones futuras requerirían más cuidado.
+
+**Impacto:** `approval_service.py` crece ~60 líneas. Ambas funciones son reutilizables por futuros callers (MCP server, CLI, reporting).
+
+### Decisión 5: Frontend mapea `risk_level` con fallback visible, no silencioso
+
+**Decisión:** `features/approvals/riskLevel.ts` mapea los 4 valores canónicos (`low|medium|high|critical`) a una paleta Mantine sobria (gray/yellow/orange/red). Cualquier otro valor se renderiza gris + variante `outline` + label con el string crudo + tooltip "Valor no canónico (ver BUGS-FOUND Bug 9)".
+
+**Motivo:** Bug 9 (PR-06) documenta que `approval_service.request_approval` no valida `risk_level` contra valores canónicos, así que la BD puede contener drift. Normalizar silenciosamente (p.ej. "desconocido" → `low`) oculta la deriva y dificulta rastrearla. Renderizar verbatim con un indicador visual distinto hace que un humano revisando la lista vea "aquí pasó algo raro" sin abrir la BD.
+
+**Alternativas consideradas:**
+- Ocultar la badge si `risk_level` no es canónico — esconde información.
+- Mostrar solo el string sin color ni tooltip — pierde la pista visual de "esto no es lo esperado".
+- Normalizar backend → canónico antes de servir — arregla el Bug 9 pero eso pertenece a otro PR (prompt explícito: "No arreglar aquí").
+
+**Impacto:** La UI de v0.2 tolera cualquier valor que el backend inserte hoy. Cuando Bug 9 se arregle, la badge pasará a renderizarse como canónica sin cambios en el frontend.
+
+### Decisión 6: UI sin tests unitarios — extensión de PR-10a Decisión 2
+
+**Decisión:** PR-10b sigue sin añadir infra de tests de frontend (vitest, @testing-library/react, jsdom). Los componentes nuevos (`ApprovalList`, `ApprovalsPage`, `ApprovalsTab`, `ApprovalResolveModal`) quedan sin cobertura de tests unitarios. Backend tests (25 nuevos en `test_approvals_endpoints.py`) cubren el contrato HTTP que consume la UI.
+
+**Motivo:** PR-10a Dec 2 ya estableció la postura — añadir vitest + configuración + mocks aquí mezcla un PR de producto con uno de infra. El plan sigue siendo un PR dedicado de test infra (candidato: antes de PR-12).
+
+**Alternativas consideradas:** Añadir vitest mínimo ahora — mismo análisis que en PR-10a; el humano lo confirmó vía escalado en PR-10a.
+
+**Impacto:** Los caminos críticos (mapeo `decision → status`, respuesta 409 en conflicto, forma del payload enriquecido) se verifican vía los 25 tests de backend. Los componentes React quedan sin verificación automatizada hasta el PR de infra.
+
+### Decisión 7: Filtro `status=all` es un sentinel frontend-only
+
+**Decisión:** El `SegmentedControl` de `/approvals` incluye la opción `"all"`. Cuando el usuario la selecciona, el hook `useApprovals` NO envía el query param `status` al backend (el endpoint lo interpretaría como valor no canónico y filtraría a cero resultados, ya que `approvals.status` solo tiene `pending|approved|rejected`).
+
+**Motivo:** Traducir `"all"` en el backend a "sin filtro" obligaría a tratar un valor mágico en el handler; traducirlo en el frontend a "no mandar param" es natural con `URLSearchParams`.
+
+**Alternativas consideradas:** Aceptar `status=all` en el backend como equivalente a sin-param — mezcla semántica de la API con preferencias de la UI.
+
+**Impacto:** El backend mantiene un contrato limpio (`status` es opcional; si se pasa, se usa literal). El frontend es quien conoce el sentinel `"all"`.
+
+### Decisión 8: Invalidación amplia de queries tras resolve — incluye `['tasks']` (lista)
+
+**Decisión:** `useResolveApproval.onSuccess` invalida cinco familias de queries: `['approvals']`, `['task-approvals', taskId]`, `['approval', id]`, `['task-routing', taskId]`, `['task', taskId]`, y `['tasks']` (lista plural).
+
+**Motivo:** Un approval resuelto en `approved` puede desbloquear la tarea: el adapter crea un run de resume (PR-05 Dec 5) que transiciona la tarea fuera de `waiting_approval` eventualmente. La lista de tareas y la vista de detalle deben reflejar ese cambio tan pronto el backend lo produzca, sin depender de la siguiente ronda de polling. El coste de invalidar es bajo; el de no hacerlo es UI desincronizada hasta 10s (refetch interval).
+
+**Alternativas consideradas:** Invalidar solo lo relacionado con el approval y dejar que el polling de tasks (si existe) refresque su lista — asume un loop de polling que el repo no garantiza (`useTasks` no tiene `refetchInterval`).
+
+**Impacto:** Un resolve toca 6 query keys. Sobrecoste de red mínimo; la UI queda coherente en el siguiente render.
