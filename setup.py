@@ -2994,6 +2994,55 @@ def _ensure_assistant_prereqs(cfg: WizardConfig) -> Optional[str]:
     return None
 
 
+def detect_existing_quick_mode(niwa_home: Path) -> str:
+    """Detect the quick-install mode currently recorded for ``niwa_home``.
+
+    Returns:
+        - ``""`` if no install exists at the path (or no ``secrets/mcp.env``).
+        - ``"assistant"`` if ``NIWA_MCP_CONTRACT=v02-assistant`` is set.
+        - ``"core"`` otherwise (existing install without the assistant flag).
+
+    The function is read-only; it never mutates the install.
+    """
+    env_file = niwa_home / "secrets" / "mcp.env"
+    if not env_file.is_file():
+        return ""
+    env = _read_env_file(env_file)
+    contract = env.get("NIWA_MCP_CONTRACT") or ""
+    if contract == "v02-assistant":
+        return "assistant"
+    return "core"
+
+
+def _ensure_mode_matches_existing(cfg: WizardConfig,
+                                   force: bool) -> Optional[str]:
+    """Defensive idempotence check (SPEC PR-11 rule C).
+
+    If an install already exists at ``cfg.niwa_home`` under a different
+    mode than the one requested, return an error message asking the
+    operator to either change ``--mode`` or pass ``--force``. Same-mode
+    reinstalls are allowed and behave as update-in-place (tokens and
+    admin password rotate).
+
+    Returns None when it is safe to proceed.
+    """
+    existing = detect_existing_quick_mode(cfg.niwa_home)
+    if not existing:
+        return None  # fresh install
+    if existing == cfg.quick_mode:
+        return None  # idempotent reinstall under the same mode
+    if force:
+        return None  # explicit override
+    return (
+        f"{cfg.niwa_home} is already installed in --mode {existing}; refusing to\n"
+        f"  silently switch to --mode {cfg.quick_mode}. Options:\n"
+        f"    1. Re-run with --mode {existing} (same as the current install).\n"
+        f"    2. Re-run with --force to overwrite the existing install config\n"
+        f"       (DB data is preserved; tokens and registered MCP clients rotate).\n"
+        f"    3. Uninstall first: ./niwa uninstall --dir {cfg.niwa_home}"
+    )
+
+
 def _parse_url_for_main(url: str) -> Optional[str]:  # pragma: no cover
     """Wrapper around parse_public_url that validates non-empty domain."""
     info = parse_public_url(url)
@@ -3018,6 +3067,21 @@ def cmd_install_quick(args) -> int:
     if blocker:
         err(blocker)
         return 2
+
+    # Idempotence guard (SPEC PR-11 rule C): refuse silent mode changes.
+    mode_mismatch = _ensure_mode_matches_existing(cfg, getattr(args, "force", False))
+    if mode_mismatch:
+        err(mode_mismatch)
+        return 2
+
+    # Inform the operator when a same-mode reinstall will rotate secrets.
+    existing_mode = detect_existing_quick_mode(cfg.niwa_home)
+    if existing_mode == cfg.quick_mode:
+        warn(
+            f"Existing {existing_mode}-mode install detected at {cfg.niwa_home}. "
+            "This re-run will rotate tokens and the admin password "
+            "(DB data is preserved)."
+        )
 
     print_quick_plan(cfg)
 
@@ -3049,8 +3113,18 @@ def cmd_install_quick(args) -> int:
     print()
     ok(f"Quick install ({cfg.quick_mode}) completed — smoke: PASS in {smoke['duration_ms']}ms")
     if cfg.quick_mode == "assistant":
-        mcp_smoke_cmd = f"bin/niwa-mcp-smoke --app-url http://localhost:{cfg.app_port} --token <NIWA_MCP_SERVER_TOKEN>"
-        info(f"Re-run the MCP smoke any time with: {mcp_smoke_cmd}")
+        # The installer smoke tolerates LLM-not-configured (SPEC PR-11 rule G
+        # + PR-09 Dec A): the MCP contract surface is fully advertised even
+        # without an LLM, the assistant_turn roundtrip is simply skipped.
+        # Surface an explicit tip so the operator knows where to complete
+        # the wiring for the conversational chat.
+        print()
+        info("Para usar el chat conversacional real (assistant_turn con "
+             "respuestas del LLM), configura el modelo y la API key en la UI: "
+             "System → Agentes (pestaña 'assistant').")
+        mcp_smoke_cmd = (f"bin/niwa-mcp-smoke --app-url http://localhost:{cfg.app_port} "
+                         "--token <NIWA_MCP_SERVER_TOKEN> --project-id <id>")
+        info(f"Re-run the MCP smoke with a roundtrip any time: {mcp_smoke_cmd}")
     return 0
 
 
@@ -3228,6 +3302,9 @@ def main():
                            help="Instance name (default: niwa). Quick install only.")
     p_install.add_argument("--dir",
                            help="Install directory (default: ~/.<instance>). Quick install only.")
+    p_install.add_argument("--force", action="store_true",
+                           help="Overwrite an existing install even when the --mode differs "
+                                "from the recorded one. DB data is preserved.")
 
     p_status = sub.add_parser("status", help="Show status of an existing install")
     p_status.add_argument("--dir", help="Install location (auto-detect by default)")

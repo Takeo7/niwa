@@ -92,6 +92,7 @@ def _build_parser():
     p_install.add_argument("--admin-password")
     p_install.add_argument("--instance")
     p_install.add_argument("--dir")
+    p_install.add_argument("--force", action="store_true")
     return parser
 
 
@@ -424,6 +425,83 @@ def _extract_server_block(yaml: str, server_name: str) -> str:
                     break
             captured.append(line)
     return "\n".join(captured)
+
+
+# ────────────────────────── idempotence / mode mismatch ─────────────
+class TestModeIdempotence:
+    """SPEC PR-11 rule C: same-mode reinstalls proceed; cross-mode aborts
+    with exit 2 unless --force is passed."""
+
+    def _write_existing_install(self, niwa_home: Path, mode: str) -> None:
+        (niwa_home / "secrets").mkdir(parents=True, exist_ok=True)
+        contract = "v02-assistant" if mode == "assistant" else ""
+        env_text = (
+            f'INSTANCE_NAME="niwa"\n'
+            f'NIWA_MCP_CONTRACT="{contract}"\n'
+        )
+        (niwa_home / "secrets" / "mcp.env").write_text(env_text)
+
+    def test_detect_no_install(self, tmp_path):
+        assert setup.detect_existing_quick_mode(tmp_path / "nope") == ""
+
+    def test_detect_core(self, tmp_path):
+        self._write_existing_install(tmp_path, "core")
+        assert setup.detect_existing_quick_mode(tmp_path) == "core"
+
+    def test_detect_assistant(self, tmp_path):
+        self._write_existing_install(tmp_path, "assistant")
+        assert setup.detect_existing_quick_mode(tmp_path) == "assistant"
+
+    def test_fresh_install_allowed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        args = _Args(mode="core", dir=str(tmp_path / "niwa"))
+        cfg = setup.build_quick_config(args)
+        assert setup._ensure_mode_matches_existing(cfg, force=False) is None
+
+    def test_same_mode_reinstall_allowed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        niwa_home = tmp_path / "niwa"
+        niwa_home.mkdir()
+        self._write_existing_install(niwa_home, "core")
+        args = _Args(mode="core", dir=str(niwa_home))
+        cfg = setup.build_quick_config(args)
+        assert setup._ensure_mode_matches_existing(cfg, force=False) is None
+
+    def test_core_over_assistant_blocks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        niwa_home = tmp_path / "niwa"
+        niwa_home.mkdir()
+        self._write_existing_install(niwa_home, "assistant")
+        args = _Args(mode="core", dir=str(niwa_home))
+        cfg = setup.build_quick_config(args)
+        msg = setup._ensure_mode_matches_existing(cfg, force=False)
+        assert msg is not None
+        assert "assistant" in msg
+        assert "core" in msg
+        assert "--force" in msg
+
+    def test_assistant_over_core_blocks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            setup, "which",
+            lambda name: "/usr/local/bin/openclaw" if name == "openclaw" else None,
+        )
+        niwa_home = tmp_path / "niwa"
+        niwa_home.mkdir()
+        self._write_existing_install(niwa_home, "core")
+        args = _Args(mode="assistant", dir=str(niwa_home))
+        cfg = setup.build_quick_config(args)
+        msg = setup._ensure_mode_matches_existing(cfg, force=False)
+        assert msg is not None
+        assert "--force" in msg
+
+    def test_force_flag_bypasses_mode_mismatch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        niwa_home = tmp_path / "niwa"
+        niwa_home.mkdir()
+        self._write_existing_install(niwa_home, "assistant")
+        args = _Args(mode="core", dir=str(niwa_home))
+        cfg = setup.build_quick_config(args)
+        assert setup._ensure_mode_matches_existing(cfg, force=True) is None
 
 
 # ────────────────────────── compose template pin ────────────────────

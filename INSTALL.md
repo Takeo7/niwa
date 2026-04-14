@@ -77,12 +77,20 @@ If the LLM is not yet configured, the MCP smoke reports `roundtrip_assistant_tur
 |---|---|
 | `0`  | Install and post-install smoke both passed. |
 | `1`  | Install completed but the post-install smoke failed. Stack stays up for debugging. |
-| `2`  | Blocked by missing prereqs (Docker missing, or `--mode assistant` without OpenClaw). |
+| `2`  | Blocked by missing prereqs (Docker missing, or `--mode assistant` without OpenClaw), **or mode mismatch with an existing install** (re-run with the matching `--mode`, or pass `--force`). |
 | `130`| Aborted at the confirmation prompt (Ctrl-C or `n`). |
 
 ### Idempotence
 
-Re-running `./niwa install --quick --mode core` on an existing install is safe: the schema uses `CREATE TABLE IF NOT EXISTS`, the seeds use `INSERT OR IGNORE`, and `docker compose up -d` re-runs containers without data loss. Tokens and passwords in `secrets/mcp.env` are regenerated on each run — if you need stable values, pass `--admin-user` / `--admin-password` explicitly and keep the previous `secrets/mcp.env` backed up.
+The three reinstall scenarios supported:
+
+| Scenario | Behavior |
+|---|---|
+| **Same mode** (core→core, assistant→assistant) | Update-in-place. Schema is idempotent (`CREATE TABLE IF NOT EXISTS`, `INSERT OR IGNORE`), `docker compose up -d` replaces containers without losing the data volume. **Tokens and the admin password in `secrets/mcp.env` are rotated** (a `warn()` is printed before the install). Pass `--admin-user` / `--admin-password` to pin them across runs. |
+| **Different mode** (core↔assistant) | **Aborts with exit code `2`.** The installer refuses to silently switch modes. Options printed: (1) re-run with the matching `--mode`, (2) add `--force` to overwrite the existing config (DB data preserved; tokens rotate; previously registered MCP clients will need to re-accept the new token), (3) `./niwa uninstall --dir <path>` first. |
+| **Fresh install** (no `secrets/mcp.env`) | Runs normally. |
+
+The current mode is detected from `NIWA_MCP_CONTRACT` inside `secrets/mcp.env`. Value `v02-assistant` ⇒ assistant; anything else ⇒ core.
 
 ### Overriding the pinned `docker/mcp-gateway` image
 
