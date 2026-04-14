@@ -3,10 +3,16 @@ import { SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { useParams } from 'react-router-dom';
 import { RunList } from './RunList';
 import { RunTimeline } from './RunTimeline';
+import { ArtifactList } from './ArtifactList';
 import { useTaskRuns } from '../hooks/useRuns';
 
 /** /tasks/:taskId/runs route — list of backend_runs for the task +
- *  granular event timeline of the selected run. */
+ *  granular event timeline of the selected run + the artifacts that
+ *  the run produced.
+ *
+ *  PR-10c extends PR-10a's two-pane layout with a third section: a
+ *  table of artifacts scoped to the selected run, rendered below the
+ *  grid so timeline + list stay side-by-side on wider viewports. */
 export function RunsTab() {
   const { taskId } = useParams<{ taskId: string }>();
   const { data: runs, isLoading } = useTaskRuns(taskId);
@@ -48,6 +54,7 @@ export function RunsTab() {
         />
         <RunTimeline runId={selectedId} />
       </SimpleGrid>
+      <ArtifactList runId={selectedId} />
     </Stack>
   );
 }

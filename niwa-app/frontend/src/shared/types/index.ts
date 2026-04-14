@@ -406,6 +406,24 @@ export interface RoutingDecision {
   approval: RoutingApproval | null;
 }
 
+// ── Artifacts (PR-10c) ──
+//
+// Produced by the backend adapter's ``collect_artifacts`` after a
+// run finishes (PR-04).  ``path`` is relative to ``artifact_root``
+// by contract (PR-04 Dec 10) — the UI MUST NOT reconstruct the
+// absolute host path.  ``size_bytes`` and ``sha256`` may be NULL on
+// early-failure runs (BUGS-FOUND Bug 8).
+export interface Artifact {
+  id: string;
+  task_id: string;
+  backend_run_id: string;
+  artifact_type: string;
+  path: string;
+  size_bytes: number | null;
+  sha256: string | null;
+  created_at: string;
+}
+
 // ── Approvals (PR-10b) ──
 //
 // The canonical status set.  ``approval_service.resolve_approval``

@@ -30,6 +30,7 @@ import type {
   BackendRun,
   BackendRunEvent,
   RoutingDecision,
+  Artifact,
   Approval,
   ApprovalStatus,
   ApprovalDecision,
@@ -655,6 +656,19 @@ export function useTaskRoutingDecision(
       }
     },
     enabled: !!taskId,
+  });
+}
+
+// ── Artifacts (v0.2 — PR-10c) ──
+export function useRunArtifacts(runId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['run-artifacts', runId],
+    queryFn: () => api<Artifact[]>(`runs/${runId}/artifacts`),
+    enabled: !!runId,
+    // Artifacts are collected when a run finishes, so fast refetch is
+    // unnecessary — but if the user is staring at a running execution
+    // we want the list to appear without a page reload.
+    refetchInterval: 10000,
   });
 }
 
