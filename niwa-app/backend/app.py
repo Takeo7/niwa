@@ -3396,6 +3396,58 @@ class Handler(BaseHTTPRequestHandler):
             if 'error' in result:
                 return self._json(result, 404)
             return self._json(result)
+        # ── PR-10a: read-only views for runs + routing ──
+        if re.match(r'^/api/tasks/[^/]+/runs$', path):
+            task_id = path.split('/')[3]
+            import runs_service
+            with db_conn() as conn:
+                task = conn.execute(
+                    'SELECT id FROM tasks WHERE id=?', (task_id,),
+                ).fetchone()
+                if not task:
+                    return self._json({'error': 'task_not_found'}, 404)
+                runs = runs_service.list_runs_for_task(task_id, conn)
+            return self._json(runs)
+        if re.match(r'^/api/tasks/[^/]+/routing-decision$', path):
+            task_id = path.split('/')[3]
+            import runs_service
+            with db_conn() as conn:
+                task = conn.execute(
+                    'SELECT id FROM tasks WHERE id=?', (task_id,),
+                ).fetchone()
+                if not task:
+                    return self._json({'error': 'task_not_found'}, 404)
+                decision = runs_service.get_routing_decision_for_task(
+                    task_id, conn,
+                )
+            if decision is None:
+                return self._json({'error': 'no_decision'}, 404)
+            return self._json(decision)
+        if re.match(r'^/api/runs/[^/]+/events$', path):
+            run_id = path.split('/')[3]
+            import runs_service
+            try:
+                limit = int(qs.get('limit', ['0'])[0])
+            except ValueError:
+                limit = 0
+            with db_conn() as conn:
+                run = conn.execute(
+                    'SELECT id FROM backend_runs WHERE id=?', (run_id,),
+                ).fetchone()
+                if not run:
+                    return self._json({'error': 'run_not_found'}, 404)
+                events = runs_service.list_events_for_run(
+                    run_id, conn, limit=limit if limit > 0 else None,
+                )
+            return self._json(events)
+        if re.match(r'^/api/runs/[^/]+$', path) and path.count('/') == 3:
+            run_id = path.split('/')[3]
+            import runs_service
+            with db_conn() as conn:
+                run = runs_service.get_run_detail(run_id, conn)
+            if run is None:
+                return self._json({'error': 'run_not_found'}, 404)
+            return self._json(run)
         if re.match(r'^/api/tasks/[^/]+/labels$', path):
             task_id = path.split('/')[3]
             return self._json(fetch_task_labels(task_id))
