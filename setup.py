@@ -3054,32 +3054,53 @@ def installer_smoke(cfg: WizardConfig) -> dict:
     except Exception as exc:
         _add("app_health", False, str(exc))
 
-    # 2. DB migrated with v0.2 tables + routing_mode=v02
+    # 2. DB migrated with v0.2 tables + routing_mode=v02.
+    # init_db() runs when the app container boots, after the installer's
+    # schema+migrations pass. Retry a few times to absorb the boot window.
     db_path = cfg.niwa_home / "data" / "niwa.sqlite3"
     if db_path.exists():
-        try:
-            conn = _sqlite3.connect(str(db_path))
-            tables = {r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()}
-            required = {"tasks", "projects", "settings", "backend_profiles",
-                        "routing_decisions", "backend_runs", "approvals"}
-            missing = required - tables
-            if missing:
-                _add("db_tables", False, f"missing: {sorted(missing)}")
-            else:
-                _add("db_tables", True, f"{len(tables)} tables present")
-            row = conn.execute(
-                "SELECT value FROM settings WHERE key='routing_mode'"
-            ).fetchone()
-            mode_val = row[0] if row else None
-            if mode_val == "v02":
-                _add("routing_mode_v02", True, "settings.routing_mode=v02")
-            else:
-                _add("routing_mode_v02", False, f"settings.routing_mode={mode_val!r}")
-            conn.close()
-        except Exception as exc:
-            _add("db_tables", False, str(exc))
+        required = {"tasks", "projects", "settings", "backend_profiles",
+                    "routing_decisions", "backend_runs", "approvals"}
+        tables_ok = False
+        missing: set[str] = set()
+        tables: set[str] = set()
+        for _ in range(15):
+            try:
+                conn = _sqlite3.connect(str(db_path))
+                tables = {r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()}
+                conn.close()
+                missing = required - tables
+                if not missing:
+                    tables_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if tables_ok:
+            _add("db_tables", True, f"{len(tables)} tables present")
+        else:
+            _add("db_tables", False, f"missing: {sorted(missing)}")
+
+        mode_val = None
+        for _ in range(15):
+            try:
+                conn = _sqlite3.connect(str(db_path))
+                row = conn.execute(
+                    "SELECT value FROM settings WHERE key='routing_mode'"
+                ).fetchone()
+                conn.close()
+                mode_val = row[0] if row else None
+                if mode_val == "v02":
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if mode_val == "v02":
+            _add("routing_mode_v02", True, "settings.routing_mode=v02")
+        else:
+            _add("routing_mode_v02", False, f"settings.routing_mode={mode_val!r}")
     else:
         _add("db_tables", False, f"DB not found at {db_path}")
 
