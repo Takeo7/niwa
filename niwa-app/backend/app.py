@@ -1087,6 +1087,28 @@ def delete_chat_session(session_id):
         c.commit()
 
 
+# PR-10e: read-only endpoint for the v0.2 chat web (on top of
+# assistant_turn).  Deliberately separate from the legacy
+# get_chat_messages() above: that one executes side effects
+# (auto-complete of pending tasks, auto-inject of delegated task
+# messages) which would pollute a v0.2 conversation.  This helper is
+# a pure read.
+def list_session_messages_v02(session_id):
+    with db_conn() as c:
+        session = c.execute(
+            "SELECT id FROM chat_sessions WHERE id=?", (session_id,),
+        ).fetchone()
+        if not session:
+            return None
+        rows = c.execute(
+            "SELECT id, session_id, role, content, task_id, status, created_at "
+            "FROM chat_messages WHERE session_id=? "
+            "ORDER BY created_at ASC, id ASC",
+            (session_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # ── Notes CRUD ──
 
 def fetch_notes(project_id=None, search=None):
@@ -3568,6 +3590,15 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/chat/sessions/') and path.endswith('/messages'):
             session_id = path.split('/')[4]
             return self._json(get_chat_messages(session_id))
+        # PR-10e: v0.2 chat web — pure read of messages in a session
+        if path.startswith('/api/chat-sessions/') and path.endswith('/messages'):
+            session_id = path[len('/api/chat-sessions/'):-len('/messages')]
+            if not session_id or '/' in session_id:
+                return self._json({'error': 'invalid_session_id'}, 400)
+            messages = list_session_messages_v02(session_id)
+            if messages is None:
+                return self._json({'error': 'session_not_found'}, 404)
+            return self._json({'messages': messages})
         if path == '/api/models':
             return self._json(get_available_models())
         if path == '/api/agents':
