@@ -952,3 +952,56 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** El flag `--force` sólo existe en `install --quick`. `install` interactivo clásico sigue igual. `INSTALL.md` documenta los tres escenarios. Tests cubren la detección y los tres caminos (mismo modo, cambio bloqueado, cambio forzado).
 
+
+---
+
+## 2026-04-14 — PR-12
+
+### Decisión 1: PR-12 no añade cobertura nueva
+
+**Decisión:** el checklist del SPEC PR-12 (16 ítems) ya estaba cubierto por los PRs 01-11, que escribieron sus propios tests en el mismo PR que la feature. PR-12 no escribe tests nuevos para los ítems ya cubiertos; en su lugar documenta la trazabilidad item↔test en `docs/TEST-AUDIT-PR12.md` (§2) y se limita a (a) borrar tests legacy que el SPEC declara inservibles, (b) cerrar los dos bugs conocidos (12, 13) que dejaban cobertura existente fallando en full-suite.
+
+**Motivo:** la regla "tests junto a la feature" del SPEC §8 se cumplió. Escribir tests-espejo con nombres literales del checklist añadiría redundancia sin subir confianza real. El audit trail sirve como índice — ante una lectura del SPEC, cada ítem apunta a archivo::clase::método concreto.
+
+**Alternativas consideradas:**
+- (a) Añadir un test-espejo por ítem del checklist con nombre literal (p. ej. `test_backend_run_created_on_claim`) — rechazado: duplica `TestV02PipelineCreatesRun::test_full_pipeline` con otro nombre, no añade señal.
+- (b) Reescribir toda la suite alrededor de las 16 áreas — rechazado: borraría 800+ tests que ya están bien organizados por PR y por servicio.
+
+**Impacto:** el audit trail queda como entrada única cuando alguien pregunte "¿dónde se testa el ítem N del checklist PR-12?". Si un ítem pierde cobertura en el futuro, actualizar la tabla es obligatorio.
+
+### Decisión 2: el smoke catálogo↔server en `test_smoke.py` excluye tools v02
+
+**Decisión:** `tests/test_smoke.py::TestSuperficieMCP::test_herramientas_catalogo_coinciden_con_servidor` y `tests/test_smoke.py::TestMCPCatalogIntegrity::test_catalog_yaml_matches_server` filtran las tools v02-exclusivas (`assistant_turn`, `task_cancel`, `task_resume`, `approval_list`, `approval_respond`, `run_tail`, `run_explain`) antes de comparar con los catálogos `config/mcp-catalog/*.json`. Las tools compartidas entre `_V02_TOOL_DEFS` y `_LEGACY_TOOL_DEFS` (como `task_list`, `task_get`, `task_create`, `project_context`) siguen validándose.
+
+**Motivo:** los catálogos v01 y el contract v02 son dos mecanismos distintos que conviven. Los catálogos enumeran las tools legacy del dispatcher `_LEGACY_TOOL_DEFS`; las tools v02-exclusivas viven en `config/mcp-contract/v02-assistant.json` y el gateway las filtra por contract (PR-09 Decisión 3, PR-11 Decisión 2). El smoke catálogo↔server debía reflejar ese split. No se toca `config/mcp-catalog/` ni se añaden tools v02 a los catálogos — la fuente autoritativa del contract es `tests/test_mcp_contract.py::TestV02AssistantContractShape`.
+
+**Alternativas consideradas:**
+- (a) Añadir un `config/mcp-catalog/niwa-v02.json` con las tools v02 — rechazado por PR-09 Dec 1 y PR-11 Dec 2 (contaminaría el inventario legacy con tools que `_LEGACY_TOOL_DEFS` no conoce, rompiendo la invariante `catalog ↔ dispatcher`).
+- (b) Borrar estos dos tests y delegar en `test_mcp_contract.py` — rechazado: sigue siendo valioso tener un smoke rápido que detecte divergencias entre los catálogos legacy y su implementación en el server, independientemente del contract v02.
+
+**Impacto:** el helper `_load_v02_tool_names` en `test_smoke.py` parsea el source de `servers/tasks-mcp/server.py` para localizar `_V02_TOOL_DEFS` y `_LEGACY_TOOL_DEFS` por nombre de símbolo. Si algún día se renombran, el test debe actualizarse — no hay otra vía sin añadir dependencias en tiempo de test.
+
+### Decisión 3: tests frontend de árbol estático de componentes salen de la suite
+
+**Decisión:** se eliminan `tests/test_smoke.py::TestFrontendBuild::test_all_react_components_exist` y `tests/test_smoke.py::TestImageGeneration::test_chat_renders_images`. La comprobación de "qué componentes React existen" pasa a apoyarse en `npm run build` del CI. Cualquier cobertura UI futura queda diferida al PR de infra de tests de frontend (ver PR-10a Decisión 2).
+
+**Motivo:** PR-10e borró el chat web v0.1 (con él `ChatView.tsx`, `MessageBubble.tsx`), y PR-10 añadió rutas nuevas (`features/runs`, `features/routing`, `features/approvals`, `features/artifacts`, `features/settings`). Mantener una lista hardcodeada de rutas en un test Python es trabajo manual recurrente que no detecta regresiones reales — la verdad la dice el build.
+
+**Alternativas consideradas:**
+- (a) Actualizar la lista con las rutas v0.2 — rechazado: seguiríamos con el mismo problema estructural la próxima vez que se mueva un componente.
+- (b) Reemplazarlo por un walk recursivo de `src/features/*/components/*.tsx` como regresión de vida-mínima — fuera de scope (no es el rol de PR-12).
+
+**Impacto:** el test de lista estática deja de existir. El dev que mueva componentes no ve fallos espurios en `pytest tests/`; en su lugar se apoya en `npm run build` (CI frontend).
+
+### Decisión 4: borrado de `tests/test_e2e.py` sin sustituto aquí
+
+**Decisión:** `tests/test_e2e.py` se elimina por completo (Bug 5 en BUGS-FOUND.md). No se escribe un E2E nuevo en PR-12.
+
+**Motivo:** el test dependía de (a) `assigned_to_claude=1` (campo deprecado en PR-00) y (b) la BD `~/.niwa/data/niwa.sqlite3` (ruta de producción). Ambos son pre-v0.2. El contrato equivalente en v0.2 — "un claim real crea un `backend_run`" — ya está cubierto por `tests/test_task_executor_routing.py::TestV02PipelineCreatesRun::test_full_pipeline`, que monta su propia BD temporal y no depende de un proceso externo.
+
+**Alternativas consideradas:**
+- (a) Reescribirlo para que spawnee el executor v0.2 y espere a ver un `backend_run` creado — rechazado: E2Es reales con el executor requieren un binario de Claude/Codex en PATH o mocks intrusivos que ya hacemos en `test_claude_adapter_integration.py` con `fake_claude.py`.
+- (b) Dejarlo marcado como `@pytest.mark.skip` con referencia a Bug 5 — rechazado: el SPEC PR-12 dice literalmente "no sirven para v0.2", un skip prolonga ruido.
+
+**Impacto:** un renglón menos en la suite, ningún hueco de cobertura.
+

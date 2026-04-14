@@ -489,11 +489,15 @@ class TestTableStructure:
         assert expected == actual, f"routing_rules mismatch: missing={expected-actual}, extra={actual-expected}"
 
     def test_routing_decisions_columns(self):
+        # PR-09 añadió la columna ``contract_version`` vía migration 011
+        # (ver niwa-app/db/migrations/011_contract_version.sql). El test
+        # original de PR-01 no la incluía y quedó desalineado en cuanto
+        # se aplicó la migración — Bug 12 en docs/BUGS-FOUND.md.
         expected = {
             'id', 'task_id', 'decision_index', 'requested_profile_id',
             'selected_profile_id', 'reason_summary', 'matched_rules_json',
             'fallback_chain_json', 'estimated_resource_cost', 'quota_risk',
-            'created_at',
+            'contract_version', 'created_at',
         }
         actual = self._columns_for('routing_decisions')
         assert expected == actual, f"routing_decisions mismatch: missing={expected-actual}, extra={actual-expected}"

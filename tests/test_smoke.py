@@ -16,6 +16,48 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'niwa-app', 'backend'))
 
 
+def _extract_tool_defs_block(server_py_content, var_name):
+    """Return the text of the list literal assigned to ``var_name`` in the
+    server source (matches declaration lines, not uses)."""
+    pattern = r'\b' + re.escape(var_name) + r'\b\s*(?::\s*[^=]+)?=\s*\['
+    match = re.search(pattern, server_py_content)
+    if not match:
+        return ''
+    bracket_start = match.end() - 1
+    depth = 0
+    end = bracket_start
+    for i in range(bracket_start, len(server_py_content)):
+        ch = server_py_content[i]
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    return server_py_content[bracket_start:end + 1]
+
+
+def _load_v02_tool_names(server_py_content):
+    """Return the set of tool names declared ONLY in ``_V02_TOOL_DEFS``.
+
+    ``_V02_TOOL_DEFS`` enumera las tools del contract v02-assistant. Algunas
+    de esas tools (p. ej. ``task_list``, ``task_get``, ``task_create``,
+    ``project_context``) también están definidas en ``_LEGACY_TOOL_DEFS``
+    con schema propio — siguen siendo tools legacy válidas en core mode.
+    Para el matching catálogo ↔ server interesa aislar las tools
+    v02-exclusivas (las que viven sólo en el contract v02, no en los
+    catálogos v01): ``assistant_turn``, ``task_cancel``, ``task_resume``,
+    ``approval_list``, ``approval_respond``, ``run_tail``, ``run_explain``
+    (PR-09 Decisión 3, PR-11 Decisión 2).
+    """
+    v02_block = _extract_tool_defs_block(server_py_content, '_V02_TOOL_DEFS')
+    legacy_block = _extract_tool_defs_block(server_py_content, '_LEGACY_TOOL_DEFS')
+    v02_names = set(re.findall(r'name=["\'](\w+)["\']', v02_block))
+    legacy_names = set(re.findall(r'name=["\'](\w+)["\']', legacy_block))
+    return v02_names - legacy_names
+
+
 def _apply_sql_idempotent(conn, sql):
     """Apply SQL idempotently, emulating ADD COLUMN IF NOT EXISTS.
 
@@ -177,7 +219,17 @@ class TestSuperficieMCP:
         assert expected == actual, f"Esperado {expected}, obtenido {actual}"
 
     def test_herramientas_catalogo_coinciden_con_servidor(self):
-        """Las herramientas declaradas en catálogos coinciden con lo que el servidor expone."""
+        """Las herramientas declaradas en catálogos coinciden con lo que el servidor expone.
+
+        Scope: el matching solo cubre las tools legacy (`_LEGACY_TOOL_DEFS` en
+        ``servers/tasks-mcp/server.py``). Las tools v02 viven en
+        ``config/mcp-contract/v02-assistant.json`` y el gateway las filtra
+        por contract (PR-09 Decisión 3: "Un solo MCP server con filtrado
+        por contract"; PR-11 Decisión 2: ``generate_catalog_yaml`` usa
+        ``contract["tools"]`` como fuente autoritativa cuando hay contract
+        y no interseca con los catálogos v01). La invariante exacta del
+        contract v02 está en ``tests/test_mcp_contract.py``.
+        """
         import re
 
         # Extraer herramientas de server.py
@@ -190,6 +242,10 @@ class TestSuperficieMCP:
         for m in re.finditer(r'(?:if|elif)\s+name\s*==\s*["\'](\w+)["\']', content):
             server_tools.add(m.group(1))
 
+        # Descontar las tools v02 — su fuente es el contract, no los catálogos.
+        v02_tool_names = _load_v02_tool_names(content)
+        server_tools -= v02_tool_names
+
         # Cargar herramientas del catálogo
         catalog_dir = os.path.join(PROJECT_ROOT, 'config', 'mcp-catalog')
         catalog_tools = set()
@@ -199,7 +255,7 @@ class TestSuperficieMCP:
                     data = json.load(fh)
                     catalog_tools.update(data.get('tools', []))
 
-        # Cada herramienta del servidor debe estar en un catálogo
+        # Cada herramienta legacy del servidor debe estar en un catálogo
         undocumented = server_tools - catalog_tools
         assert not undocumented, f"Herramientas del servidor no en ningún catálogo: {undocumented}"
 
@@ -312,13 +368,12 @@ class TestImageGeneration:
             content = f.read()
         assert 'generated-images' in content
 
-    def test_chat_renders_images(self):
-        """MessageBubble detecta y renderiza imágenes en el chat."""
-        with open(os.path.join(PROJECT_ROOT, 'niwa-app', 'frontend', 'src', 'features', 'chat', 'components', 'MessageBubble.tsx')) as f:
-            content = f.read()
-        assert 'extractImages' in content
-        assert 'generated-images' in content
-        assert 'oaidalleapiprodscus' in content
+    # test_chat_renders_images eliminado en PR-12.
+    # Dependía de niwa-app/frontend/src/features/chat/components/MessageBubble.tsx,
+    # archivo borrado en PR-10e al migrar el chat web a assistant_turn.
+    # No hay sustituto directo: el render de imágenes en el chat v0.2 cae en
+    # tests de frontend diferidos (ver PR-10a Decisión 2 y PR-10c Decisión sobre
+    # infra vitest). Dejar de volver a introducirlo acoplado al file tree viejo.
 
 
 class TestOpenClaw:
@@ -359,7 +414,15 @@ class TestMCPCatalogIntegrity:
     """Verify the MCP catalog matches the actual server surface."""
 
     def test_catalog_yaml_matches_server(self):
-        """Generated catalog YAML must expose all 21 tools from tasks-mcp."""
+        """Generated catalog YAML must expose all legacy tools from tasks-mcp.
+
+        v02 tools (``assistant_turn`` y familia) no se enumeran en
+        ``config/mcp-catalog/*.json``; su fuente autoritativa es
+        ``config/mcp-contract/v02-assistant.json`` y el filtrado lo aplica
+        el gateway (PR-09 Decisión 3, PR-11 Decisión 2). Este smoke valida
+        únicamente la simetría catalog ↔ legacy dispatcher; la invariante
+        del contract v02 vive en ``tests/test_mcp_contract.py``.
+        """
         import re
 
         # Get tools from server.py dispatcher
@@ -369,6 +432,10 @@ class TestMCPCatalogIntegrity:
         server_tools = set()
         for m in re.finditer(r'(?:if|elif)\s+name\s*==\s*["\'](\w+)["\']', content):
             server_tools.add(m.group(1))
+
+        # Excluir las tools v02 del dispatcher — viven en el contract.
+        v02_tool_names = _load_v02_tool_names(content)
+        server_tools -= v02_tool_names
 
         # Get tools from catalog JSONs
         catalog_dir = os.path.join(PROJECT_ROOT, 'config', 'mcp-catalog')
@@ -511,27 +578,14 @@ class TestFrontendBuild:
                 assert not version.startswith('^') and not version.startswith('~'), \
                     f"{name}@{version} no está fijada"
 
-    def test_all_react_components_exist(self):
-        """Todos los componentes React esperados existen."""
-        src_dir = os.path.join(PROJECT_ROOT, 'niwa-app', 'frontend', 'src')
-        expected = [
-            'app/App.tsx', 'app/Router.tsx', 'app/theme.ts',
-            'shared/components/AppShell.tsx', 'shared/components/LoginPage.tsx',
-            'shared/api/client.ts', 'shared/api/queries.ts',
-            'features/chat/components/ChatView.tsx',
-            'features/tasks/components/TaskList.tsx',
-            'features/kanban/components/KanbanBoard.tsx',
-            'features/projects/components/ProjectList.tsx',
-            'features/system/components/SystemView.tsx',
-            'features/system/components/ServicesPanel.tsx',
-            'features/dashboard/components/DashboardView.tsx',
-            'features/metrics/components/MetricsDashboard.tsx',
-            'features/notes/components/NotesList.tsx',
-            'features/history/components/HistoryView.tsx',
-        ]
-        for f in expected:
-            path = os.path.join(src_dir, f)
-            assert os.path.exists(path), f"Componente faltante: {f}"
+    # test_all_react_components_exist eliminado en PR-12.
+    # Era una lista estática de rutas de componentes React; el árbol del
+    # frontend cambió con PR-10 (features/runs, features/routing,
+    # features/approvals, features/artifacts, features/settings) y con
+    # PR-10e (borrado del chat v0.1, ChatView.tsx entre otros). Mantener
+    # la lista sincronizada no detecta regresiones útiles — la señal real
+    # es `npm run build` en CI. El PR de infra de tests de frontend (ver
+    # PR-10a Decisión 2) será el lugar para un smoke del árbol.
 
 
 class TestExecutorQueue:
