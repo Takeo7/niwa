@@ -13,6 +13,7 @@ import { MetricsDashboard } from '../features/metrics/components/MetricsDashboar
 import { NotesList } from '../features/notes/components/NotesList';
 import { DashboardView } from '../features/dashboard/components/DashboardView';
 import { HistoryView } from '../features/history/components/HistoryView';
+import { ApprovalsPage } from '../features/approvals/components/ApprovalsPage';
 
 export function AppRouter() {
   return (
@@ -33,6 +34,7 @@ export function AppRouter() {
       <Route path="/metrics" element={<MetricsDashboard />} />
       <Route path="/notes" element={<NotesList />} />
       <Route path="/history" element={<HistoryView />} />
+      <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

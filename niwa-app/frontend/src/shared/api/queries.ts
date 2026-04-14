@@ -30,6 +30,9 @@ import type {
   BackendRun,
   BackendRunEvent,
   RoutingDecision,
+  Approval,
+  ApprovalStatus,
+  ApprovalDecision,
 } from '../types';
 
 // ── Tasks ──
@@ -652,6 +655,77 @@ export function useTaskRoutingDecision(
       }
     },
     enabled: !!taskId,
+  });
+}
+
+// ── Approvals (v0.2 — PR-10b) ──
+export function useApprovals(
+  status?: ApprovalStatus | 'all',
+) {
+  const qs = new URLSearchParams();
+  // ``all`` is a frontend-only sentinel — we send no filter for it
+  // so the backend returns every status.
+  if (status && status !== 'all') qs.set('status', status);
+  const query = qs.toString();
+  return useQuery({
+    queryKey: ['approvals', status ?? 'pending'],
+    queryFn: () =>
+      api<Approval[]>(`approvals${query ? `?${query}` : ''}`),
+    // Approvals are human-actioned — a 10s refetch keeps the list
+    // warm without hammering the backend.
+    refetchInterval: 10000,
+  });
+}
+
+export function useTaskApprovals(
+  taskId: string | null | undefined,
+) {
+  return useQuery({
+    queryKey: ['task-approvals', taskId],
+    queryFn: () => api<Approval[]>(`tasks/${taskId}/approvals`),
+    enabled: !!taskId,
+    refetchInterval: 10000,
+  });
+}
+
+export function useApproval(approvalId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['approval', approvalId],
+    queryFn: () => api<Approval>(`approvals/${approvalId}`),
+    enabled: !!approvalId,
+  });
+}
+
+export function useResolveApproval() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      decision,
+      resolution_note,
+    }: {
+      id: string;
+      decision: ApprovalDecision;
+      resolution_note?: string | null;
+    }) =>
+      apiPost<Approval>(`approvals/${id}/resolve`, {
+        decision,
+        resolution_note: resolution_note ?? null,
+      }),
+    onSuccess: (data) => {
+      // Global list + task-scoped list + single-approval view.
+      qc.invalidateQueries({ queryKey: ['approvals'] });
+      qc.invalidateQueries({
+        queryKey: ['task-approvals', data.task_id],
+      });
+      qc.invalidateQueries({ queryKey: ['approval', data.id] });
+      // The task's routing-decision surface surfaces a pending
+      // approval; invalidating it keeps RoutingTab in sync.
+      qc.invalidateQueries({
+        queryKey: ['task-routing', data.task_id],
+      });
+      qc.invalidateQueries({ queryKey: ['task', data.task_id] });
+    },
   });
 }
 
