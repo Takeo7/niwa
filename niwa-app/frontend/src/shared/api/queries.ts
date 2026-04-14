@@ -10,8 +10,6 @@ import type {
   TreeResponse,
   FolderFile,
   KanbanColumn,
-  ChatSession,
-  ChatMessage,
   Service,
   LLMModel,
   AgentsConfig,
@@ -167,62 +165,6 @@ export function useKanbanColumns() {
   return useQuery({
     queryKey: ['kanban', 'columns'],
     queryFn: () => api<KanbanColumn[]>('kanban-columns'),
-  });
-}
-
-// ── Chat ──
-export function useChatSessions() {
-  return useQuery({
-    queryKey: ['chat', 'sessions'],
-    queryFn: () => api<ChatSession[]>('chat/sessions'),
-  });
-}
-
-export function useChatMessages(sessionId: string | null) {
-  return useQuery({
-    queryKey: ['chat', 'messages', sessionId],
-    queryFn: () => api<ChatMessage[]>(`chat/sessions/${sessionId}/messages`),
-    enabled: !!sessionId,
-    refetchInterval: 3000,
-  });
-}
-
-export function useCreateChatSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data?: { title?: string }) =>
-      apiPost<ChatSession>('chat/sessions', data ?? {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['chat', 'sessions'] });
-    },
-  });
-}
-
-export function useSendChatMessage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { session_id: string; content: string }) =>
-      apiPost<{
-        user_message: ChatMessage;
-        assistant_message: ChatMessage;
-      }>('chat/send', data),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({
-        queryKey: ['chat', 'messages', vars.session_id],
-      });
-      qc.invalidateQueries({ queryKey: ['chat', 'sessions'] });
-    },
-  });
-}
-
-export function useDeleteChatSession() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (sessionId: string) =>
-      apiPost<{ ok: boolean }>(`chat/sessions/${sessionId}/delete`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['chat', 'sessions'] });
-    },
   });
 }
 
