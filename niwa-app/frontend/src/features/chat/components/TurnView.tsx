@@ -1,5 +1,6 @@
 import { Box, Group, Stack, Text } from '@mantine/core';
 import { RelativeTime } from '../../../shared/components/RelativeTime';
+import { LinkifiedText } from '../../../shared/components/LinkifiedText';
 import type { Turn } from '../types';
 import { ActionChips } from './ActionChips';
 import { TurnErrorBanner } from './TurnErrorBanner';
@@ -63,27 +64,22 @@ export function TurnView({ turn }: Props) {
         ) : turn.error ? (
           <Stack gap="xs">
             {turn.assistant_message ? (
-              <Text
-                size="sm"
-                style={{ whiteSpace: 'pre-wrap' }}
-              >
-                {turn.assistant_message}
-              </Text>
+              <LinkifiedText
+                text={turn.assistant_message}
+                taskIds={turn.task_ids}
+                approvalIds={turn.approval_ids}
+              />
             ) : null}
             <TurnErrorBanner turn={turn} />
           </Stack>
+        ) : turn.assistant_message ? (
+          <LinkifiedText
+            text={turn.assistant_message}
+            taskIds={turn.task_ids}
+            approvalIds={turn.approval_ids}
+          />
         ) : (
-          <Text
-            size="sm"
-            style={{
-              whiteSpace: 'pre-wrap',
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            {turn.assistant_message || (
-              <Text span c="dimmed" size="sm">(sin respuesta)</Text>
-            )}
-          </Text>
+          <Text span c="dimmed" size="sm">(sin respuesta)</Text>
         )}
 
         <ActionChips turn={turn} />
