@@ -1,0 +1,18 @@
+{
+  "contract_version": "v02-assistant",
+  "tools": [
+    "assistant_turn",
+    "task_list",
+    "task_get",
+    "task_create",
+    "task_cancel",
+    "task_resume",
+    "approval_list",
+    "approval_respond",
+    "run_tail",
+    "run_explain",
+    "project_context"
+  ],
+  "transport": "streamable-http",
+  "notes": "MCP contract for Assistant mode (OpenClaw). Tools map 1:1 to POST /api/assistant/turn and /api/assistant/tools/{name}. The assistant_turn tool can take up to 30s (internal LLM deadline). Channel is required and passed explicitly by the MCP client."
+}
