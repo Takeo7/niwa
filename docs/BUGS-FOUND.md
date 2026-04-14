@@ -105,3 +105,19 @@ Formato sugerido:
 **Ubicación:** `niwa-app/backend/assistant_service.py:468` (`d.get("reason_summary_json")` debería ser `d.get("reason_summary")`). Columna real: `niwa-app/db/schema.sql:287` y `niwa-app/db/migrations/007_v02_execution_core.sql:60`.
 **Severidad:** media (la tool run_explain pierde información de auditoría en su output; no causa crash pero devuelve datos incompletos).
 **PR futuro donde se arreglará:** pendiente de asignar (fix trivial: cambiar `"reason_summary_json"` a `"reason_summary"` en assistant_service.py).
+
+## 2026-04-14 — encontrado durante PR-10a
+
+### Bug 12: test_pr01_schema no incluye contract_version en las columnas esperadas de routing_decisions
+
+**Descripción:** `tests/test_pr01_schema.py::TestTableStructure::test_routing_decisions_columns` compara el conjunto de columnas esperadas contra las reales. PR-09 añadió la columna `contract_version` a `routing_decisions` (migration 011), pero el test no se actualizó. Resultado: el test falla con `extra={'contract_version'}`. Pre-existente a PR-10a — reproducible en la rama limpia en cuanto se aplica la migration 011.
+**Ubicación:** `tests/test_pr01_schema.py:493-499` (el set `expected` no incluye `'contract_version'`).
+**Severidad:** baja (falso positivo en tests, no afecta funcionalidad).
+**PR futuro donde se arreglará:** pendiente de asignar (fix trivial: añadir `'contract_version'` al set `expected`).
+
+### Bug 13: test_assistant_turn_endpoint falla en full-suite por module-state pollution
+
+**Descripción:** `tests/test_assistant_turn_endpoint.py` confía en `os.environ["NIWA_APP_AUTH_REQUIRED"] = "0"` antes de `import app`, pero `NIWA_APP_AUTH_REQUIRED` en `app.py` se evalúa a nivel de módulo al importar. Si otro test (`test_assistant_tool_endpoints.py` u otros) ya importó `app` con auth=1 previamente, `sys.modules["app"]` está cacheado y el env var se ignora. Los 7 tests del archivo pasan cuando se ejecutan aislados pero fallan cuando `pytest tests/` recorre toda la suite. Reproducible en la rama sin cambios de PR-10a.
+**Ubicación:** `tests/test_assistant_turn_endpoint.py:62-95` (fixture `server`).
+**Severidad:** baja (falso negativo en CI full-suite; los tests son correctos en sí).
+**PR futuro donde se arreglará:** pendiente de asignar (fix: reemplazar el env var por `app.NIWA_APP_AUTH_REQUIRED = False` directamente tras el import, mismo patrón que aplica `test_runs_endpoints.py`).

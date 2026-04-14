@@ -465,3 +465,95 @@ Se añaden comentarios `TODO PR-11: pin to a fixed tag` en ambas líneas. La raz
 **Motivo:** El skill file es un documento instructivo para OpenClaw, no una configuración técnica. Su contenido debe reflejar las tools que OpenClaw realmente ve, que depende de cómo PR-11 configure el NIWA_MCP_CONTRACT.
 **Alternativas consideradas:** Actualizar ahora — rechazado porque sería trabajo de PR-11 y podría quedar stale si PR-11 cambia la configuración.
 **Impacto:** Ninguno inmediato. PR-11 debe actualizar el skill file.
+
+## 2026-04-14 — PR-10a
+
+### Decisión 1: Promover `TaskDetail` de Modal a ruta `/tasks/:taskId` con sub-tabs
+
+**Decisión:** `TaskDetail` deja de ser un Mantine `Modal` y pasa a ser una página con rutas anidadas. URL canónicas:
+  - `/tasks/:taskId`          → tab "Detalles" (`TaskDetailsTab`, body de edición migrado desde el Modal previo)
+  - `/tasks/:taskId/runs`     → tab "Runs" (`RunsTab` con `RunList` + `RunTimeline`)
+  - `/tasks/:taskId/routing`  → tab "Routing" (`RoutingTab`)
+
+El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outlet />` pasando el task al contexto del outlet para que los hijos no refetcheen. `TaskList` y `KanbanBoard` ahora hacen `navigate(\`/tasks/\${id}\`)` en lugar de abrir modal; el archivo antiguo `features/tasks/components/TaskDetail.tsx` se elimina.
+
+**Motivo:** El volumen informacional de PR-10a (lista de runs + timeline granular de eventos + explicación de routing) excede lo razonable para un Modal. Más importante: el Modal no tiene URL estable, no soporta back/forward ni deep-linking, y no permite compartir enlace a "el run que falló en la tarea X". Mi primera propuesta (tabs dentro del Modal) se revirtió tras feedback del humano. La promoción a ruta replantea el patrón que PR-10b/c/e también usarán (approvals, artifacts, chat a nivel de tarea).
+
+**Alternativas consideradas:**
+- Modal con Tabs internas (propuesta original, rechazada). Sin URL estable, incompatible con compartir enlaces.
+- Modal + rutas separadas para Runs/Routing (opción B del humano). Requeriría duplicar el header de tarea en múltiples vistas y dejar el Modal como punto de entrada asimétrico.
+- Promover solo Runs/Routing a rutas, Detalles sigue en Modal. Inconsistente.
+
+**Impacto:** Router gana 3 rutas; `TaskList.onRowClick` y `KanbanBoard.onTaskClick` pasan a `navigate`. El patrón queda como plantilla para PR-10b (`/tasks/:id/approvals`), PR-10c (`/tasks/:id/artifacts`) y cualquier otra vista de tarea futura. Cero dependencias npm añadidas — `react-router-dom@7` ya estaba en el árbol.
+
+### Decisión 2: Tests de UI diferidos hasta que se añada vitest
+
+**Decisión:** PR-10a no añade infra de tests de frontend (vitest, @testing-library/react, jsdom, happy-dom). Los componentes nuevos (`StatusBadge`, `Timeline`, `DurationLabel`, `RelativeTime`, `MonoId`, `RunList`, `RunTimeline`, `RunsTab`, `RoutingTab`, `TaskDetailPage`, `TaskDetailsTab`) quedan sin cobertura de tests unitarios. Tests de backend (32 nuevos en `test_runs_endpoints.py` + `test_runs_service_read_queries.py`) cubren el contrato HTTP que consume la UI.
+
+**Motivo:** `package.json` no declara ningún runner de tests. Montar vitest + configuración + mocks de TanStack Query + MantineProvider + BrowserRouter en PR-10a mezclaría un PR de producto con uno de infraestructura. El humano lo confirmó vía escalado.
+
+**Alternativas consideradas:**
+- Añadir vitest ahora — rechazado: scope creep + decisión de infra que debe coordinarse con el lint/CI actual.
+- Tests con Playwright / Cypress — descartado por coste de infra y lentitud en CI.
+
+**Impacto:** Cuando se añada vitest (PR dedicado, candidato: antes de PR-12 "Tests de verdad"), escribir tests unitarios para los componentes shared/ primero (son puros, sin red), luego para las hooks de `features/runs/` con `QueryClient` mockeado, y finalmente un smoke test por página.
+
+### Decisión 3: `TaskDetail` Modal eliminado, no coexiste con la nueva ruta
+
+**Decisión:** `features/tasks/components/TaskDetail.tsx` se elimina del árbol de fuentes en este PR. No se deja como wrapper deprecated ni alias.
+
+**Motivo:** Regla del SPEC apartado 8: "si es unused, bórralo completamente". Dos consumidores (`TaskList`, `KanbanBoard`) se migran en el mismo PR, así que no queda ningún import colgante.
+
+**Impacto:** Cualquier rama abierta que importe `TaskDetail` tendrá conflicto de import. Las dos migraciones son visibles en el diff del PR.
+
+### Decisión 4: Endpoints de lectura en `runs_service.py`, no módulo nuevo
+
+**Decisión:** Los cuatro helpers nuevos (`list_runs_for_task`, `get_run_detail`, `list_events_for_run`, `get_routing_decision_for_task`) viven en `niwa-app/backend/runs_service.py`, no en un módulo separado `runs_api.py` ni `runs_queries.py`.
+
+**Motivo:** El módulo ya es la home del dominio "runs". Cuatro funciones de lectura caben sin que el archivo crezca desproporcionadamente (~190 líneas añadidas sobre ~200 previas). Añadir un módulo por cada slice de PR-10 crearía fragmentación artificial.
+
+**Alternativas consideradas:**
+- Módulo dedicado `runs_api.py` — rechazado por sobre-ingeniería para 4 funciones.
+- Embebido en `app.py` — rechazado: `app.py` ya es el monstruo que PR-03 dejó documentado evitar.
+
+**Impacto:** Si PR-10b/c/d añade helpers similares de lectura, se evalúa si el archivo sigue siendo legible. Si supera ~800 líneas, extraer.
+
+### Decisión 5: Bug 11 esquivado por lectura directa de columna
+
+**Decisión:** `get_routing_decision_for_task()` lee `reason_summary` directamente de la tabla `routing_decisions`. No pasa por `assistant_service._tool_run_explain`, que contiene Bug 11 (lee `d.get("reason_summary_json")`, columna inexistente).
+
+**Motivo:** Instrucción explícita del humano en el prompt de PR-10a. Corregir el bug pertenece a un PR de limpieza distinto.
+
+**Impacto:** La vista de Routing muestra el reason real siempre que la columna esté poblada. El test `test_reason_summary_read_directly_bypasses_bug_11` queda como guarda anti-regresión.
+
+### Decisión 6: Shape de runs incluye el backend_profile joined
+
+**Decisión:** `list_runs_for_task` y `get_run_detail` hacen `LEFT JOIN backend_profiles` y exponen `backend_profile_slug` + `backend_profile_display_name` en el mismo payload. La UI no hace una segunda query por profile.
+
+**Motivo:** Densidad informacional alta y tabla plana son expectativa del registro editorial. Evitar N+1 queries desde el cliente. `LEFT JOIN` (no `INNER JOIN`) porque `backend_profile_id` puede ser NULL si el profile fue borrado con `ON DELETE SET NULL`.
+
+**Impacto:** Si en un futuro `backend_profiles` gana más columnas que interese exponer, se añaden al SELECT con un solo cambio.
+
+### Decisión 7: Events ordenados por `created_at ASC, rowid ASC`
+
+**Decisión:** `list_events_for_run` ordena por `created_at ASC, rowid ASC`. SQLite mantiene `rowid` en orden de inserción, así que sirve como desempate estable cuando los eventos se emiten dentro del mismo segundo (timestamps se truncan a segundos por `_now_iso()`).
+
+**Motivo:** El adapter emite varios eventos por segundo durante tool loops. Ordenar solo por `created_at` produciría orden no determinista cuando coinciden timestamps.
+
+**Alternativas consideradas:**
+- Cambiar `_now_iso()` a microsegundos — fuera de scope, afecta a muchos callers.
+- Secundario `id ASC` con UUIDs — no determinista porque UUIDs son aleatorios.
+
+**Impacto:** La timeline de la UI respeta el orden cronológico real de emisión.
+
+### Decisión 8: `/api/tasks/:id/routing-decision` devuelve 404 cuando no hay decisión
+
+**Decisión:** El endpoint responde `404` con `{"error": "no_decision"}` cuando la tarea existe pero aún no tiene routing decision (ej: tarea en `inbox` pre-routing, tarea creada antes de v0.2). El hook `useTaskRoutingDecision` intercepta el 404 y devuelve `null` en lugar de propagar el error.
+
+**Motivo:** Es un estado normal, no una condición de error. Un hook que renderiza error rojo ante la ausencia de datos legítimos ensucia la UX. La separación "404 = no hay dato" vs "500/otro = falló algo" preserva la semántica HTTP.
+
+**Alternativas consideradas:**
+- Devolver `200 {}` — ambiguo, rompe el discriminador entre "sin datos" y "respuesta vacía por error parseo".
+- Exponer `routing_decision: null` dentro de un payload más ancho — obliga al cliente a diferenciar "no hay tarea" de "no hay decisión", complicando tipado.
+
+**Impacto:** La `RoutingTab` renderiza estado vacío con mensaje instructivo cuando no hay decisión; el resto de la UI no se rompe.
