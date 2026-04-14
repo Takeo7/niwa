@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     fallback_chain_json     TEXT,
     estimated_resource_cost TEXT,
     quota_risk              TEXT,
+    contract_version        TEXT,
     created_at              TEXT NOT NULL
 );
 
