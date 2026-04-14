@@ -69,6 +69,7 @@ SPEC_TASK_TRANSITIONS = {
 
 SPEC_RUN_TRANSITIONS = {
     ('queued', 'starting'),
+    ('queued', 'failed'),              # PR-07: no-credentials direct fail
     ('starting', 'running'),
     ('starting', 'waiting_approval'),  # PR-05: pre-exec denial
     ('starting', 'failed'),            # PR-05: pre-exec denial

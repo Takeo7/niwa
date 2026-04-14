@@ -88,8 +88,8 @@ _SEED_PROFILES: list[dict[str, Any]] = [
         "backend_kind": "codex",
         "runtime_kind": "cli",
         "default_model": None,
-        "enabled": 0,
-        "priority": 0,
+        "enabled": 1,
+        "priority": 5,
     },
 ]
 
@@ -106,7 +106,7 @@ def get_execution_registry(db_conn_factory) -> BackendRegistry:
     """
     registry = BackendRegistry()
     registry.register("claude_code", ClaudeCodeAdapter(db_conn_factory=db_conn_factory))
-    registry.register("codex", CodexAdapter())
+    registry.register("codex", CodexAdapter(db_conn_factory=db_conn_factory))
     return registry
 
 
@@ -115,6 +115,9 @@ def seed_backend_profiles(conn) -> int:
 
     Uses ``INSERT OR IGNORE`` keyed on ``slug`` (UNIQUE) so this is
     safe to call on every startup — existing rows are never overwritten.
+
+    After inserting, calls ``upgrade_codex_profile()`` to enable codex
+    on existing installs that still have the old defaults (PR-07).
 
     *conn* must be a ``sqlite3.Connection`` with WAL/FK pragmas already
     set.  The caller is responsible for committing.
@@ -155,4 +158,38 @@ def seed_backend_profiles(conn) -> int:
             inserted += 1
             logger.info("Seeded backend_profile: %s", slug)
 
+    # PR-07: upgrade codex from old defaults to enabled
+    upgrade_codex_profile(conn)
+
     return inserted
+
+
+def upgrade_codex_profile(conn) -> bool:
+    """Enable the codex profile for existing installs.
+
+    Only upgrades if the current values are the PR-03 defaults
+    (``enabled=0 AND priority=0``).  If the user has manually
+    changed either field, their choice is respected.
+
+    Also refreshes ``capabilities_json`` to match the current
+    adapter capabilities (``resume_modes`` changed from
+    ``["new_session"]`` to ``[]`` in PR-07).
+
+    Returns True if the row was updated.
+    """
+    registry = get_default_registry()
+    adapter = registry.resolve("codex")
+    caps_json = json.dumps(adapter.capabilities())
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cursor = conn.execute(
+        "UPDATE backend_profiles "
+        "SET enabled = 1, priority = 5, "
+        "    capabilities_json = ?, updated_at = ? "
+        "WHERE slug = 'codex' AND enabled = 0 AND priority = 0",
+        (caps_json, now),
+    )
+    updated = cursor.rowcount > 0
+    if updated:
+        logger.info("Upgraded codex profile: enabled=1 priority=5")
+    return updated

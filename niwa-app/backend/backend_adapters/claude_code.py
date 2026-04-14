@@ -154,6 +154,7 @@ class ClaudeCodeAdapter(BackendAdapter):
             cmd=cmd, cwd=cwd, run=run, task=task,
             prompt_text=prompt, artifact_root=artifact_root,
             capability_profile=capability_profile,
+            extra_env=profile.get("_extra_env"),
         )
 
     def resume(self, task: dict, prior_run: dict, new_run: dict,
@@ -190,6 +191,7 @@ class ClaudeCodeAdapter(BackendAdapter):
             cmd=cmd, cwd=cwd, run=new_run, task=task,
             prompt_text=prompt, artifact_root=artifact_root,
             capability_profile=capability_profile,
+            extra_env=profile.get("_extra_env"),
         )
 
     def cancel(self, run: dict) -> dict:
@@ -620,7 +622,8 @@ class ClaudeCodeAdapter(BackendAdapter):
     def _execute(self, *, cmd: list[str], cwd: str, run: dict,
                  task: dict, prompt_text: str,
                  artifact_root: str | None,
-                 capability_profile: dict | None = None) -> dict:
+                 capability_profile: dict | None = None,
+                 extra_env: dict | None = None) -> dict:
         """Core execution loop: spawn process, stream events, finish run.
 
         This method blocks until the Claude process exits.  The caller
@@ -629,6 +632,11 @@ class ClaudeCodeAdapter(BackendAdapter):
         A daemon heartbeat thread runs independently, updating
         ``heartbeat_at`` every ``HEARTBEAT_INTERVAL_SECONDS`` regardless
         of stdout activity.
+
+        *extra_env*, when provided, is merged into the subprocess
+        environment.  Used by the executor to inject credentials
+        (``ANTHROPIC_API_KEY``, ``OPENAI_ACCESS_TOKEN``, etc.)
+        without polluting ``os.environ``.
         """
         import runs_service
 
@@ -645,6 +653,8 @@ class ClaudeCodeAdapter(BackendAdapter):
             # Spawn the CLI process
             env = os.environ.copy()
             env["NO_COLOR"] = "1"
+            if extra_env:
+                env.update(extra_env)
 
             proc = subprocess.Popen(
                 cmd,

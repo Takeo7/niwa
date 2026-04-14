@@ -159,8 +159,9 @@ class TestCodexCapabilities:
         """capabilities() returns all 4 resource-budget fields."""
         assert _REQUIRED_BUDGET_KEYS.issubset(self.caps.keys())
 
-    def test_resume_modes_limited(self):
-        assert self.caps["resume_modes"] == ["new_session"]
+    def test_resume_modes_empty(self):
+        """PR-07: Codex has no resume support."""
+        assert self.caps["resume_modes"] == []
 
     def test_fs_modes_restricted(self):
         assert "full" not in self.caps["fs_modes"]
@@ -238,18 +239,41 @@ class TestClaudeCodeImplemented:
         assert "NotImplementedError" not in source
 
 
-class TestCodexStubs:
+class TestCodexImplemented:
+    """PR-07 replaced stubs with real implementations.
+
+    Verify the methods are callable (no NotImplementedError).
+    """
 
     def setup_method(self):
         self.adapter = CodexAdapter()
+
+    def test_parse_usage_signals_is_implemented(self):
+        result = self.adapter.parse_usage_signals("raw output")
+        assert isinstance(result, dict)
+
+    def test_collect_artifacts_is_implemented(self):
+        result = self.adapter.collect_artifacts(
+            {"id": "r1", "artifact_root": None})
+        assert isinstance(result, list)
+
+    def test_cancel_is_implemented(self):
+        result = self.adapter.cancel({"id": "r1"})
+        assert isinstance(result, dict)
+
+    def test_heartbeat_is_implemented(self):
+        result = self.adapter.heartbeat({"id": "r1"})
+        assert isinstance(result, dict)
 
     @pytest.mark.parametrize("method", [
         "start", "resume", "cancel", "heartbeat",
         "collect_artifacts", "parse_usage_signals",
     ])
-    def test_raises_not_implemented(self, method):
-        with pytest.raises(NotImplementedError, match="PR-07"):
-            getattr(self.adapter, method)(*_STUB_ARGS[method])
+    def test_methods_are_not_stubs(self, method):
+        """No method raises NotImplementedError with 'PR-07'."""
+        import inspect
+        source = inspect.getsource(getattr(self.adapter, method))
+        assert "NotImplementedError" not in source
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -287,7 +311,8 @@ class TestSeedBackendProfiles:
 
         codex_row = next(r for r in rows if r["slug"] == "codex")
         assert codex_row["backend_kind"] == "codex"
-        assert codex_row["enabled"] == 0
+        # PR-07: fresh installs get codex enabled=1 priority=5
+        assert codex_row["enabled"] == 1
 
     def test_seed_idempotent(self):
         """Running seed twice does not duplicate or overwrite rows."""
