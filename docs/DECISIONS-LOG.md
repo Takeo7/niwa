@@ -903,3 +903,15 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 
 **Impacto:** `LinkifiedText` es ~40 líneas. Los chips de IDs canónicos (`task_ids`, `run_ids`, `approval_ids` devueltos por `actions_taken`) se renderizan en `TurnView` como lista horizontal con `MonoId` + icono de navegación. `run_ids` navegan a `/tasks/:taskId/runs` si hay task_id asociado — si no, a `/tasks` (run_id sin task_id es raro en este contrato; el assistant casi siempre devuelve tasks y runs juntos).
 
+## 2026-04-14 — PR-11
+
+### Decisión 1: Pin de `docker/mcp-gateway` a `v0.40.4` via `NIWA_MCP_GATEWAY_IMAGE`
+
+**Decisión:** `docker-compose.yml.tmpl` sustituye `docker/mcp-gateway:latest` por la variable `${NIWA_MCP_GATEWAY_IMAGE}` en las dos ocurrencias (servicios `mcp-gateway` y `mcp-gateway-sse`, líneas 49 y 89 antes del cambio). `setup.py` declara `NIWA_MCP_GATEWAY_IMAGE_DEFAULT = "docker/mcp-gateway:v0.40.4"` y `execute_install()` usa ese valor salvo que el operador exporte `NIWA_MCP_GATEWAY_IMAGE` en el entorno antes del install.
+
+**Motivo:** PR-09 Decisión 6 defirió el pin a PR-11 porque pinnear sin validar un tag existente rompía installs. En 2026-04-14 la consulta a Docker Hub devuelve `v0.40.4` como release estable más reciente (semver, multi-arch `linux/amd64` + `linux/arm64`, publicada hace 5 días). Usar `v0.40.4` en lugar de un tag mayor (`v2`) mantiene el determinismo exigido por el SPEC PR-11 ("Imágenes Docker pinneadas, no `latest` en quick mode"). La variable permite ascender sin parchar el template.
+
+**Alternativas consideradas:** (a) Usar `v2` (tag mayor) — rechazado porque sigue siendo rolling dentro del mayor, el SPEC pide pin fijo. (b) Omitir la variable y hardcodear `v0.40.4` — rechazado porque operadores que necesiten un pin distinto tendrían que editar el template generado, lo cual el comentario del template prohíbe explícitamente. (c) Dejar `:latest` — violación directa del SPEC.
+
+**Impacto:** `secrets/mcp.env` gana la clave `NIWA_MCP_GATEWAY_IMAGE`. Installs existentes que regeneren el compose (via `niwa install` o `niwa update`) empezarán a usar el tag pinneado. README y compose template reflejan el pin. Cuando Docker publique una versión estable nueva, actualizar `NIWA_MCP_GATEWAY_IMAGE_DEFAULT` en `setup.py` (un solo sitio).
+

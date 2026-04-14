@@ -250,4 +250,3 @@ They don't interfere.
 - **Backup** command (back up `~/.niwa/data/niwa.sqlite3` yourself)
 - **Built-in upgrade** (manual pull + reinstall for now)
 - **Multi-user / RBAC** (single user always)
-- **Pinned image versions** (uses `:latest` for upstream images — bump risk)

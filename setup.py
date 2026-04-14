@@ -30,6 +30,11 @@ from typing import Optional
 
 NIWA_VERSION = "0.1.0"
 
+# Docker image pin for the MCP gateway (PR-11, 2026-04).
+# See docs/DECISIONS-LOG.md for rationale. Override at install time with
+#   NIWA_MCP_GATEWAY_IMAGE=docker/mcp-gateway:<tag> ./niwa install ...
+NIWA_MCP_GATEWAY_IMAGE_DEFAULT = "docker/mcp-gateway:v0.40.4"
+
 # ────────────────────────── pretty output ──────────────────────────
 NO_COLOR = os.environ.get("NO_COLOR") or not sys.stdout.isatty()
 RESET = "" if NO_COLOR else "\033[0m"
@@ -1253,6 +1258,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_TERMINAL_PORT": str(cfg.terminal_port),
         "NIWA_BIND_HOST": cfg.bind_host,
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
+        "NIWA_MCP_GATEWAY_IMAGE": os.environ.get("NIWA_MCP_GATEWAY_IMAGE", NIWA_MCP_GATEWAY_IMAGE_DEFAULT),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],
         "NIWA_PLATFORM_SERVER_NAME": cfg.server_names["platform"],

@@ -286,8 +286,8 @@ bin/niwa check              # pre-flight health verification
 | Container | Image | Purpose | Memory |
 |-----------|-------|---------|--------|
 | `socket-proxy` | `tecnativa/docker-socket-proxy:0.3.0` | Filtered Docker socket proxy | 64 MB |
-| `mcp-gateway` | `docker/mcp-gateway:latest` | Streamable HTTP transport | 256 MB |
-| `mcp-gateway-sse` | `docker/mcp-gateway:latest` | Legacy SSE transport | 256 MB |
+| `mcp-gateway` | `docker/mcp-gateway:v0.40.4` | Streamable HTTP transport (pinned) | 256 MB |
+| `mcp-gateway-sse` | `docker/mcp-gateway:v0.40.4` | Legacy SSE transport (pinned) | 256 MB |
 | `app` | `<instance>-app:<version>` | Niwa web app | 256 MB |
 | `caddy` | `caddy:2-alpine` | Reverse proxy with bearer auth | 64 MB |
 
@@ -297,7 +297,7 @@ bin/niwa check              # pre-flight health verification
 |-----------|-------|---------|--------|
 | `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal (privileged) | 128 MB |
 
-Base images (Python, Node) and custom builds are pinned to specific versions. Third-party services (`docker/mcp-gateway`, `caddy`) use stable rolling tags (`latest`, `2-alpine`) that auto-update with patch releases.
+Base images (Python, Node) and custom builds are pinned to specific versions. `docker/mcp-gateway` is pinned to a fixed semver tag (`v0.40.4` at time of writing) to avoid operational drift in `install --quick`; override with `NIWA_MCP_GATEWAY_IMAGE` at install time to upgrade. `caddy:2-alpine` tracks the Caddy 2.x major release.
 
 ## MCP Catalog
 
