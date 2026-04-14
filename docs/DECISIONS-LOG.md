@@ -802,3 +802,100 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 - Permitir editar `display_name` — trivial pero irrelevante para la semántica; se deja fuera por consistencia (read-only mientras no haya caso de uso).
 
 **Impacto:** La UI expone claramente los campos como read-only con un label "read-only en v0.2". Cualquier ampliación requiere (a) validación de shape en backend, (b) actualizar el frontend para editar. Escalado de scope, no deuda técnica silenciosa.
+
+## 2026-04-14 — PR-10e
+
+### Decisión 1: Borrado completo de `features/chat/` legacy + limpieza de tipos/hooks/store asociados
+
+**Decisión:** Se elimina la totalidad del chat legacy del frontend React: `niwa-app/frontend/src/features/chat/{components,hooks}/*` (ChatView, ChatInput, MessageBubble, useChat re-export). Además se retiran del shared los 5 hooks consumidos únicamente por ChatView (`useChatSessions`, `useChatMessages`, `useCreateChatSession`, `useSendChatMessage`, `useDeleteChatSession` en `shared/api/queries.ts`), los tipos `ChatSession` y `ChatMessage` (`shared/types/index.ts`) y las propiedades `activeChat`/`setActiveChat` del zustand store (`shared/stores/app.ts`). Antes del borrado se auditó con grep que ninguna otra feature consume esos símbolos.
+
+**Motivo:** SPEC PR-10 exige "chat web mínimo sobre assistant_turn". El chat legacy (3-tier Haiku→Opus→Sonnet via `source='chat'` tasks) es incompatible semánticamente con el nuevo tier conversacional (PR-08). Mantener ambos frontends sobre las mismas tablas introduce confusión y duplica estado. Los hooks/tipos compartidos solo tienen un consumidor (ChatView); moverlos o mantenerlos sería código muerto.
+
+**Alternativas consideradas:**
+- Mantener el chat legacy en paralelo bajo `/chat-legacy` — rechazado: el SPEC pide un único chat web, y el esfuerzo de mantener dos duplica todo el estado tanto de UI como de queries.
+- Conservar los hooks compartidos por si un PR futuro los necesita — rechazado: escalar sin consumidores produce deuda. Cuando un futuro PR necesite persistir chat sessions lo hará bajo el contrato v0.2 (assistant_turn).
+
+**Impacto:** `Router.tsx` pasa a importar `ChatPage` desde `features/chat/components/ChatPage.tsx` (nuevo). El nav de `AppShell` conserva el item "Chat" con path `/chat` sin cambios. El build TypeScript no tiene referencias colgantes tras el borrado.
+
+### Decisión 2: Endpoints HTTP del chat legacy se preservan intactos
+
+**Decisión:** Los endpoints `/api/chat/sessions` (GET/POST), `/api/chat/sessions/:id/messages` (GET), `/api/chat/sessions/:id/delete` (POST) y `/api/chat/send` (POST) en `niwa-app/backend/app.py` se mantienen sin modificación. Las funciones `get_chat_sessions`, `create_chat_session`, `get_chat_messages`, `send_chat_message`, `delete_chat_session` tampoco se tocan.
+
+**Motivo:** Esos endpoints son consumidos por (a) `niwa-app/frontend/static/app.js` (SPA legacy v0.1 servida desde `/static/app.js` a quien abra `/static/index-legacy.html` manualmente; no es el default de producción pero sigue servida por `_serve_static`) y (b) indirectamente por `bin/task-executor.py` via tasks con `source='chat'` (pipeline 3-tier). PR-06 Dec 6 estableció que `routing_mode=legacy` sigue funcional hasta v0.3 y el pipeline v0.1 sigue vivo. Borrarlos rompería usuarios en modo legacy sin aviso.
+
+**Alternativas consideradas:**
+- Marcar los endpoints como deprecated con `410 Gone` — rechazado: el pipeline legacy (fuera de scope de PR-10e) los usa.
+- Borrarlos asumiendo que nadie los usa — rechazado: instrucción explícita del prompt + riesgo de regresión silenciosa.
+
+**Impacto:** La deuda queda explícita: un PR futuro (probablemente PR que retire `routing_mode=legacy` a la vez que el pipeline v0.1) deberá eliminar los endpoints, las 5 funciones y la lógica de auto-ingest de tareas delegadas en `get_chat_messages` (líneas 931-996 de `app.py`).
+
+### Decisión 3: Nuevo endpoint `GET /api/chat-sessions/:id/messages` separado del legacy
+
+**Decisión:** Se añade un endpoint fresco `GET /api/chat-sessions/:id/messages` en `app.py` que devuelve una lista plana de mensajes (`id, role, content, task_id, created_at`) ordenados por `created_at ASC` para una `chat_sessions.id` dada. 404 si la sesión no existe. El path usa `chat-sessions` (guion) en lugar de `chat/sessions` (slash) precisamente para no colisionar con el legacy ni con el patrón `chat/sessions/:id/messages` que ya hace cosas invasivas (auto-complete de tasks pendientes, auto-inject de mensajes de tareas delegadas).
+
+**Motivo:** El endpoint legacy `GET /api/chat/sessions/:id/messages` no es una lectura pura: ejecuta side effects (ver `get_chat_messages` en `app.py:897-998`). El chat nuevo consume mensajes escritos por `assistant_service._persist_user_message()` y `_persist_assistant_message()` sin needing ningún auto-complete — leer y devolver. Reutilizar el endpoint legacy significaría ejecutar efectos irrelevantes en cada poll y generar mensajes "sistema" fantasma en la conversación v0.2.
+
+**Alternativas consideradas:**
+- Extender el endpoint legacy con un query param `?raw=1` que desactive los side effects — rechazado: ensucia el endpoint legacy sin beneficio.
+- No crear endpoint y leer directamente `chat_messages` desde el frontend via algún otro mecanismo — imposible, no hay acceso directo a DB desde el browser.
+
+**Impacto:** El nuevo endpoint es ~15 líneas en `app.py` + fila en la tabla de routing del handler. Tests propios en `tests/test_chat_sessions_endpoint.py`.
+
+### Decisión 4: `session_id` generado client-side con `crypto.randomUUID()`
+
+**Decisión:** El chat web genera un `session_id` nuevo al montarse el componente `ChatPage` con `crypto.randomUUID()`. El mismo id se reusa para todos los turns de la conversación. El botón "Nueva conversación" regenera. `assistant_service._ensure_session()` ya crea la fila en `chat_sessions` si el id no existe (ver `assistant_service.py:112-126`), por lo que no se necesita un endpoint explícito de "crear sesión".
+
+**Motivo:** El contrato de `assistant_turn` admite session_id arbitrario; si no existe, se crea. Esto nos permite evitar el round-trip "POST /sessions → usar id devuelto" que forzaba el legacy. Generar client-side simplifica el flujo y permite incluir el `session_id` incluso en la primera llamada (útil si el backend falla y el frontend quiere reintentar con el mismo id).
+
+**Alternativas consideradas:**
+- Crear endpoint `POST /api/chat-sessions` y llamar en mount → doble round-trip, UX innecesaria.
+- Usar `sessionStorage` para persistir el id entre recargas → scope creep; el SPEC pide "mínimo" y no pide persistencia cross-reload.
+
+**Impacto:** Recargar la página genera una sesión vacía nueva. Para v0.2 es aceptable — el SPEC explícitamente dice "suficiente con un botón 'Nueva conversación' que cree session_id nuevo. No añadas lista de conversaciones pasadas". Si un usuario quiere persistir entre reloads, lo resuelve un PR futuro.
+
+### Decisión 5: Selector de proyecto con pre-selección desde query param `?project=<slug>` + persistencia en `localStorage`
+
+**Decisión:** `ChatPage` carga `useProjects()` y muestra un `Mantine Select` obligatorio. El proyecto pre-seleccionado se resuelve en este orden: (a) query param `?project=<slug>` si presente y válido, (b) último proyecto usado (persistido en `localStorage` con clave `niwa.chat.lastProjectId`), (c) nada (placeholder "Elige un proyecto para empezar" — el input de mensaje queda deshabilitado).
+
+**Motivo:** El prompt pide "Si el usuario viene de /projects/:slug con contexto, pre-seleccionarlo". Un query param cubre ese caso sin necesidad de modificar `ProjectDetail` en este PR. `localStorage` evita al operador elegir el mismo proyecto en cada visita sin introducir backend state. Si ambos faltan, placeholder explícito.
+
+**Alternativas consideradas:**
+- Tomar el proyecto del primer item de `useProjects()` — rechazado: silencio semántico, el usuario puede terminar operando sobre el proyecto equivocado sin notarlo.
+- Modificar `ProjectDetail` para añadir un botón "Abrir en chat" — scope creep.
+
+**Impacto:** El selector queda visible en el header del `ChatPage`. `localStorage` guarda el último proyecto tras el primer turn exitoso. Ninguna feature existente se toca.
+
+### Decisión 6: Manejo de errores estructurados en el cliente — `fetch` crudo en lugar de `apiPost`
+
+**Decisión:** El hook `useChat` no usa `apiPost()` de `shared/api/client.ts` para el turn del assistant. Usa `fetch()` directo para capturar el body completo (incluye `error`, `message`, `session_id`) incluso en respuestas 4xx/5xx. `apiPost()` lanza `ApiError` que preserva el status pero descarta el `message` humano estructurado.
+
+**Motivo:** El contrato PR-08 devuelve JSON bien formado tanto en 200 como en 400/409 (ver `app.py:3917-3920`). La UI necesita el `message` para distinguir `routing_mode_mismatch` (HTTP 409 → banner claro a /settings), `project_not_found`, `llm_not_configured`, `empty_message`, etc. Cada error estructurado se mapea a un mensaje UI específico; para errores no estructurados (red, 500 sin body) se muestra un error genérico con el status.
+
+**Alternativas consideradas:**
+- Parsear `ApiError.message` (que contiene `body.error`) — rechazado: perdemos el `message` humano del backend.
+- Modificar `apiPost()` para devolver body completo en errores — rechazado: cambia contrato de todos los callers existentes, fuera de scope.
+
+**Impacto:** `useChat.ts` contiene la lógica de fetch directo (~30 líneas). Los demás hooks del chat (`useSessionMessages` para cargar historial al mount) sí usan `api()` normal porque esas rutas devuelven 200 o lanzan 404 sin body rico.
+
+### Decisión 7: Registro visual editorial — sin bubbles, sin avatares, sin timestamps absolutos
+
+**Decisión:** `TurnView` renderiza cada turn como un bloque textual separado por border-hairline, con (a) el mensaje del usuario en texto plano con prefijo sutil "Tú", (b) la respuesta del assistant en texto plano con prefijo sutil "Niwa", (c) si el turn tiene `actions_taken` no vacío, una fila de chips/badges con los IDs clicables, (d) `RelativeTime` al lado del prefijo con tooltip al timestamp absoluto. Mantine colors por defecto (`dimmed` para metadata). Nada de `Paper` con fondo de color, nada de `Avatar`, nada de burbujas.
+
+**Motivo:** El prompt prohíbe explícitamente el patrón ChatGPT-style. Linear/Raycast/Cursor hacen exactamente esto: texto denso, border-hairline, sin avatares. Es el registro editorial que el resto del producto (dashboard, lists) ya usa.
+
+**Alternativas consideradas:** N/A — decisión estética explícita del prompt.
+
+**Impacto:** El código es más simple (no hay cálculos de `justifyContent`, no hay theming de burbujas). El `ReactMarkdown` previamente usado en `MessageBubble` no se reusa: se muestra texto plano con `white-space: pre-wrap` (el contenido de `assistant_message` es texto plano per PR-08). `react-markdown` y `remark-gfm` siguen en package.json porque `NoteEditor` los usa.
+
+### Decisión 8: Linkificación de IDs mencionados — regex propia en un helper compartido
+
+**Decisión:** Se crea `niwa-app/frontend/src/shared/components/LinkifiedText.tsx` que toma un string y emite spans con `Link` a `/tasks/:id`, `/approvals/:id` según patrón. El regex detecta UUIDs con contexto (prefijos "tarea", "task", "approval", etc.) en el texto del `assistant_message`, y además procesa los IDs exactos de `actions_taken.task_ids`, `approval_ids`, `run_ids` como chips separados bajo el mensaje. La navegación usa `useNavigate` de react-router.
+
+**Motivo:** El prompt prohíbe introducir dependencias nuevas (react-markdown para linkificación es overkill; regex propia suficiente). El helper queda en `shared/` para reutilizarlo en PRs futuros si algún otro lugar necesita linkificar menciones.
+
+**Alternativas consideradas:**
+- Sólo renderizar chips de `actions_taken.*_ids` (sin scanear el texto) — más simple pero pierde referencias que el LLM hace en prosa. Compromiso: los chips son la fuente canónica; el escaneo del texto es bonus.
+- Usar `react-markdown` con renderers custom — rechazado por peso y porque el texto no es markdown.
+
+**Impacto:** `LinkifiedText` es ~40 líneas. Los chips de IDs canónicos (`task_ids`, `run_ids`, `approval_ids` devueltos por `actions_taken`) se renderizan en `TurnView` como lista horizontal con `MonoId` + icono de navegación. `run_ids` navegan a `/tasks/:taskId/runs` si hay task_id asociado — si no, a `/tasks` (run_id sin task_id es raro en este contrato; el assistant casi siempre devuelve tasks y runs juntos).
+
