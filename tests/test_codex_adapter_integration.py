@@ -411,3 +411,75 @@ class TestCodexCapabilityGate:
         ).fetchall()
         assert len(approvals) == 1
         assert approvals[0]["status"] == "pending"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. End-to-end: extra_env reaches the real subprocess
+# ═══════════════════════════════════════════════════════════════════
+
+FAKE_ENV_ECHO = os.path.join(ROOT_DIR, "tests", "fixtures",
+                             "fake_env_echo.py")
+
+
+class TestExtraEnvReachesSubprocess:
+    """Run fake_env_echo.py as the Codex binary and verify that
+    _extra_env vars appear in the subprocess output."""
+
+    def setup_method(self):
+        self.db_fd, self.db_path, self.conn = _make_db()
+        self.task_id, self.profile_id, self.rd_id, _ = (
+            _seed(self.conn))
+        self.adapter = CodexAdapter(
+            db_conn_factory=_db_factory(self.db_path))
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_cli = cx_module.CODEX_CLI_COMMAND
+        cx_module.CODEX_CLI_COMMAND = sys.executable
+
+    def teardown_method(self):
+        cx_module.CODEX_CLI_COMMAND = self._orig_cli
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_openai_token_reaches_subprocess(self):
+        """OPENAI_ACCESS_TOKEN set via _extra_env appears in the
+        subprocess's environment (verified via fake_env_echo.py)."""
+        art_root = os.path.join(self.tmpdir, "env-test")
+        run = runs_service.create_run(
+            self.task_id, self.rd_id, self.profile_id, self.conn,
+            backend_kind="codex", runtime_kind="cli",
+            artifact_root=art_root,
+        )
+
+        profile = {
+            "default_model": "o4-mini",
+            "command_template": f"{sys.executable} {FAKE_ENV_ECHO}",
+            "_extra_env": {
+                "OPENAI_ACCESS_TOKEN": "test-tok-e2e-789",
+                "CODEX_HOME": "/tmp/fake-codex-e2e",
+            },
+        }
+
+        result = self.adapter.start(
+            {"id": self.task_id, "title": "Env e2e test"},
+            run, profile, {},
+        )
+        assert result["status"] == "succeeded"
+
+        # The fake binary emits env_report in the result event.
+        # Read it from backend_run_events.
+        events = self.conn.execute(
+            "SELECT payload_json FROM backend_run_events "
+            "WHERE backend_run_id = ? AND event_type = 'result'",
+            (run["id"],),
+        ).fetchall()
+        assert len(events) >= 1
+
+        payload = json.loads(events[0]["payload_json"])
+        env_report = payload.get("env_report", {})
+        assert env_report.get("OPENAI_ACCESS_TOKEN") == \
+            "test-tok-e2e-789"
+        assert env_report.get("CODEX_HOME") == \
+            "/tmp/fake-codex-e2e"

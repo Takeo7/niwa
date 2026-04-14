@@ -510,3 +510,64 @@ class TestBuildPrompt:
     def test_empty_task_fallback(self):
         prompt = ClaudeCodeAdapter._build_prompt({})
         assert "Complete the assigned task" in prompt
+
+
+# ═══════════════════════════════════════════════════════════════════
+# extra_env reaches subprocess
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExtraEnvReachesSubprocess:
+
+    def setup_method(self):
+        self.db_fd, self.db_path, self.conn = _make_db()
+        self.task_id, self.profile_id, self.rd_id = _seed(self.conn)
+
+        def _factory():
+            c = sqlite3.connect(self.db_path, timeout=10)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA foreign_keys=ON")
+            return c
+
+        self.adapter = ClaudeCodeAdapter(db_conn_factory=_factory)
+        self.tmpdir = tempfile.mkdtemp()
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @patch("subprocess.Popen")
+    def test_extra_env_merged_into_subprocess(self, mock_popen_cls):
+        """profile['_extra_env'] is merged into the Popen env kwarg."""
+        stdout_data = "\n".join([
+            json.dumps({"type": "system", "subtype": "init",
+                        "session_id": "s1"}),
+            json.dumps({"type": "result", "model": "claude-sonnet-4-6",
+                        "usage": {}}),
+        ]) + "\n"
+        mock_popen_cls.return_value = _mock_popen_success(
+            stdout_data, returncode=0)
+
+        run = runs_service.create_run(
+            self.task_id, self.rd_id, self.profile_id, self.conn,
+            artifact_root=self.tmpdir,
+        )
+        profile = {
+            "default_model": "claude-sonnet-4-6",
+            "_extra_env": {
+                "ANTHROPIC_API_KEY": "sk-ant-fake-key",
+                "CLAUDE_CODE_OAUTH_TOKEN": "oauth-fake-tok",
+            },
+        }
+        self.adapter.start(
+            {"id": self.task_id, "title": "Env test"}, run, profile, {},
+        )
+
+        call_kwargs = mock_popen_cls.call_args
+        env_used = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+        assert env_used is not None
+        assert env_used["ANTHROPIC_API_KEY"] == "sk-ant-fake-key"
+        assert env_used["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-fake-tok"
+        assert env_used["NO_COLOR"] == "1"

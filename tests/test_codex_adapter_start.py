@@ -368,3 +368,29 @@ class TestCodexAdapterStart:
             {"type": "message"}) is None
         assert CodexAdapter._normalize_for_runtime_check(
             {"type": "result"}) is None
+
+    # ── extra_env reaches subprocess ──────────────────────────────
+
+    @mock.patch("subprocess.Popen")
+    def test_extra_env_merged_into_subprocess(self, mock_popen_cls):
+        """profile['_extra_env'] is merged into the subprocess env."""
+        events = [{"type": "result", "usage": {}}]
+        mock_popen_cls.return_value = _mock_popen(events, exit_code=0)
+
+        run = self._make_run()
+        profile = {
+            "default_model": "o4-mini",
+            "_extra_env": {
+                "OPENAI_ACCESS_TOKEN": "tok-test-123",
+                "CODEX_HOME": "/tmp/fake-codex-home",
+            },
+        }
+        self.adapter.start(self._task(), run, profile, {})
+
+        # Capture the env kwarg passed to Popen
+        call_kwargs = mock_popen_cls.call_args
+        env_used = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+        assert env_used is not None
+        assert env_used["OPENAI_ACCESS_TOKEN"] == "tok-test-123"
+        assert env_used["CODEX_HOME"] == "/tmp/fake-codex-home"
+        assert env_used["NO_COLOR"] == "1"
