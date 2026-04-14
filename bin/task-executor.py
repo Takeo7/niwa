@@ -915,8 +915,10 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
 
     1. Call routing_service.decide() to get routing decision.
     2. If approval required → leave task pending, return.
-    3. Create backend_run via runs_service.create_run().
-    4. Invoke adapter via backend_registry.get_execution_registry().
+    3. Execute primary backend via adapter.start().
+    4. On exception from primary → escalate once to the next
+       backend in the fallback chain (``relation_type='fallback'``).
+       Max 1 escalation per task (primary + 1 fallback).
     """
     try:
         import routing_service
@@ -929,8 +931,8 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
     task_dict = dict(task)
     task_id = task_dict["id"]
 
+    # Step 1: Route
     with _conn() as c:
-        # Step 1: Route
         decision = routing_service.decide(task_dict, c)
 
         if decision.get("approval_required"):
@@ -940,7 +942,6 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
                 task_id, decision["routing_decision_id"],
                 decision.get("approval_id"),
             )
-            # Revert task to pendiente — it's blocked by approval
             c.execute(
                 "UPDATE tasks SET status = 'pendiente', updated_at = ? "
                 "WHERE id = ?",
@@ -956,92 +957,138 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
             )
             return False, "[routing] No backend profile available"
 
-        # Fetch profile info for the run
-        profile = c.execute(
-            "SELECT * FROM backend_profiles WHERE id = ?",
-            (selected_profile_id,),
-        ).fetchone()
-        if not profile:
-            return False, f"[routing] Profile {selected_profile_id} not found"
-        profile = dict(profile)
+    # Step 2: Build the execution chain (primary + up to 1 fallback)
+    fallback_chain = decision.get("fallback_chain", [])
+    # Ensure selected is first; limit total attempts to 2 (primary + 1)
+    if selected_profile_id not in fallback_chain:
+        fallback_chain = [selected_profile_id] + fallback_chain
+    execution_chain = fallback_chain[:2]
 
-        # Step 2: Create backend_run
-        project_dir = _resolve_project_dir(task_dict.get("project_id"))
-        artifact_root = None
-        if project_dir:
-            artifact_root = str(
-                project_dir / ".niwa" / "runs" / decision["routing_decision_id"]
-            )
+    import capability_service
 
-        run = runs_service.create_run(
-            task_id=task_id,
-            routing_decision_id=decision["routing_decision_id"],
-            backend_profile_id=selected_profile_id,
-            conn=c,
-            backend_kind=profile.get("backend_kind"),
-            runtime_kind=profile.get("runtime_kind"),
-            model_resolved=profile.get("default_model"),
-            artifact_root=artifact_root,
-        )
+    prior_run_id: str | None = None
+    last_error = ""
 
-        # Update task with current_run_id
-        c.execute(
-            "UPDATE tasks SET current_run_id = ?, updated_at = ? WHERE id = ?",
-            (run["id"], _now_iso(), task_id),
-        )
-        c.commit()
+    for chain_idx, profile_id in enumerate(execution_chain):
+        relation_type = "fallback" if chain_idx > 0 else None
 
-        log.info(
-            "task %s: routed to %s (run=%s, decision=%s)",
-            task_id, profile["slug"], run["id"],
-            decision["routing_decision_id"],
-        )
-
-    # Step 3: Execute via adapter
-    try:
-        registry = get_execution_registry(_conn)
-        adapter = registry.resolve(profile["slug"])
-
-        # Get capability profile for pre-execution checks
-        import capability_service
         with _conn() as c:
-            cap_profile = capability_service.get_effective_profile(
-                task_dict.get("project_id"), c,
+            profile = c.execute(
+                "SELECT * FROM backend_profiles WHERE id = ?",
+                (profile_id,),
+            ).fetchone()
+            if not profile:
+                log.warning("task %s: profile %s not found, skipping",
+                            task_id, profile_id)
+                continue
+            profile = dict(profile)
+
+            project_dir = _resolve_project_dir(task_dict.get("project_id"))
+            artifact_root = None
+            if project_dir:
+                artifact_root = str(
+                    project_dir / ".niwa" / "runs"
+                    / decision["routing_decision_id"]
+                )
+
+            run = runs_service.create_run(
+                task_id=task_id,
+                routing_decision_id=decision["routing_decision_id"],
+                backend_profile_id=profile_id,
+                conn=c,
+                previous_run_id=prior_run_id,
+                relation_type=relation_type,
+                backend_kind=profile.get("backend_kind"),
+                runtime_kind=profile.get("runtime_kind"),
+                model_resolved=profile.get("default_model"),
+                artifact_root=artifact_root,
             )
 
-        result = adapter.start(task_dict, run, profile, cap_profile)
-        return True, f"[v02] Backend {profile['slug']} completed: {str(result)[:500]}"
+            c.execute(
+                "UPDATE tasks SET current_run_id = ?, updated_at = ? "
+                "WHERE id = ?",
+                (run["id"], _now_iso(), task_id),
+            )
+            c.commit()
 
-    except NotImplementedError:
-        log.error(
-            "task %s: adapter %s not implemented — failing task",
-            task_id, profile["slug"],
-        )
-        # Mark run as failed
-        try:
-            with _conn() as c:
-                runs_service.finish_run(
-                    run["id"], "failure", c,
-                    error_code="adapter_not_implemented",
-                    exit_code=1,
-                )
-        except Exception:
-            log.exception("Failed to mark run %s as failed", run["id"])
-        return False, f"[v02] adapter not implemented: {profile['slug']}"
+            log.info(
+                "task %s: %s to %s (run=%s, decision=%s)",
+                task_id,
+                "fallback" if relation_type else "routed",
+                profile["slug"], run["id"],
+                decision["routing_decision_id"],
+            )
 
-    except Exception as e:
-        log.exception("task %s: v0.2 execution failed: %s", task_id, e)
-        # Mark run as failed
+        # Step 3: Execute via adapter
         try:
+            registry = get_execution_registry(_conn)
+            adapter = registry.resolve(profile["slug"])
+
             with _conn() as c:
-                runs_service.finish_run(
-                    run["id"], "failure", c,
-                    error_code="executor_error",
-                    exit_code=1,
+                cap_profile = capability_service.get_effective_profile(
+                    task_dict.get("project_id"), c,
                 )
-        except Exception:
-            log.exception("Failed to mark run %s as failed", run["id"])
-        return False, f"[v02] Execution error: {e}"
+
+            result = adapter.start(task_dict, run, profile, cap_profile)
+            return True, (
+                f"[v02] Backend {profile['slug']} completed: "
+                f"{str(result)[:500]}"
+            )
+
+        except NotImplementedError:
+            log.warning(
+                "task %s: adapter %s not implemented — "
+                "escalating to fallback",
+                task_id, profile["slug"],
+            )
+            try:
+                with _conn() as c:
+                    runs_service.record_event(
+                        run["id"], "fallback_escalation", c,
+                        message=(
+                            f"Adapter {profile['slug']} not implemented. "
+                            f"Escalating to next backend in fallback chain."
+                        ),
+                    )
+                    runs_service.finish_run(
+                        run["id"], "failure", c,
+                        error_code="adapter_not_implemented",
+                        exit_code=1,
+                    )
+            except Exception:
+                log.exception("Failed to mark run %s as failed", run["id"])
+            prior_run_id = run["id"]
+            last_error = f"adapter not implemented: {profile['slug']}"
+            continue
+
+        except Exception as e:
+            log.warning(
+                "task %s: adapter %s raised exception — "
+                "escalating to fallback: %s",
+                task_id, profile["slug"], e,
+            )
+            try:
+                with _conn() as c:
+                    runs_service.record_event(
+                        run["id"], "fallback_escalation", c,
+                        message=(
+                            f"Adapter {profile['slug']} failed: {e}. "
+                            f"Escalating to next backend in fallback chain."
+                        ),
+                    )
+                    runs_service.finish_run(
+                        run["id"], "failure", c,
+                        error_code="executor_error",
+                        exit_code=1,
+                    )
+            except Exception:
+                log.exception("Failed to mark run %s as failed", run["id"])
+            prior_run_id = run["id"]
+            last_error = str(e)
+            continue
+
+    # All backends in the chain failed
+    return False, f"[v02] All backends in fallback chain failed: {last_error}"
 
 
 def _execute_task_legacy(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]:
