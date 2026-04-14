@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""CLI for MCP assistant mode smoke test — PR-09 Niwa v0.2.
+
+Usage:
+    bin/niwa-mcp-smoke [OPTIONS]
+
+Options:
+    --app-url URL       Niwa app URL (default: http://localhost:8080)
+    --gateway-url URL   MCP gateway URL (default: empty — skip gateway checks)
+    --token TOKEN       Service-to-service token (or set NIWA_MCP_SERVER_TOKEN)
+    --project-id ID     Project ID for roundtrip test (optional)
+    --session-id ID     Session ID for roundtrip test (default: smoke-test)
+    --contract PATH     Path to v02-assistant.json (auto-detected)
+    --json              Output as JSON instead of human-readable
+    -h, --help          Show this help
+
+Exit code: 0 if smoke test passes, 1 if it fails.
+"""
+import argparse
+import json
+import os
+import sys
+
+# Add backend to path
+_BACKEND = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "niwa-app", "backend",
+)
+if _BACKEND not in sys.path:
+    sys.path.insert(0, _BACKEND)
+
+from mcp_smoke import smoke_assistant_mode
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="MCP assistant mode smoke test",
+    )
+    parser.add_argument("--app-url", default="http://localhost:8080",
+                        help="Niwa app URL")
+    parser.add_argument("--gateway-url", default="",
+                        help="MCP gateway URL (optional)")
+    parser.add_argument("--token", default="",
+                        help="S2S token (or NIWA_MCP_SERVER_TOKEN env)")
+    parser.add_argument("--project-id", default="",
+                        help="Project ID for roundtrip test")
+    parser.add_argument("--session-id", default="smoke-test",
+                        help="Session ID for roundtrip test")
+    parser.add_argument("--contract", default=None,
+                        help="Path to v02-assistant.json")
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Output as JSON")
+    args = parser.parse_args()
+
+    token = args.token or os.environ.get("NIWA_MCP_SERVER_TOKEN", "")
+
+    result = smoke_assistant_mode(
+        gateway_url=args.gateway_url,
+        app_url=args.app_url,
+        token=token,
+        contract_path=args.contract,
+        project_id=args.project_id,
+        session_id=args.session_id,
+    )
+
+    if args.json_output:
+        print(json.dumps(result, indent=2))
+    else:
+        status = "PASS" if result["ok"] else "FAIL"
+        print(f"\nMCP Assistant Mode Smoke Test: {status}")
+        print(f"Duration: {result['duration_ms']}ms\n")
+
+        for step in result["steps"]:
+            icon = "OK" if step["ok"] else "FAIL"
+            detail = f" — {step['detail']}" if step["detail"] else ""
+            print(f"  [{icon:>4}] {step['name']}{detail}")
+
+        if result["error_code"]:
+            print(f"\nError: {result['error_code']}")
+            if result["error_message"]:
+                print(f"  {result['error_message']}")
+        print()
+
+    sys.exit(0 if result["ok"] else 1)
+
+
+if __name__ == "__main__":
+    main()
