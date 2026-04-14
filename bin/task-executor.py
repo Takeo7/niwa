@@ -1085,15 +1085,14 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         # Step 3: Prepare credentials for this backend
         extra_env = _prepare_backend_env(profile)
         if extra_env is None:
-            # No credentials available — fail this run, do NOT escalate
+            # No credentials available — fail this run, do NOT escalate.
+            # queued → failed directly (run never started).
             log.error(
                 "task %s: no credentials for %s — blocking task",
                 task_id, profile["slug"],
             )
             try:
                 with _conn() as c:
-                    runs_service.transition_run(
-                        run["id"], "starting", c)
                     runs_service.record_event(
                         run["id"], "credential_error", c,
                         message=(
