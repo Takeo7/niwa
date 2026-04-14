@@ -180,6 +180,117 @@ def _get_routing_mode(conn) -> str | None:
     return row["value"] if row else None
 
 
+# ── LLM config & API ────────────────────────────────────────────────
+
+def _get_llm_config(conn) -> tuple[str, str]:
+    """Resolve model name and API key from settings + environment.
+
+    Model priority (Decision 1 PR-08):
+      1. ``agent.assistant`` JSON → ``model``
+      2. ``agent.chat`` JSON → ``model``
+      3. ``svc.llm.anthropic.default_model``
+      4. ``"claude-haiku-4-5"``
+
+    API key priority:
+      1. ``svc.llm.anthropic.api_key``
+      2. ``int.llm_api_key`` (legacy)
+      3. env ``ANTHROPIC_API_KEY``
+      4. env ``NIWA_LLM_API_KEY``
+
+    Returns (model, api_key).  api_key may be empty.
+    """
+    settings: dict[str, str] = {}
+    for row in conn.execute("SELECT key, value FROM settings").fetchall():
+        settings[row["key"]] = row["value"]
+
+    # Model
+    model = None
+    for agent_key in ("agent.assistant", "agent.chat"):
+        raw = settings.get(agent_key)
+        if raw:
+            try:
+                model = json.loads(raw).get("model")
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                pass
+        if model:
+            break
+
+    if not model:
+        cmd = settings.get("int.llm_command_chat", "")
+        if "--model " in cmd:
+            model = cmd.split("--model ")[-1].split()[0]
+
+    if not model:
+        model = settings.get("svc.llm.anthropic.default_model")
+
+    if not model:
+        model = "claude-haiku-4-5"
+
+    # API key
+    api_key = (
+        settings.get("svc.llm.anthropic.api_key")
+        or settings.get("int.llm_api_key")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+        or os.environ.get("NIWA_LLM_API_KEY", "")
+    )
+
+    return model, api_key
+
+
+def _build_system_prompt(project_name: str, project_id: str) -> str:
+    return (
+        f'You are the Niwa project assistant for "{project_name}" '
+        f"(project ID: {project_id}).\n\n"
+        "Niwa is a task management and automated execution system. "
+        "You help the user manage tasks, check execution status, "
+        "handle approvals, and answer questions about their project.\n\n"
+        "Guidelines:\n"
+        "- Use the tools to fulfill requests. Do not guess at data.\n"
+        "- To run code or automate work, create a task with task_create. "
+        "Tasks are executed by the backend engine asynchronously.\n"
+        "- For status queries, use task_list, task_get, run_tail, "
+        "or run_explain.\n"
+        "- Respond in the same language the user writes in.\n"
+        "- Be concise.\n"
+    )
+
+
+def call_anthropic(model: str, api_key: str, messages: list,
+                   tools: list | None, system: str,
+                   timeout: float) -> dict:
+    """Call Anthropic Messages API.  Returns the parsed response dict.
+
+    Exposed as module-level (not underscore-prefixed) so tests can
+    monkey-patch it without reaching into private names.
+
+    Raises ``urllib.error.HTTPError``, ``urllib.error.URLError``,
+    or ``TimeoutError`` on failure.
+    """
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": _LLM_MAX_TOKENS,
+        "system": system,
+        "messages": messages,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=max(timeout, 1)) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 # ── Public entry point ───────────────────────────────────────────────
 
 def assistant_turn(

@@ -4,10 +4,12 @@ Step 1: routing_mode check and error-path persistence.
 
 Run with: pytest tests/test_assistant_service.py -v
 """
+import json
 import os
 import sqlite3
 import sys
 import tempfile
+import urllib.request
 import uuid
 
 import pytest
@@ -291,3 +293,200 @@ class TestInputValidation:
             conn=self.conn,
         )
         assert result["error"] == "empty_message"
+
+
+# ── Tests: LLM config resolution ────────────────────────────────────
+
+class TestLLMConfig:
+
+    def setup_method(self):
+        self.fd, self.path, self.conn = _make_db()
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.fd)
+        os.unlink(self.path)
+
+    def test_model_from_agent_assistant(self):
+        """agent.assistant setting takes priority."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("agent.assistant", '{"model": "claude-sonnet-4-6"}'),
+        )
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("agent.chat", '{"model": "claude-haiku-4-5"}'),
+        )
+        self.conn.commit()
+        model, _ = assistant_service._get_llm_config(self.conn)
+        assert model == "claude-sonnet-4-6"
+
+    def test_model_fallback_to_agent_chat(self):
+        """No agent.assistant → falls back to agent.chat."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("agent.chat", '{"model": "claude-haiku-4-5"}'),
+        )
+        self.conn.commit()
+        model, _ = assistant_service._get_llm_config(self.conn)
+        assert model == "claude-haiku-4-5"
+
+    def test_model_fallback_to_llm_command_chat(self):
+        """No agent.* → parses model from int.llm_command_chat."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("int.llm_command_chat",
+             "claude -p --model claude-opus-4-6 --max-turns 10"),
+        )
+        self.conn.commit()
+        model, _ = assistant_service._get_llm_config(self.conn)
+        assert model == "claude-opus-4-6"
+
+    def test_model_fallback_to_default_model_setting(self):
+        """No agent.* and no command → uses svc.llm.anthropic.default_model."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("svc.llm.anthropic.default_model", "claude-sonnet-4-6"),
+        )
+        self.conn.commit()
+        model, _ = assistant_service._get_llm_config(self.conn)
+        assert model == "claude-sonnet-4-6"
+
+    def test_model_hardcoded_last_resort(self):
+        """No settings at all → hardcoded claude-haiku-4-5."""
+        model, _ = assistant_service._get_llm_config(self.conn)
+        assert model == "claude-haiku-4-5"
+
+    def test_api_key_from_settings(self):
+        """API key read from svc.llm.anthropic.api_key."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("svc.llm.anthropic.api_key", "sk-ant-test-key"),
+        )
+        self.conn.commit()
+        _, api_key = assistant_service._get_llm_config(self.conn)
+        assert api_key == "sk-ant-test-key"
+
+    def test_api_key_from_legacy_setting(self):
+        """Falls back to int.llm_api_key."""
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("int.llm_api_key", "sk-legacy-key"),
+        )
+        self.conn.commit()
+        _, api_key = assistant_service._get_llm_config(self.conn)
+        assert api_key == "sk-legacy-key"
+
+    def test_api_key_from_env(self, monkeypatch):
+        """Falls back to ANTHROPIC_API_KEY env var."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-key")
+        _, api_key = assistant_service._get_llm_config(self.conn)
+        assert api_key == "sk-env-key"
+
+    def test_api_key_empty_when_unconfigured(self, monkeypatch):
+        """No key anywhere → empty string."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("NIWA_LLM_API_KEY", raising=False)
+        _, api_key = assistant_service._get_llm_config(self.conn)
+        assert api_key == ""
+
+
+# ── Tests: call_anthropic wrapper ────────────────────────────────────
+
+class TestCallAnthropic:
+    """Test the HTTP wrapper by intercepting urlopen."""
+
+    def test_sends_correct_payload(self, monkeypatch):
+        """Verifies headers, model, tools are sent correctly."""
+        captured = {}
+
+        class FakeResponse:
+            def __init__(self, body):
+                self._body = body
+            def read(self):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["body"] = json.loads(req.data.decode())
+            captured["timeout"] = timeout
+            return FakeResponse(json.dumps({
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+            }).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        result = assistant_service.call_anthropic(
+            model="claude-haiku-4-5",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"name": "task_list", "description": "x",
+                    "input_schema": {"type": "object", "properties": {}}}],
+            system="You are helpful.",
+            timeout=10.0,
+        )
+
+        assert captured["url"] == "https://api.anthropic.com/v1/messages"
+        assert captured["headers"]["X-api-key"] == "sk-test"
+        assert captured["headers"]["Anthropic-version"] == "2023-06-01"
+        assert captured["body"]["model"] == "claude-haiku-4-5"
+        assert captured["body"]["system"] == "You are helpful."
+        assert len(captured["body"]["tools"]) == 1
+        assert captured["timeout"] == 10.0
+        assert result["content"][0]["text"] == "hello"
+
+    def test_no_tools_omits_key(self, monkeypatch):
+        """When tools=None, payload has no 'tools' key."""
+        captured = {}
+
+        class FakeResponse:
+            def read(self):
+                return json.dumps({"content": [], "stop_reason": "end_turn"}).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return FakeResponse()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        assistant_service.call_anthropic(
+            model="m", api_key="k",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=None, system="s", timeout=5,
+        )
+        assert "tools" not in captured["body"]
+
+    def test_timeout_floor_at_one_second(self, monkeypatch):
+        """timeout < 1 is clamped to 1."""
+        captured = {}
+
+        class FakeResponse:
+            def read(self):
+                return json.dumps({"content": [], "stop_reason": "end_turn"}).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                pass
+
+        def fake_urlopen(req, timeout=None):
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        assistant_service.call_anthropic(
+            model="m", api_key="k",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=None, system="s", timeout=0.3,
+        )
+        assert captured["timeout"] == 1
