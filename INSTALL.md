@@ -6,24 +6,111 @@
 |---|---|---|---|
 | OS | macOS 12+, Linux | core | Windows via WSL2 untested |
 | Docker | 20.10+ | core | OrbStack, Docker Desktop, Colima, rootful Podman |
+| RAM | 4 GB | core (VPS) | 8 GB recommended for Mac mini running local models |
 | Python | 3.9+ | core | `python3 --version` |
 | git | any | clone the repo | — |
 | `claude` / `llm` / `gemini` CLI | any | **only if** you enable the executor | One of them, authenticated |
 | `cloudflared` | any | **only if** you want public exposure | Plus a Cloudflare account + tunnel |
 | Claude Code (`claude` CLI) | any | **only if** you want auto-register with it | Free with Anthropic account |
-| OpenClaw | any | **only if** you have it and want auto-register | — |
+| OpenClaw | any | **required for** `--mode assistant` | Optional for `--mode core` |
 
 **Niwa core works with just Docker + Python + git.** Everything else is opt-in.
 
-## Quickest install (3 commands)
+**Ports opened locally by default:** `18810` (gateway streaming), `18811` (Caddy), `18812` (gateway SSE legacy), `8080` (web app). All bound to `127.0.0.1` unless you pass `--public-url`. Collisions are auto-resolved by incrementing the port.
+
+**Hardware envelope (SPEC v0.2 §6 DoD):**
+- **VPS 4–8 GB** — supports Niwa as a control plane with remote CLI/API backends. **Not** for local model inference (no room for Haiku/Sonnet/Codex running in-process).
+- **Mac mini (M-series)** — supports the same control plane *plus* the local executor path if you have the `claude`/`codex` CLIs configured.
+
+## Quick install — PR-11 (recommended)
+
+Two non-interactive modes. Both bind everything to `127.0.0.1` unless `--public-url` is passed.
+
+### Core mode — Niwa standalone
 
 ```bash
 git clone https://github.com/Takeo7/niwa
 cd niwa
+./niwa install --quick --mode core --yes
+```
+
+Installs Niwa on its own: web UI, task routing v0.2, Claude + Codex backend adapters. No OpenClaw. Terminal service is disabled by default (the advanced overlay is available, see below).
+
+Expected time: **under 10 minutes** on a warm machine (Docker already installed, images cached). The slow part is `docker build` of the `niwa-app` image.
+
+### Assistant mode — Niwa + OpenClaw
+
+```bash
+./niwa install --quick --mode assistant --yes
+```
+
+Same as core, plus:
+ 1. OpenClaw CLI detection. **Hard prereq** — if `openclaw` is not on `PATH`, the installer exits with code `2` and instructions. Install it first (`npm i -g openclaw@latest`, or see <https://openclaw.ai/install>).
+ 2. Registers Niwa's MCP endpoint with OpenClaw using `streamable-http` (the modern MCP transport — SSE is legacy).
+ 3. Filters the MCP surface to the 11 v02-assistant tools (`config/mcp-contract/v02-assistant.json`).
+ 4. Runs `bin/niwa-mcp-smoke` after the stack is up to verify the assistant-mode contract end-to-end.
+
+If the LLM is not yet configured, the MCP smoke reports `roundtrip_assistant_turn_skip` and the install still completes successfully — you can set up the conversational brain later in the web UI (System → Agentes) without reinstalling.
+
+### CLI flags
+
+```
+./niwa install --quick --mode {core,assistant} [options]
+
+  -y, --yes                 Skip the confirmation prompt (for scripting/CI).
+  --workspace PATH          Directory exposed to the filesystem MCP as
+                            /workspace. Default: <install>/data.
+  --public-url URL          Bind ports to 0.0.0.0 and record this domain
+                            (e.g. https://niwa.example.com). No TLS is
+                            configured by the installer; put Caddy or a
+                            Cloudflare Tunnel in front.
+  --admin-user USER         Niwa web UI username (default: niwa).
+  --admin-password PW       Niwa web UI password (default: auto-generated
+                            and printed at the end of the install).
+  --instance NAME           Instance name / container prefix (default: niwa).
+  --dir PATH                Install location (default: ~/.<instance>).
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0`  | Install and post-install smoke both passed. |
+| `1`  | Install completed but the post-install smoke failed. Stack stays up for debugging. |
+| `2`  | Blocked by missing prereqs (Docker missing, or `--mode assistant` without OpenClaw), **or mode mismatch with an existing install** (re-run with the matching `--mode`, or pass `--force`). |
+| `130`| Aborted at the confirmation prompt (Ctrl-C or `n`). |
+
+### Idempotence
+
+The three reinstall scenarios supported:
+
+| Scenario | Behavior |
+|---|---|
+| **Same mode** (core→core, assistant→assistant) | Update-in-place. Schema is idempotent (`CREATE TABLE IF NOT EXISTS`, `INSERT OR IGNORE`), `docker compose up -d` replaces containers without losing the data volume. **Tokens and the admin password in `secrets/mcp.env` are rotated** (a `warn()` is printed before the install). Pass `--admin-user` / `--admin-password` to pin them across runs. |
+| **Different mode** (core↔assistant) | **Aborts with exit code `2`.** The installer refuses to silently switch modes. Options printed: (1) re-run with the matching `--mode`, (2) add `--force` to overwrite the existing config (DB data preserved; tokens rotate; previously registered MCP clients will need to re-accept the new token), (3) `./niwa uninstall --dir <path>` first. |
+| **Fresh install** (no `secrets/mcp.env`) | Runs normally. |
+
+The current mode is detected from `NIWA_MCP_CONTRACT` inside `secrets/mcp.env`. Value `v02-assistant` ⇒ assistant; anything else ⇒ core.
+
+### Overriding the pinned `docker/mcp-gateway` image
+
+The installer pins `docker/mcp-gateway` to the fixed semver tag `v0.40.4` (PR-11 Dec 1). To use a different tag:
+
+```bash
+NIWA_MCP_GATEWAY_IMAGE=docker/mcp-gateway:v0.41.0 ./niwa install --quick --mode core --yes
+```
+
+The value is written to `secrets/mcp.env` and the generated compose file; `niwa restart` keeps it.
+
+## Interactive install (13 steps)
+
+The classic interactive wizard is still there — drop `--quick`:
+
+```bash
 ./niwa install
 ```
 
-The wizard walks you through 13 steps. Sensible defaults — for a first install you can press Enter on most prompts. ~3-5 minutes total (the slow part is `docker build`).
+It walks you through 13 steps. Sensible defaults — for a first install you can press Enter on most prompts. ~3-5 minutes total (the slow part is `docker build`).
 
 ## What the wizard asks (13 steps)
 
@@ -98,9 +185,9 @@ Only shown if Claude Code or OpenClaw are detected.
 - **Claude Code**: `claude mcp add --scope user --transport http <tasks_name> http://localhost:<port>/mcp`
 - **OpenClaw**: `openclaw mcp set <tasks_name> '{"type":"streamable-http","url":"http://localhost:<port>/mcp"}'`
 
-> **Note (v0.2):** OpenClaw registration uses `streamable-http` (the modern MCP transport), not SSE. The legacy SSE gateway remains available at port 18812 for older MCP clients, but `streamable-http` is the recommended path for Assistant mode.
+> **v0.2 — streamable-http is the standard MCP transport.** OpenClaw registration uses `streamable-http`, not SSE. The SSE gateway remains at port 18812 for legacy MCP clients that still rely on it, but no new integration should target it. For the `install --quick --mode assistant` path this is enforced — the only endpoint registered with OpenClaw is the streamable-http one.
 >
-> **Important:** `mcp set` does not validate the connection. The installer performs a real smoke test after registration to verify that the MCP endpoint responds. If the smoke test fails, the installer warns you and provides troubleshooting steps.
+> **`mcp set` does not validate the connection.** The installer runs `bin/niwa-mcp-smoke` after registration to verify the endpoint actually responds and the contract matches. If the smoke fails, the installer warns you and leaves the stack up for debugging.
 
 ### Step 12 — Summary + confirmation
 Shows everything you picked. Last chance to abort with `n`.
@@ -187,13 +274,15 @@ Try:
 ## CLI commands
 
 ```bash
-./niwa install              # interactive install (default)
-./niwa status               # show status of an existing install
-./niwa restart              # docker compose restart
-./niwa logs [service]       # tail logs (default: mcp-gateway)
-./niwa uninstall            # tear down (containers + images + install dir)
-./niwa uninstall --keep-data    # keep DB, configs, and images; only stop containers
-./niwa uninstall -y         # skip confirmation
+./niwa install --quick --mode core --yes   # quick non-interactive install (PR-11)
+./niwa install --quick --mode assistant    # same, plus OpenClaw registration
+./niwa install                             # interactive 13-step wizard
+./niwa status                              # show status of an existing install
+./niwa restart                             # docker compose restart
+./niwa logs [service]                      # tail logs (default: mcp-gateway)
+./niwa uninstall                           # tear down (containers + images + install dir)
+./niwa uninstall --keep-data               # keep DB, configs, images; only stop containers
+./niwa uninstall -y                        # skip confirmation
 ```
 
 `niwa logs` accepts: `mcp-gateway`, `mcp-gateway-sse`, `caddy`, `app`, `socket-proxy`, `executor` (host-side launchd/systemd log).
@@ -250,4 +339,3 @@ They don't interfere.
 - **Backup** command (back up `~/.niwa/data/niwa.sqlite3` yourself)
 - **Built-in upgrade** (manual pull + reinstall for now)
 - **Multi-user / RBAC** (single user always)
-- **Pinned image versions** (uses `:latest` for upstream images — bump risk)

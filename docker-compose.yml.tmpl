@@ -17,6 +17,8 @@
 #   PLATFORM_RESTART_WHITELIST       e.g. "my-app,arturo-cron" — comma-separated
 #                                    (read by platform-mcp at spawn time, not by compose)
 #   NIWA_ENABLED_SERVERS             e.g. "tasks,notes,platform,filesystem" — passed via --servers
+#   NIWA_MCP_GATEWAY_IMAGE           e.g. "docker/mcp-gateway:v0.40.4" — pinned gateway image
+#                                    (PR-11: see DECISIONS-LOG for pin rationale)
 
 services:
   socket-proxy:
@@ -45,8 +47,8 @@ services:
 
   mcp-gateway:
     # Primary gateway — streamable-http transport (recommended for v0.2+).
-    # TODO PR-11: pin to a fixed tag once the installer resolves the version.
-    image: docker/mcp-gateway:latest
+    # Pinned by PR-11 (2026-04) — override via NIWA_MCP_GATEWAY_IMAGE for upgrades.
+    image: ${NIWA_MCP_GATEWAY_IMAGE}
     container_name: ${INSTANCE_NAME}-mcp-gateway
     restart: unless-stopped
     depends_on:
@@ -85,8 +87,8 @@ services:
     # streamable-http. NOT recommended for new deployments.
     # Assistant mode (OpenClaw) MUST use the primary streamable-http gateway.
     # This service exists for backwards compatibility and may be removed in v0.3.
-    # TODO PR-11: pin to a fixed tag once the installer resolves the version.
-    image: docker/mcp-gateway:latest
+    # Pinned by PR-11 (2026-04) — shares NIWA_MCP_GATEWAY_IMAGE with the primary gateway.
+    image: ${NIWA_MCP_GATEWAY_IMAGE}
     container_name: ${INSTANCE_NAME}-mcp-gateway-sse
     restart: unless-stopped
     depends_on:

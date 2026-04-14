@@ -12,7 +12,7 @@ Niwa is a self-contained Docker stack you install on your machine. It gives you:
 - **A React 19 web app** (Vite + TypeScript + Mantine v7) with 9 views: Dashboard, Chat, Tasks, Kanban, Projects, Notes, History, Metrics, System.
 - **21 MCP tools** in the tasks-mcp server, organized in 3 domains (core 14, ops 5, files 2).
 - **13 configurable services** with guided setup: 7 LLM providers, 5 image generators, 4 search engines, notifications (Telegram + webhook), hosting, and OpenClaw orchestration.
-- **Two MCP gateway transports**: streamable-http (recommended) + SSE (legacy, for older clients).
+- **Two MCP gateway transports**: streamable-http (v0.2 standard — the only one used by Assistant mode) + SSE (legacy, kept only for older clients).
 - **3-tier autonomous executor**: Haiku (chat) → Opus (planner) → Sonnet (executor), with automatic retry and heartbeat.
 - **OAuth support**: Anthropic (API key + setup token) and OpenAI (API key + OAuth with PKCE for ChatGPT subscriptions).
 - **A bearer-authed reverse proxy** (Caddy) for optional public exposure via Cloudflare Tunnel.
@@ -87,7 +87,7 @@ Static website hosting on subdomains with guided DNS setup, configurable domain 
 
 Dynamic detection + auto-config. Modes: disabled, MCP client, bidirectional. Configures gateway URL, token, and exposed domains.
 
-> **v0.2 note:** OpenClaw integration uses `streamable-http` as the standard MCP transport (not SSE). The legacy SSE gateway remains available for older clients. See `docs/adr/0002-v02-architecture.md` for the full rationale.
+> **v0.2 — streamable-http is the standard.** OpenClaw integration (Assistant mode, `install --quick --mode assistant`) uses `streamable-http`. The SSE gateway is legacy — it remains reachable for MCP clients that have not upgraded yet, but no new integration in v0.2 targets it. See `docs/adr/0002-v02-architecture.md` for the full rationale.
 
 ## 3-Tier Autonomous Executor
 
@@ -179,10 +179,18 @@ Full PKCE OAuth flow for ChatGPT subscription authentication. The web UI provide
 ```bash
 git clone https://github.com/Takeo7/niwa
 cd niwa
+
+# Quick install — PR-11, recommended. Non-interactive, under 10 minutes.
+./niwa install --quick --mode core --yes          # Niwa standalone
+./niwa install --quick --mode assistant --yes     # + OpenClaw registration (requires `openclaw` CLI)
+
+# Or the classic interactive wizard (14 steps):
 python3 setup.py install
 ```
 
-The installer is a **14-step interactive wizard** that configures: instance name, install location, database, filesystem scope, restart whitelist, tokens, credentials, ports, LLM executor, projects, remote exposure, notifications, and MCP client registration.
+**`install --quick`** asks at most: workspace root, local-only vs public, Claude/Codex credentials. Everything else is detected or auto-generated. Passes a post-install smoke that verifies the app, DB, and (in `--mode assistant`) the MCP contract via `bin/niwa-mcp-smoke`. See [INSTALL.md](INSTALL.md) for flags and exit codes.
+
+The interactive installer is a **14-step wizard** that configures: instance name, install location, database, filesystem scope, restart whitelist, tokens, credentials, ports, LLM executor, projects, remote exposure, notifications, and MCP client registration.
 
 **During install, `setup.py` offers to automatically install:**
 - Claude CLI (via npm)
@@ -286,8 +294,8 @@ bin/niwa check              # pre-flight health verification
 | Container | Image | Purpose | Memory |
 |-----------|-------|---------|--------|
 | `socket-proxy` | `tecnativa/docker-socket-proxy:0.3.0` | Filtered Docker socket proxy | 64 MB |
-| `mcp-gateway` | `docker/mcp-gateway:latest` | Streamable HTTP transport | 256 MB |
-| `mcp-gateway-sse` | `docker/mcp-gateway:latest` | Legacy SSE transport | 256 MB |
+| `mcp-gateway` | `docker/mcp-gateway:v0.40.4` | Streamable HTTP transport (pinned) | 256 MB |
+| `mcp-gateway-sse` | `docker/mcp-gateway:v0.40.4` | Legacy SSE transport (pinned) | 256 MB |
 | `app` | `<instance>-app:<version>` | Niwa web app | 256 MB |
 | `caddy` | `caddy:2-alpine` | Reverse proxy with bearer auth | 64 MB |
 
@@ -297,7 +305,7 @@ bin/niwa check              # pre-flight health verification
 |-----------|-------|---------|--------|
 | `terminal` | `tsl0922/ttyd:1.7.7` | Web-based host terminal (privileged) | 128 MB |
 
-Base images (Python, Node) and custom builds are pinned to specific versions. Third-party services (`docker/mcp-gateway`, `caddy`) use stable rolling tags (`latest`, `2-alpine`) that auto-update with patch releases.
+Base images (Python, Node) and custom builds are pinned to specific versions. `docker/mcp-gateway` is pinned to a fixed semver tag (`v0.40.4` at time of writing) to avoid operational drift in `install --quick`; override with `NIWA_MCP_GATEWAY_IMAGE` at install time to upgrade. `caddy:2-alpine` tracks the Caddy 2.x major release.
 
 ## MCP Catalog
 

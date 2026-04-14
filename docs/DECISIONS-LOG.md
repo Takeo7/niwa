@@ -903,3 +903,52 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 
 **Impacto:** `LinkifiedText` es ~40 líneas. Los chips de IDs canónicos (`task_ids`, `run_ids`, `approval_ids` devueltos por `actions_taken`) se renderizan en `TurnView` como lista horizontal con `MonoId` + icono de navegación. `run_ids` navegan a `/tasks/:taskId/runs` si hay task_id asociado — si no, a `/tasks` (run_id sin task_id es raro en este contrato; el assistant casi siempre devuelve tasks y runs juntos).
 
+## 2026-04-14 — PR-11
+
+### Decisión 1: Pin de `docker/mcp-gateway` a `v0.40.4` via `NIWA_MCP_GATEWAY_IMAGE`
+
+**Decisión:** `docker-compose.yml.tmpl` sustituye `docker/mcp-gateway:latest` por la variable `${NIWA_MCP_GATEWAY_IMAGE}` en las dos ocurrencias (servicios `mcp-gateway` y `mcp-gateway-sse`, líneas 49 y 89 antes del cambio). `setup.py` declara `NIWA_MCP_GATEWAY_IMAGE_DEFAULT = "docker/mcp-gateway:v0.40.4"` y `execute_install()` usa ese valor salvo que el operador exporte `NIWA_MCP_GATEWAY_IMAGE` en el entorno antes del install.
+
+**Motivo:** PR-09 Decisión 6 defirió el pin a PR-11 porque pinnear sin validar un tag existente rompía installs. En 2026-04-14 la consulta a Docker Hub devuelve `v0.40.4` como release estable más reciente (semver, multi-arch `linux/amd64` + `linux/arm64`, publicada hace 5 días). Usar `v0.40.4` en lugar de un tag mayor (`v2`) mantiene el determinismo exigido por el SPEC PR-11 ("Imágenes Docker pinneadas, no `latest` en quick mode"). La variable permite ascender sin parchar el template.
+
+**Alternativas consideradas:** (a) Usar `v2` (tag mayor) — rechazado porque sigue siendo rolling dentro del mayor, el SPEC pide pin fijo. (b) Omitir la variable y hardcodear `v0.40.4` — rechazado porque operadores que necesiten un pin distinto tendrían que editar el template generado, lo cual el comentario del template prohíbe explícitamente. (c) Dejar `:latest` — violación directa del SPEC.
+
+**Impacto:** `secrets/mcp.env` gana la clave `NIWA_MCP_GATEWAY_IMAGE`. Installs existentes que regeneren el compose (via `niwa install` o `niwa update`) empezarán a usar el tag pinneado. README y compose template reflejan el pin. Cuando Docker publique una versión estable nueva, actualizar `NIWA_MCP_GATEWAY_IMAGE_DEFAULT` en `setup.py` (un solo sitio).
+
+### Decisión 2: `generate_catalog_yaml(contract_file=...)` sobrescribe, no intersecta
+
+**Decisión:** Cuando se pasa un contract file a `generate_catalog_yaml`, el listado de tools expuesto por el catálogo pasa a ser **exactamente** `contract["tools"]`, no la intersección con las tools descubiertas en `config/mcp-catalog/*.json`. La lógica anterior (intersección) se eliminó porque descartaba las 11 tools v02 (`assistant_turn`, `task_cancel`, `task_resume`, `approval_list`, `approval_respond`, `run_tail`, `run_explain`, `project_context`, …) que no viven en los catálogos v0.1.
+
+**Motivo:** Los catálogos v0.1 (`config/mcp-catalog/niwa-core.json` y hermanos) y el contract v02 (`config/mcp-contract/v02-assistant.json`) son dos mecanismos distintos que conviven:
+  - Los catálogos v0.1 enumeran las 21 tools legacy que implementa `servers/tasks-mcp/server.py::_LEGACY_TOOL_DEFS`. Se siguen usando en modo core (sin contract env) y por el pipeline legacy `routing_mode=legacy`.
+  - El contract v02 lista las 11 tools conversacionales expuestas en modo assistant. Esas tools viven sólo en `_V02_TOOL_DEFS` del mismo server y se implementan como proxy HTTP a `/api/assistant/turn` y `/api/assistant/tools/{name}` (PR-09 Dec 1).
+  - En modo assistant el gateway filtra por el contract y expone sólo las 11 tools v02. En modo core, usa los catálogos v0.1 y expone las 21.
+  - El doble filtro — catálogo a nivel gateway + `NIWA_MCP_CONTRACT` a nivel server — es deliberado: el gateway decide qué tools publicita en `tools/list` (por el catálogo) y el server decide qué tools implementa (por el env var). Ambas capas deben coincidir o el cliente ve tools que el server rechaza (o al revés). Usar `contract["tools"]` como fuente autoritativa a nivel catálogo alinea los dos filtros.
+
+**Alternativas consideradas:**
+- (a) Añadir las tools v02 a algún archivo `config/mcp-catalog/*.json` → contaminaría el inventario legacy con tools v02 que el pipeline v0.1 no conoce.
+- (b) Mantener la intersección y requerir que los callers manden primero las v02 en un catálogo sombra → scope creep, mecanismo paralelo sin beneficio.
+
+**Impacto:** `generate_catalog_yaml` tiene un único camino autoritativo cuando hay contract: `contract["tools"]`. Callers legacy (sin contract) siguen funcionando igual. El test `TestCatalogGeneration::test_contract_overrides_to_contract_tools` guarda la invariante.
+
+### Decisión 3: Idempotencia del quick install — abort defensivo en cambio de modo
+
+**Decisión:** `install --quick --mode X` sobre un workspace ya instalado se comporta según tres reglas:
+
+  (a) **Mismo modo (core→core, assistant→assistant):** procede como update-in-place. El schema es idempotente (`CREATE TABLE IF NOT EXISTS`, `INSERT OR IGNORE`), `docker compose up -d` reemplaza contenedores sin perder el volumen de datos, `secrets/mcp.env` se reescribe con **tokens y admin password nuevos**. Se emite un `warn()` antes del install explicando la rotación. Los clientes MCP previamente registrados (Claude, OpenClaw) necesitarán reaceptar el nuevo token — su entry en `openclaw.json` se actualiza en el mismo run si procede.
+
+  (b) **Cambio de modo (core↔assistant):** **aborta** con exit code `2` y un mensaje explicando las tres salidas posibles: (1) repetir con el modo existente, (2) pasar `--force` para sobrescribir, (3) desinstalar primero. Sin `--force`, jamás se sobrescribe silenciosamente.
+
+  (c) **Fresh install (no hay `secrets/mcp.env`):** procede normalmente.
+
+La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` leyendo `NIWA_MCP_CONTRACT` en `secrets/mcp.env`. Si vale `v02-assistant` es assistant; cualquier otro valor (incluyendo vacío o ausente) se trata como core.
+
+**Motivo:** La regla C del prompt PR-11 exige "detectar y abortar cuando los modos no coinciden; `--force` para sobrescribir". Una instalación core sobre un workspace assistant (o viceversa) implica cambios no reversibles por la vía de update-in-place: `openclaw mcp set` ya dejó estado en `~/.config/openclaw/openclaw.json` que un install core no sabe limpiar; un install assistant sobre workspace core sí puede registrar el endpoint sin perder nada. El abort defensivo protege al operador del primer caso sin complicar el segundo — ambos requieren consentimiento explícito.
+
+**Alternativas consideradas:**
+- (a) Sobreescribir siempre (comportamiento previo) — riesgo de perder estado assistant sin aviso al reinstalar en core.
+- (b) Implementar un wizard de migración (core→assistant incluye registro OpenClaw; assistant→core desinstala el skill) — scope creep para PR-11; `--force` es la válvula mínima viable.
+- (c) Permitir el cambio de modo sin `--force` pero requerir `-y` en ausencia de `--yes` → redundante con la regla actual de `-y`.
+
+**Impacto:** El flag `--force` sólo existe en `install --quick`. `install` interactivo clásico sigue igual. `INSTALL.md` documenta los tres escenarios. Tests cubren la detección y los tres caminos (mismo modo, cambio bloqueado, cambio forzado).
+

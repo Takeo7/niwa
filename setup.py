@@ -30,6 +30,11 @@ from typing import Optional
 
 NIWA_VERSION = "0.1.0"
 
+# Docker image pin for the MCP gateway (PR-11, 2026-04).
+# See docs/DECISIONS-LOG.md for rationale. Override at install time with
+#   NIWA_MCP_GATEWAY_IMAGE=docker/mcp-gateway:<tag> ./niwa install ...
+NIWA_MCP_GATEWAY_IMAGE_DEFAULT = "docker/mcp-gateway:v0.40.4"
+
 # ────────────────────────── pretty output ──────────────────────────
 NO_COLOR = os.environ.get("NO_COLOR") or not sys.stdout.isatty()
 RESET = "" if NO_COLOR else "\033[0m"
@@ -378,6 +383,7 @@ def generate_catalog_yaml(
     fs_memory: str,
     instance_name: str,
     contract_file: Optional[str] = None,
+    tasks_env: Optional[dict[str, str]] = None,
 ) -> str:
     """Generate the niwa-catalog.yaml content with the user's chosen server names.
 
@@ -403,13 +409,32 @@ def generate_catalog_yaml(
             data = json.load(_f)
             tasks_tools.extend(data.get("tools", []))
 
-    # If a contract is specified, filter tools to only those in the contract
+    # If a contract is specified, the contract's tools list becomes the
+    # authoritative advertised surface. PR-09's v02-assistant tools
+    # (assistant_turn, task_cancel, …) live only in
+    # servers/tasks-mcp/server.py::_V02_TOOL_DEFS, not in the v0.1
+    # catalog JSONs. Intersecting with tasks_tools would drop them.
+    # The server-side filter (NIWA_MCP_CONTRACT env) guarantees the
+    # tasks-mcp container actually implements only these tools.
     if contract_file and Path(contract_file).exists():
         contract = json.loads(Path(contract_file).read_text())
-        allowed = set(contract.get("tools", []))
-        tasks_tools = [t for t in tasks_tools if t in allowed]
+        contract_tools = contract.get("tools", [])
+        if contract_tools:
+            tasks_tools = list(contract_tools)
 
     tools_yaml = "\n".join(f'      - name: "{t}"' for t in tasks_tools)
+
+    # PR-11: optional env block for the tasks-mcp container. In assistant
+    # mode this carries NIWA_MCP_CONTRACT, NIWA_MCP_SERVER_TOKEN and
+    # NIWA_APP_URL so the server-side contract filter and the HTTP proxy
+    # auth work inside the ephemeral container.
+    if tasks_env:
+        tasks_env_block = "    env:\n" + "\n".join(
+            f'      - name: "{k}"\n        value: "{v}"'
+            for k, v in tasks_env.items()
+        ) + "\n"
+    else:
+        tasks_env_block = ""
 
     return f"""version: 2
 name: {instance_name}
@@ -424,7 +449,7 @@ registry:
 {tools_yaml}
     volumes:
       - "{db_path}:/data/niwa.sqlite3"
-    metadata:
+{tasks_env_block}    metadata:
       category: "{instance_name}"
       tags: [{tasks_name}, tasks]
 
@@ -542,6 +567,11 @@ class WizardConfig:
         self.telegram_bot_token: str = ""
         self.telegram_chat_id: str = ""
         self.webhook_url: str = ""
+        # PR-11: quick install bookkeeping. Not part of the interactive
+        # wizard; populated only by the --quick path.
+        self.quick_mode: str = ""  # "" | "core" | "assistant"
+        self.mcp_contract: str = ""  # e.g. "v02-assistant"
+        self.mcp_server_token: str = ""  # service-to-service bearer for tasks-mcp
 
 
 # ────────────────────────── LLM provider catalog ──────────────────────────
@@ -1253,6 +1283,7 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_TERMINAL_PORT": str(cfg.terminal_port),
         "NIWA_BIND_HOST": cfg.bind_host,
         "NIWA_ENABLED_SERVERS": ",".join(cfg.server_names[k] for k in ("tasks", "notes", "platform", "filesystem")),
+        "NIWA_MCP_GATEWAY_IMAGE": os.environ.get("NIWA_MCP_GATEWAY_IMAGE", NIWA_MCP_GATEWAY_IMAGE_DEFAULT),
         "NIWA_TASKS_SERVER_NAME": cfg.server_names["tasks"],
         "NIWA_NOTES_SERVER_NAME": cfg.server_names["notes"],
         "NIWA_PLATFORM_SERVER_NAME": cfg.server_names["platform"],
@@ -1275,6 +1306,11 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
         "NIWA_TELEGRAM_CHAT_ID": cfg.telegram_chat_id,
         "NIWA_WEBHOOK_URL": cfg.webhook_url,
+        # PR-11: assistant-mode MCP contract wiring. Empty in core mode
+        # (the app's is_authenticated() falls back to cookie auth and
+        # servers/tasks-mcp/server.py exposes the 21 legacy tools).
+        "NIWA_MCP_CONTRACT": cfg.mcp_contract or "",
+        "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token or "",
     }
 
     # Write secrets file
@@ -1291,13 +1327,31 @@ def execute_install(cfg: WizardConfig) -> None:
     shutil.copy(REPO_ROOT / "caddy" / "Caddyfile", cfg.niwa_home / "caddy" / "Caddyfile")
     ok("Copied Caddyfile")
 
-    # Generate catalog yaml
+    # Generate catalog yaml. PR-11: in assistant mode, filter the
+    # tasks-mcp surface via the v02-assistant contract and inject the
+    # server-side env the tasks-mcp container needs.
+    contract_file = None
+    tasks_env = None
+    if cfg.mcp_contract:
+        contract_path = REPO_ROOT / "config" / "mcp-contract" / f"{cfg.mcp_contract}.json"
+        if contract_path.is_file():
+            contract_file = str(contract_path)
+            tasks_env = {
+                "NIWA_MCP_CONTRACT": cfg.mcp_contract,
+                "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token,
+                "NIWA_APP_URL": f"http://{cfg.instance_name}-app:8080",
+            }
+        else:
+            warn(f"Contract file not found: {contract_path} — "
+                 f"falling back to unfiltered catalog")
     catalog = generate_catalog_yaml(
         cfg.server_names,
         str(cfg.db_path),
         str(cfg.fs_workspace),
         str(cfg.fs_memory),
         cfg.instance_name,
+        contract_file=contract_file,
+        tasks_env=tasks_env,
     )
     (cfg.niwa_home / "config" / "niwa-catalog.yaml").write_text(catalog)
     # Generate niwa-config.yaml (still needed by gateway --config flag)
@@ -2630,11 +2684,627 @@ def cmd_hosting(args) -> None:
     info("Deploy a project: use the deploy_web MCP tool or call hosting.deploy_project() directly.")
 
 
+# ────────────────────────── PR-11: quick installer ──────────────────────────
+# Two-mode quick install: --mode core (Niwa standalone) and --mode assistant
+# (Niwa + OpenClaw MCP registration). See docs/SPEC-v0.2.md PR-11.
+QUICK_MODES = ("core", "assistant")
+
+
+def detect_claude_credentials() -> dict:
+    """Inspect the current environment for a usable Claude CLI auth.
+
+    Returns a dict with:
+      - ``cli``: bool — ``claude`` binary resolvable via PATH.
+      - ``authenticated``: bool — at least one credential source detected.
+      - ``source``: short label ("env:ANTHROPIC_API_KEY", "~/.claude.json", …).
+      - ``detail``: human-readable message suitable for printing.
+
+    Side effects: none. Never echoes a token.
+    """
+    if not which("claude"):
+        return {
+            "cli": False,
+            "authenticated": False,
+            "source": "",
+            "detail": "claude CLI not in PATH — Claude backend will be unavailable",
+        }
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "env:CLAUDE_CODE_OAUTH_TOKEN",
+            "detail": "claude auth: CLAUDE_CODE_OAUTH_TOKEN present",
+        }
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "env:ANTHROPIC_API_KEY",
+            "detail": "claude auth: ANTHROPIC_API_KEY present",
+        }
+    cfg_file = Path.home() / ".claude.json"
+    if cfg_file.is_file():
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "~/.claude.json",
+            "detail": "claude auth: ~/.claude.json present",
+        }
+    return {
+        "cli": True,
+        "authenticated": False,
+        "source": "",
+        "detail": "claude CLI present but not authenticated — run `claude` once or export CLAUDE_CODE_OAUTH_TOKEN",
+    }
+
+
+def detect_codex_credentials() -> dict:
+    """Inspect the current environment for a usable Codex CLI auth.
+
+    Mirrors ``detect_claude_credentials``.  Codex tokens in v0.2 live in
+    the Niwa DB (oauth_tokens, provider='openai') — those are filled
+    from the web UI after install, not at install time, so detection
+    here is limited to CLI presence + env vars.
+    """
+    if not which("codex"):
+        return {
+            "cli": False,
+            "authenticated": False,
+            "source": "",
+            "detail": "codex CLI not in PATH — Codex backend will be unavailable",
+        }
+    if os.environ.get("OPENAI_ACCESS_TOKEN"):
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "env:OPENAI_ACCESS_TOKEN",
+            "detail": "codex auth: OPENAI_ACCESS_TOKEN present",
+        }
+    if os.environ.get("OPENAI_API_KEY"):
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "env:OPENAI_API_KEY",
+            "detail": "codex auth: OPENAI_API_KEY present",
+        }
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    if (codex_home / "auth.json").is_file():
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": f"{codex_home}/auth.json",
+            "detail": f"codex auth: {codex_home}/auth.json present",
+        }
+    return {
+        "cli": True,
+        "authenticated": False,
+        "source": "",
+        "detail": "codex CLI present but no auth detected — configure OAuth via the Niwa web UI after install",
+    }
+
+
+def detect_openclaw_presence() -> dict:
+    """Check that the OpenClaw CLI is available (needed for --mode assistant).
+
+    Returns ``{'cli': bool, 'detail': str}``.
+    """
+    if not which("openclaw"):
+        return {
+            "cli": False,
+            "detail": "openclaw CLI not in PATH",
+        }
+    return {
+        "cli": True,
+        "detail": "openclaw CLI present",
+    }
+
+
+def resolve_quick_workspace(arg_workspace: Optional[str], niwa_home: Path) -> Path:
+    """Resolve the workspace path for --quick.
+
+    Priority:
+      1. Explicit ``--workspace`` CLI argument.
+      2. ``NIWA_FILESYSTEM_WORKSPACE`` from an existing ``secrets/mcp.env``
+         (re-install over the same install dir).
+      3. ``<niwa_home>/data`` default.
+    """
+    if arg_workspace:
+        return Path(arg_workspace).expanduser().resolve()
+    env_file = niwa_home / "secrets" / "mcp.env"
+    if env_file.is_file():
+        existing = _read_env_file(env_file).get("NIWA_FILESYSTEM_WORKSPACE")
+        if existing:
+            return Path(existing).expanduser()
+    return (niwa_home / "data").resolve()
+
+
+def _quick_free_port(default: int) -> int:
+    """Return ``default`` if free, else first free offset in [1, 100).
+
+    Keeps quick install non-interactive even on machines that already
+    have another niwa install running — the operator can still pin with
+    explicit flags if they want deterministic ports.
+    """
+    if detect_port_free(default):
+        return default
+    for offset in range(1, 100):
+        candidate = default + offset
+        if detect_port_free(candidate):
+            return candidate
+    return default  # give up — user will see collision warning downstream
+
+
+def parse_public_url(url: str) -> dict:
+    """Parse --public-url into bind info. Returns {'domain', 'scheme'}.
+
+    Accepts forms: ``example.com``, ``https://example.com``,
+    ``http://example.com:8080``. Empty string → ``{'domain': '', 'scheme': ''}``.
+    """
+    if not url:
+        return {"domain": "", "scheme": ""}
+    from urllib.parse import urlparse
+    # Add scheme if missing so urlparse works predictably
+    candidate = url if "://" in url else f"https://{url}"
+    parsed = urlparse(candidate)
+    host = parsed.hostname or ""
+    return {"domain": host, "scheme": parsed.scheme or "https"}
+
+
+def build_quick_config(args) -> WizardConfig:
+    """Construct a WizardConfig from CLI args + autodetection.
+
+    Does NOT prompt interactively except when ``--yes`` is not set and
+    a value is genuinely ambiguous. Does NOT mutate the filesystem nor
+    the DB — only assembles config.
+    """
+    cfg = WizardConfig()
+
+    # --- Pre-flight: docker is hard requirement ---
+    docker = detect_docker()
+    if not docker.get("available"):
+        err("Docker is not installed or not in PATH.")
+        print_install_hint("docker")
+        sys.exit(1)
+    sock = detect_socket_path()
+    if not sock:
+        err("Could not find a Docker socket.")
+        sys.exit(1)
+    cfg.detected["docker_socket"] = sock
+
+    # --- Naming & location ---
+    cfg.instance_name = (getattr(args, "instance", None) or "niwa")
+    if getattr(args, "dir", None):
+        cfg.niwa_home = Path(args.dir).expanduser().resolve()
+    else:
+        cfg.niwa_home = Path.home() / f".{cfg.instance_name}"
+
+    # --- DB ---
+    cfg.db_mode = "fresh"
+    cfg.db_path = cfg.niwa_home / "data" / "niwa.sqlite3"
+
+    # --- Filesystem workspace ---
+    cfg.fs_workspace = resolve_quick_workspace(
+        getattr(args, "workspace", None), cfg.niwa_home
+    )
+    cfg.fs_memory = cfg.niwa_home / "memory"
+
+    # --- Binding: --public-url implies 0.0.0.0, else loopback ---
+    public_url = getattr(args, "public_url", None) or ""
+    if public_url:
+        cfg.bind_host = "0.0.0.0"
+        cfg.mode = "remote"
+        parsed = parse_public_url(public_url)
+        cfg.public_domain = parsed["domain"]
+    else:
+        cfg.bind_host = "127.0.0.1"
+        cfg.mode = "local-only"
+
+    # --- Ports with auto-increment on collision ---
+    cfg.gateway_streaming_port = _quick_free_port(18810)
+    cfg.gateway_sse_port = _quick_free_port(18812)
+    cfg.caddy_port = _quick_free_port(18811)
+    cfg.app_port = _quick_free_port(8080)
+    cfg.terminal_port = 7681  # unused in quick install (advanced overlay only)
+
+    # --- Restart whitelist: empty by default, operator edits post-install ---
+    cfg.restart_whitelist = []
+
+    # --- Tokens ---
+    cfg.tokens["NIWA_LOCAL_TOKEN"] = generate_token()
+    cfg.tokens["NIWA_REMOTE_TOKEN"] = generate_token()
+    cfg.tokens["MCP_GATEWAY_AUTH_TOKEN"] = cfg.tokens["NIWA_LOCAL_TOKEN"]
+
+    # --- App web UI credentials ---
+    cfg.username = (getattr(args, "admin_user", None) or "niwa")
+    provided_pw = getattr(args, "admin_password", None)
+    if provided_pw:
+        cfg.password = provided_pw
+    else:
+        # Auto-generate a readable password. Printed at the end of the
+        # install. Never written to logs, only to secrets/mcp.env and
+        # displayed once in the summary.
+        cfg.password = generate_token()[:24]
+
+    # --- Executor: enabled by default, claude provider ---
+    cfg.executor_enabled = True
+    cfg.llm_provider = "claude"
+    cfg.llm_command = LLM_PROVIDERS["claude"]["command"]
+
+    # --- Detection ---
+    cfg.detected["claude"] = which("claude") is not None
+    cfg.detected["openclaw"] = which("openclaw") is not None
+    cfg.detected["cloudflared"] = which("cloudflared") is not None
+
+    # --- Register Claude MCP client if authenticated ---
+    claude = detect_claude_credentials()
+    cfg.register_claude = bool(claude["authenticated"])
+
+    # --- Mode-specific: OpenClaw registration ---
+    cfg.quick_mode = args.mode
+    if args.mode == "assistant":
+        openclaw = detect_openclaw_presence()
+        cfg.register_openclaw = openclaw["cli"]
+        cfg.mcp_contract = "v02-assistant"
+        cfg.mcp_server_token = generate_token()
+    else:
+        cfg.register_openclaw = False
+        cfg.mcp_contract = ""
+        cfg.mcp_server_token = ""
+
+    return cfg
+
+
+def print_quick_plan(cfg: WizardConfig) -> None:
+    """Print the resolved quick-install plan so the operator can eyeball it."""
+    header("Niwa install --quick plan")
+    print(f"  Mode:              {cfg.quick_mode}")
+    print(f"  Instance name:     {cfg.instance_name}")
+    print(f"  Install location:  {cfg.niwa_home}")
+    print(f"  Database:          fresh at {cfg.db_path}")
+    print(f"  Workspace:         {cfg.fs_workspace}")
+    print(f"  Bind:              {cfg.bind_host} ({cfg.mode})")
+    if cfg.public_domain:
+        print(f"  Public domain:     {cfg.public_domain}")
+    print(f"  Ports:             gateway={cfg.gateway_streaming_port}, "
+          f"sse={cfg.gateway_sse_port}, caddy={cfg.caddy_port}, app={cfg.app_port}")
+    print(f"  App login user:    {cfg.username}  (password auto-generated; shown after install)")
+    print(f"  Executor:          claude  ({cfg.llm_command})")
+    claude = detect_claude_credentials()
+    print(f"  {claude['detail']}")
+    codex = detect_codex_credentials()
+    print(f"  {codex['detail']}")
+    print(f"  Register Claude:   {cfg.register_claude}")
+    print(f"  Register OpenClaw: {cfg.register_openclaw}")
+    if cfg.quick_mode == "assistant":
+        print(f"  MCP contract:      {cfg.mcp_contract}")
+    print(f"  Terminal service:  disabled (advanced overlay only)")
+    print()
+
+
+def _ensure_assistant_prereqs(cfg: WizardConfig) -> Optional[str]:
+    """Return an error message if assistant-mode prereqs are missing, else None."""
+    if cfg.quick_mode != "assistant":
+        return None
+    if not cfg.detected.get("openclaw"):
+        return (
+            "OpenClaw is required for --mode assistant but the CLI was not found.\n"
+            "  Install it first (npm i -g openclaw@latest, or see https://openclaw.ai/install),\n"
+            "  then re-run: ./niwa install --quick --mode assistant"
+        )
+    return None
+
+
+def detect_existing_quick_mode(niwa_home: Path) -> str:
+    """Detect the quick-install mode currently recorded for ``niwa_home``.
+
+    Returns:
+        - ``""`` if no install exists at the path (or no ``secrets/mcp.env``).
+        - ``"assistant"`` if ``NIWA_MCP_CONTRACT=v02-assistant`` is set.
+        - ``"core"`` otherwise (existing install without the assistant flag).
+
+    The function is read-only; it never mutates the install.
+    """
+    env_file = niwa_home / "secrets" / "mcp.env"
+    if not env_file.is_file():
+        return ""
+    env = _read_env_file(env_file)
+    contract = env.get("NIWA_MCP_CONTRACT") or ""
+    if contract == "v02-assistant":
+        return "assistant"
+    return "core"
+
+
+def _ensure_mode_matches_existing(cfg: WizardConfig,
+                                   force: bool) -> Optional[str]:
+    """Defensive idempotence check (SPEC PR-11 rule C).
+
+    If an install already exists at ``cfg.niwa_home`` under a different
+    mode than the one requested, return an error message asking the
+    operator to either change ``--mode`` or pass ``--force``. Same-mode
+    reinstalls are allowed and behave as update-in-place (tokens and
+    admin password rotate).
+
+    Returns None when it is safe to proceed.
+    """
+    existing = detect_existing_quick_mode(cfg.niwa_home)
+    if not existing:
+        return None  # fresh install
+    if existing == cfg.quick_mode:
+        return None  # idempotent reinstall under the same mode
+    if force:
+        return None  # explicit override
+    return (
+        f"{cfg.niwa_home} is already installed in --mode {existing}; refusing to\n"
+        f"  silently switch to --mode {cfg.quick_mode}. Options:\n"
+        f"    1. Re-run with --mode {existing} (same as the current install).\n"
+        f"    2. Re-run with --force to overwrite the existing install config\n"
+        f"       (DB data is preserved; tokens and registered MCP clients rotate).\n"
+        f"    3. Uninstall first: ./niwa uninstall --dir {cfg.niwa_home}"
+    )
+
+
+def _parse_url_for_main(url: str) -> Optional[str]:  # pragma: no cover
+    """Wrapper around parse_public_url that validates non-empty domain."""
+    info = parse_public_url(url)
+    if not info["domain"]:
+        return None
+    return info["domain"]
+
+
+def cmd_install_quick(args) -> int:
+    """Entrypoint for ``install --quick``. Returns an exit code."""
+    print(f"{BOLD}🌿 Niwa installer — quick ({args.mode}){RESET}")
+    print(f"{DIM}Non-interactive install path (SPEC PR-11).{RESET}\n")
+
+    if args.mode not in QUICK_MODES:
+        err(f"--mode must be one of {QUICK_MODES}, got: {args.mode!r}")
+        return 2
+
+    cfg = build_quick_config(args)
+
+    # Assistant mode requires OpenClaw present. Fail clean with exit 2.
+    blocker = _ensure_assistant_prereqs(cfg)
+    if blocker:
+        err(blocker)
+        return 2
+
+    # Idempotence guard (SPEC PR-11 rule C): refuse silent mode changes.
+    mode_mismatch = _ensure_mode_matches_existing(cfg, getattr(args, "force", False))
+    if mode_mismatch:
+        err(mode_mismatch)
+        return 2
+
+    # Inform the operator when a same-mode reinstall will rotate secrets.
+    existing_mode = detect_existing_quick_mode(cfg.niwa_home)
+    if existing_mode == cfg.quick_mode:
+        warn(
+            f"Existing {existing_mode}-mode install detected at {cfg.niwa_home}. "
+            "This re-run will rotate tokens and the admin password "
+            "(DB data is preserved)."
+        )
+
+    print_quick_plan(cfg)
+
+    if not args.yes:
+        if not prompt_bool("Proceed with install?", default=True):
+            info("Aborted by user — nothing was installed.")
+            return 130
+
+    # Delegate to the full install flow. Ported paths like execute_install
+    # already handle DB seed, compose up, healthchecks, client registration.
+    try:
+        execute_install(cfg)
+    except SystemExit as exc:
+        # execute_install calls sys.exit(1) on compose/build failures.
+        return int(exc.code) if isinstance(exc.code, int) else 1
+    except Exception as exc:  # pragma: no cover — defensive
+        err(f"install failed: {exc}")
+        return 1
+
+    # Post-install smoke. Mode-specific checks live in installer_smoke().
+    smoke = installer_smoke(cfg)
+    if not smoke["ok"]:
+        err("Post-install smoke test failed — the stack is up, fix and retry manually.")
+        for step in smoke["steps"]:
+            marker = "✓" if step["ok"] else "✗"
+            print(f"  {marker} {step['name']}{(' — ' + step['detail']) if step['detail'] else ''}")
+        return 1
+
+    print()
+    ok(f"Quick install ({cfg.quick_mode}) completed — smoke: PASS in {smoke['duration_ms']}ms")
+    if cfg.quick_mode == "assistant":
+        # The installer smoke tolerates LLM-not-configured (SPEC PR-11 rule G
+        # + PR-09 Dec A): the MCP contract surface is fully advertised even
+        # without an LLM, the assistant_turn roundtrip is simply skipped.
+        # Surface an explicit tip so the operator knows where to complete
+        # the wiring for the conversational chat.
+        print()
+        info("Para usar el chat conversacional real (assistant_turn con "
+             "respuestas del LLM), configura el modelo y la API key en la UI: "
+             "System → Agentes (pestaña 'assistant').")
+        mcp_smoke_cmd = (f"bin/niwa-mcp-smoke --app-url http://localhost:{cfg.app_port} "
+                         "--token <NIWA_MCP_SERVER_TOKEN> --project-id <id>")
+        info(f"Re-run the MCP smoke with a roundtrip any time: {mcp_smoke_cmd}")
+    return 0
+
+
+def installer_smoke(cfg: WizardConfig) -> dict:
+    """Post-install verification covering HTTP health, DB, and (assistant) MCP.
+
+    Returns::
+
+        {"ok": bool, "steps": [{"name", "ok", "detail"}, ...], "duration_ms": int}
+
+    Must complete in <30s on a clean install. If it takes longer, there
+    is a healthcheck or timeout issue.
+    """
+    import sqlite3 as _sqlite3
+    t0 = time.monotonic()
+    steps: list[dict] = []
+    ok_overall = True
+
+    def _add(name: str, ok_: bool, detail: str = "") -> None:
+        nonlocal ok_overall
+        steps.append({"name": name, "ok": ok_, "detail": detail})
+        if not ok_:
+            ok_overall = False
+
+    # 1. App /health responds
+    try:
+        with urllib.request.urlopen(
+            f"http://localhost:{cfg.app_port}/health", timeout=5
+        ) as resp:
+            _add("app_health", resp.status == 200, f"HTTP {resp.status}")
+    except Exception as exc:
+        _add("app_health", False, str(exc))
+
+    # 2. DB migrated with v0.2 tables + routing_mode=v02.
+    # init_db() runs when the app container boots, after the installer's
+    # schema+migrations pass. Retry a few times to absorb the boot window.
+    db_path = cfg.niwa_home / "data" / "niwa.sqlite3"
+    if db_path.exists():
+        required = {"tasks", "projects", "settings", "backend_profiles",
+                    "routing_decisions", "backend_runs", "approvals"}
+        tables_ok = False
+        missing: set[str] = set()
+        tables: set[str] = set()
+        for _ in range(15):
+            try:
+                conn = _sqlite3.connect(str(db_path))
+                tables = {r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()}
+                conn.close()
+                missing = required - tables
+                if not missing:
+                    tables_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if tables_ok:
+            _add("db_tables", True, f"{len(tables)} tables present")
+        else:
+            _add("db_tables", False, f"missing: {sorted(missing)}")
+
+        mode_val = None
+        for _ in range(15):
+            try:
+                conn = _sqlite3.connect(str(db_path))
+                row = conn.execute(
+                    "SELECT value FROM settings WHERE key='routing_mode'"
+                ).fetchone()
+                conn.close()
+                mode_val = row[0] if row else None
+                if mode_val == "v02":
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if mode_val == "v02":
+            _add("routing_mode_v02", True, "settings.routing_mode=v02")
+        else:
+            _add("routing_mode_v02", False, f"settings.routing_mode={mode_val!r}")
+    else:
+        _add("db_tables", False, f"DB not found at {db_path}")
+
+    # 3. Mode-specific checks
+    if cfg.quick_mode == "core":
+        # Basic API endpoints respond (no auth required: /health + /api/version)
+        try:
+            with urllib.request.urlopen(
+                f"http://localhost:{cfg.app_port}/api/version", timeout=5
+            ) as resp:
+                _add("api_version", resp.status == 200, f"HTTP {resp.status}")
+        except Exception as exc:
+            _add("api_version", False, str(exc))
+    elif cfg.quick_mode == "assistant":
+        # Invoke the PR-09 MCP smoke via bin/niwa-mcp-smoke (as a subprocess
+        # so we keep the exact contract covered by the existing CI).
+        smoke_result = _run_mcp_smoke_subprocess(cfg)
+        _add(
+            "mcp_assistant_smoke",
+            smoke_result["ok"],
+            smoke_result.get("detail", ""),
+        )
+
+    duration_ms = int((time.monotonic() - t0) * 1000)
+    return {"ok": ok_overall, "steps": steps, "duration_ms": duration_ms}
+
+
+def _run_mcp_smoke_subprocess(cfg: WizardConfig) -> dict:
+    """Invoke bin/niwa-mcp-smoke with the v02-assistant contract.
+
+    The smoke is allowed to report ``roundtrip_assistant_turn_skip``
+    (LLM not configured) without marking the overall install as failed
+    — PR-09 Dec A + the SPEC's ``assistant mode install completes even
+    without LLM`` rule.
+    """
+    script = REPO_ROOT / "bin" / "niwa-mcp-smoke"
+    if not script.is_file():
+        return {"ok": False, "detail": f"{script} not found"}
+    cmd = [
+        sys.executable, str(script),
+        "--app-url", f"http://localhost:{cfg.app_port}",
+        "--token", cfg.mcp_server_token or cfg.tokens.get("MCP_GATEWAY_AUTH_TOKEN", ""),
+        "--json",
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        return {"ok": False, "detail": f"smoke subprocess error: {exc}"}
+    try:
+        payload = json.loads(r.stdout or "{}")
+    except Exception:
+        return {"ok": False, "detail": f"smoke returned non-JSON (exit {r.returncode})"}
+    if payload.get("ok"):
+        return {"ok": True, "detail": f"{payload.get('duration_ms', '?')}ms"}
+    # Exception: LLM-not-configured skip is not a failure.
+    for step in payload.get("steps", []):
+        if step.get("name") == "roundtrip_assistant_turn_skip" and step.get("ok"):
+            # Check whether the only non-ok condition was the roundtrip;
+            # if everything else passed, treat as pass with warning.
+            other_failures = [
+                s for s in payload["steps"]
+                if not s.get("ok") and s.get("name") != "roundtrip_assistant_turn"
+            ]
+            if not other_failures:
+                return {
+                    "ok": True,
+                    "detail": "LLM not configured — roundtrip skipped (install still valid)",
+                }
+    return {"ok": False, "detail": payload.get("error_message") or "smoke failed"}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Niwa installer and CLI")
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("install", help="Interactive install (default)")
+    p_install = sub.add_parser("install", help="Interactive install (default)")
+    # PR-11: --quick --mode flags. When --quick is NOT passed, the
+    # interactive wizard (steps 0-13) runs exactly as before.
+    p_install.add_argument("--quick", action="store_true",
+                           help="Run the non-interactive quick install (PR-11)")
+    p_install.add_argument("--mode", choices=QUICK_MODES, default="core",
+                           help="Install mode: core (standalone) or assistant (with OpenClaw). "
+                                "Only read when --quick is set.")
+    p_install.add_argument("-y", "--yes", action="store_true",
+                           help="Skip the final confirmation prompt (--quick only)")
+    p_install.add_argument("--workspace",
+                           help="Workspace directory to expose as /workspace (quick only)")
+    p_install.add_argument("--public-url",
+                           help="If set, bind ports to 0.0.0.0 and use this domain (quick only)")
+    p_install.add_argument("--admin-user",
+                           help="Niwa web UI username (default: niwa). Quick install only.")
+    p_install.add_argument("--admin-password",
+                           help="Niwa web UI password. If omitted, one is auto-generated.")
+    p_install.add_argument("--instance",
+                           help="Instance name (default: niwa). Quick install only.")
+    p_install.add_argument("--dir",
+                           help="Install directory (default: ~/.<instance>). Quick install only.")
+    p_install.add_argument("--force", action="store_true",
+                           help="Overwrite an existing install even when the --mode differs "
+                                "from the recorded one. DB data is preserved.")
 
     p_status = sub.add_parser("status", help="Show status of an existing install")
     p_status.add_argument("--dir", help="Install location (auto-detect by default)")
@@ -2672,6 +3342,8 @@ def main():
     args = parser.parse_args()
     cmd = args.cmd or "install"
     if cmd == "install":
+        if getattr(args, "quick", False):
+            sys.exit(cmd_install_quick(args))
         cmd_install(args)
     elif cmd == "status":
         cmd_status(args)
