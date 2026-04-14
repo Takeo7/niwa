@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Box, Group, Paper, Stack, Text } from '@mantine/core';
+import { Box, Group, Paper, Stack, Text, UnstyledButton } from '@mantine/core';
 import { RelativeTime } from './RelativeTime';
 
 export interface TimelineItem {
@@ -33,9 +33,18 @@ const KIND_COLORS: Record<string, string> = {
 interface Props {
   items: TimelineItem[];
   empty?: ReactNode;
+  /** When provided, each item becomes clickable and invokes this
+   *  callback.  PR-10c uses this to open a detail drawer for the
+   *  selected event without leaving the timeline page. */
+  onItemClick?: (item: TimelineItem) => void;
+  /** When ``onItemClick`` is set, highlight the currently-opened
+   *  item so the operator keeps context after closing the drawer. */
+  activeItemId?: string | null;
 }
 
-export function Timeline({ items, empty }: Props) {
+export function Timeline({
+  items, empty, onItemClick, activeItemId,
+}: Props) {
   if (!items.length) {
     return (
       <Box py="md">
@@ -45,6 +54,7 @@ export function Timeline({ items, empty }: Props) {
       </Box>
     );
   }
+  const clickable = typeof onItemClick === 'function';
   return (
     <Stack gap={0} style={{ position: 'relative' }}>
       {items.map((item, idx) => (
@@ -62,79 +72,104 @@ export function Timeline({ items, empty }: Props) {
               }}
             />
           )}
-          <Group
-            align="flex-start"
-            gap="sm"
-            wrap="nowrap"
-            py={6}
-            style={{ position: 'relative' }}
-          >
-            <Box
+          {clickable ? (
+            <UnstyledButton
+              onClick={() => onItemClick!(item)}
               style={{
-                width: 11,
-                height: 11,
-                borderRadius: '50%',
-                background: KIND_COLORS[item.kind] ??
-                  'var(--mantine-color-gray-5)',
-                flexShrink: 0,
-                marginTop: 6,
-                outline: '2px solid var(--mantine-color-body)',
+                display: 'block',
+                width: '100%',
+                borderRadius: 4,
+                padding: '0 6px',
+                marginLeft: -6,
+                background: activeItemId === item.id
+                  ? 'var(--mantine-color-default-hover)'
+                  : 'transparent',
               }}
-            />
-            <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-              <Group gap="xs" justify="space-between" wrap="nowrap">
-                <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-                  <Text
-                    size="xs"
-                    fw={600}
-                    c="dimmed"
-                    tt="uppercase"
-                    style={{ letterSpacing: '0.04em' }}
-                  >
-                    {item.kind}
-                  </Text>
-                  {item.title && (
-                    <Text size="sm" lineClamp={1}>
-                      {item.title}
-                    </Text>
-                  )}
-                </Group>
-                {item.timestamp && (
-                  <RelativeTime iso={item.timestamp} />
-                )}
-              </Group>
-              {item.body && (
-                <Text
-                  size="sm"
-                  c="dimmed"
-                  style={{ whiteSpace: 'pre-wrap' }}
-                >
-                  {item.body}
-                </Text>
-              )}
-              {item.payload && (
-                <Paper
-                  withBorder
-                  radius="sm"
-                  p={6}
-                  bg="var(--mantine-color-default-hover)"
-                >
-                  <Text
-                    size="xs"
-                    ff="monospace"
-                    style={{
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    {item.payload}
-                  </Text>
-                </Paper>
-              )}
-            </Stack>
-          </Group>
+            >
+              <ItemRow item={item} />
+            </UnstyledButton>
+          ) : (
+            <ItemRow item={item} />
+          )}
         </Box>
       ))}
     </Stack>
+  );
+}
+
+function ItemRow({ item }: { item: TimelineItem }) {
+  return (
+    <Group
+      align="flex-start"
+      gap="sm"
+      wrap="nowrap"
+      py={6}
+      style={{ position: 'relative' }}
+    >
+      <Box
+        style={{
+          width: 11,
+          height: 11,
+          borderRadius: '50%',
+          background: KIND_COLORS[item.kind] ??
+            'var(--mantine-color-gray-5)',
+          flexShrink: 0,
+          marginTop: 6,
+          outline: '2px solid var(--mantine-color-body)',
+        }}
+      />
+      <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+        <Group gap="xs" justify="space-between" wrap="nowrap">
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <Text
+              size="xs"
+              fw={600}
+              c="dimmed"
+              tt="uppercase"
+              style={{ letterSpacing: '0.04em' }}
+            >
+              {item.kind}
+            </Text>
+            {item.title && (
+              <Text size="sm" lineClamp={1}>
+                {item.title}
+              </Text>
+            )}
+          </Group>
+          {item.timestamp && (
+            <RelativeTime iso={item.timestamp} />
+          )}
+        </Group>
+        {item.body && (
+          <Text
+            size="sm"
+            c="dimmed"
+            style={{ whiteSpace: 'pre-wrap' }}
+          >
+            {item.body}
+          </Text>
+        )}
+        {item.payload && (
+          <Paper
+            withBorder
+            radius="sm"
+            p={6}
+            bg="var(--mantine-color-default-hover)"
+          >
+            <Text
+              size="xs"
+              ff="monospace"
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+              lineClamp={3}
+            >
+              {item.payload}
+            </Text>
+          </Paper>
+        )}
+      </Stack>
+    </Group>
   );
 }

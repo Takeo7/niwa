@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Paper, Loader, Center, Text, Stack, Group } from '@mantine/core';
 import {
   Timeline,
@@ -10,6 +10,7 @@ import { DurationLabel } from '../../../shared/components/DurationLabel';
 import { RelativeTime } from '../../../shared/components/RelativeTime';
 import { useRun, useRunEvents } from '../hooks/useRuns';
 import type { BackendRunEvent } from '../../../shared/types';
+import { EventDetailDrawer } from './EventDetailDrawer';
 
 interface Props {
   runId: string | null;
@@ -187,11 +188,19 @@ export function RunTimeline({ runId }: Props) {
     data: events,
     isLoading: evLoading,
   } = useRunEvents(runId);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
   const items = useMemo(
     () => eventsToTimeline(events ?? []),
     [events],
   );
+
+  // Source the detail from the live events array so the drawer stays
+  // in sync when the backend appends new rows during an active run.
+  const selectedEvent: BackendRunEvent | null = useMemo(() => {
+    if (!selectedEventId || !events) return null;
+    return events.find((e) => e.id === selectedEventId) ?? null;
+  }, [selectedEventId, events]);
 
   if (!runId) {
     return (
@@ -275,9 +284,16 @@ export function RunTimeline({ runId }: Props) {
           <Timeline
             items={items}
             empty="Este run aún no ha emitido eventos."
+            onItemClick={(item) => setSelectedEventId(item.id)}
+            activeItemId={selectedEventId}
           />
         )}
       </Paper>
+
+      <EventDetailDrawer
+        event={selectedEvent}
+        onClose={() => setSelectedEventId(null)}
+      />
     </Stack>
   );
 }
