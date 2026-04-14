@@ -2,6 +2,7 @@ import { Box, Group, Stack, Text } from '@mantine/core';
 import { RelativeTime } from '../../../shared/components/RelativeTime';
 import type { Turn } from '../types';
 import { ActionChips } from './ActionChips';
+import { TurnErrorBanner } from './TurnErrorBanner';
 
 interface Props {
   turn: Turn;
@@ -60,13 +61,17 @@ export function TurnView({ turn }: Props) {
         {turn.in_flight ? (
           <AssistantSkeleton />
         ) : turn.error ? (
-          <Text
-            size="sm"
-            c="red"
-            style={{ whiteSpace: 'pre-wrap' }}
-          >
-            {turn.error_message || turn.error}
-          </Text>
+          <Stack gap="xs">
+            {turn.assistant_message ? (
+              <Text
+                size="sm"
+                style={{ whiteSpace: 'pre-wrap' }}
+              >
+                {turn.assistant_message}
+              </Text>
+            ) : null}
+            <TurnErrorBanner turn={turn} />
+          </Stack>
         ) : (
           <Text
             size="sm"
