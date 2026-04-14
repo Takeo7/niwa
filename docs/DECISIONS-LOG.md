@@ -448,10 +448,16 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 
 ### Decisión 6: Docker image tags no pinneados — anotado para PR-11
 
-**Decisión:** `docker-compose.yml.tmpl` mantiene `docker/mcp-gateway:latest` con un TODO para PR-11 que pinnee a tag fijo. No se pinnea en PR-09 porque no se conoce la versión semántica del gateway y el template es scope compartido con PR-11.
-**Motivo:** Pinnear a un tag arbitrario puede romper installs existentes si el tag no existe. PR-11 (installer) tiene contexto para detectar/resolver la versión.
-**Alternativas consideradas:** Pinnear a `:0.1.0` o similar — rechazado por riesgo de tag inexistente.
-**Impacto:** El template marca SSE como legacy. PR-11 pinnea.
+**Decisión:** PR-09 deja sin pinnear estas imágenes en `docker-compose.yml.tmpl`:
+  - `docker/mcp-gateway:latest` (servicio `mcp-gateway`, línea 48) — gateway streamable-http principal para modo assistant.
+  - `docker/mcp-gateway:latest` (servicio `mcp-gateway-sse`, línea 88) — gateway SSE legacy, marcado como LEGACY en el comentario.
+
+No se tocan otras imágenes (`tecnativa/docker-socket-proxy:0.3.0` ya está pinneada, `caddy:2-alpine` está pinneada por rama major, `${INSTANCE_NAME}-app:${NIWA_VERSION}` es imagen local con versión).
+
+Se añaden comentarios `TODO PR-11: pin to a fixed tag` en ambas líneas. La razón del deferral: PR-11 (installer) es quien conoce el entorno target y puede resolver la versión semántica correcta del gateway en el momento del install — aquí en PR-09 no tenemos forma de validar que un tag concreto exista.
+**Motivo:** Pinnear a un tag arbitrario puede romper installs existentes si el tag no existe en Docker Hub. El SPEC PR-11 dice explícitamente "Pinned Docker images, not `latest` in quick mode (`mcp-gateway` y `mcp-gateway-sse` están en `:latest` hoy; operational drift innecesario)". Scope explícito del installer.
+**Alternativas consideradas:** (a) Pinnear a `:0.1.0` o similar — rechazado por riesgo de tag inexistente y acoplamiento a una versión sin validar. (b) Scripts de detección automática de tag — scope excesivo para PR-09.
+**Impacto:** PR-11 debe resolver la versión del `docker/mcp-gateway` y reemplazar `:latest` por el tag fijo en ambas líneas del template. El template actual sigue funcionando (Docker resuelve `:latest` a la imagen más reciente en el registry).
 
 ### Decisión 7: OpenClaw skill file (niwa-skill.md) no actualizado — scope de PR-11
 
