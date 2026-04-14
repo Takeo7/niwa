@@ -9,11 +9,13 @@ import {
   Stack,
   Button,
   Divider,
+  ScrollArea,
 } from '@mantine/core';
 import { IconPlus } from '@tabler/icons-react';
 import { useProjects } from '../../../shared/api/queries';
 import { useChat } from '../hooks/useChat';
 import { MonoId } from '../../../shared/components/MonoId';
+import { MessageList } from './MessageList';
 
 /**
  * Chat web v0.2 sobre assistant_turn — layout mínimo estilo editorial.
@@ -68,7 +70,16 @@ export function ChatPage() {
   );
 
   return (
-    <Box p="md" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <Box
+      p="md"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        height: 'calc(100vh - 50px - 32px)',
+        minHeight: 0,
+      }}
+    >
       <Group justify="space-between" align="flex-end">
         <Stack gap={2}>
           <Title order={3}>Chat</Title>
@@ -103,40 +114,33 @@ export function ChatPage() {
         </Group>
       </Group>
       <Divider />
-      {/* Placeholder — MessageList + MessageInput se añaden en commits
-          5 y 6 de PR-10e.  Mostramos el estado mínimo para que el
-          scaffold compile y sea inspeccionable. */}
-      <Stack gap="xs">
-        {historyLoading ? (
-          <Text size="sm" c="dimmed">Cargando historial…</Text>
-        ) : null}
-        {!projectId ? (
+      {!projectId ? (
+        <Box py="md">
           <Text size="sm" c="dimmed">
             Elige un proyecto para empezar.
           </Text>
-        ) : (
-          <Text size="sm" c="dimmed">
-            {turns.length} turn{turns.length === 1 ? '' : 's'}
-            {loading ? ' — esperando respuesta…' : ''}
-          </Text>
-        )}
-        {networkError ? (
-          <Text size="xs" c="red">
-            {networkError}
-          </Text>
-        ) : null}
-        {/* Stub send button — reemplazado en commit 6 por MessageInput. */}
-        <Group gap="xs">
-          <Button
-            size="xs"
-            variant="light"
-            disabled={!projectId || loading}
-            onClick={() => send('ping')}
-          >
-            (scaffold) send "ping"
-          </Button>
-        </Group>
-      </Stack>
+        </Box>
+      ) : (
+        <ScrollArea style={{ flex: 1, minHeight: 0 }}>
+          <MessageList turns={turns} historyLoading={historyLoading} />
+        </ScrollArea>
+      )}
+      {networkError ? (
+        <Text size="xs" c="red">
+          {networkError}
+        </Text>
+      ) : null}
+      {/* Stub send button — reemplazado en commit 6 por MessageInput. */}
+      <Group gap="xs">
+        <Button
+          size="xs"
+          variant="light"
+          disabled={!projectId || loading}
+          onClick={() => send('ping')}
+        >
+          (scaffold) send "ping"
+        </Button>
+      </Group>
     </Box>
   );
 }
