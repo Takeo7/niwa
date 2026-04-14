@@ -16,6 +16,7 @@ import { useProjects } from '../../../shared/api/queries';
 import { useChat } from '../hooks/useChat';
 import { MonoId } from '../../../shared/components/MonoId';
 import { MessageList } from './MessageList';
+import { MessageInput } from './MessageInput';
 
 /**
  * Chat web v0.2 sobre assistant_turn — layout mínimo estilo editorial.
@@ -130,17 +131,12 @@ export function ChatPage() {
           {networkError}
         </Text>
       ) : null}
-      {/* Stub send button — reemplazado en commit 6 por MessageInput. */}
-      <Group gap="xs">
-        <Button
-          size="xs"
-          variant="light"
-          disabled={!projectId || loading}
-          onClick={() => send('ping')}
-        >
-          (scaffold) send "ping"
-        </Button>
-      </Group>
+      <MessageInput
+        onSend={send}
+        loading={loading}
+        disabled={!projectId}
+        disabledReason="Elige un proyecto antes de escribir."
+      />
     </Box>
   );
 }
