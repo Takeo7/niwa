@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Title,
@@ -17,7 +18,6 @@ import { DataTable, type DataTableColumn, type DataTableSortStatus } from 'manti
 import { IconPlus, IconSearch } from '@tabler/icons-react';
 import { useTasks } from '../hooks/useTasks';
 import { TaskForm } from './TaskForm';
-import { TaskDetail } from './TaskDetail';
 import type { Task } from '../../../shared/types';
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -48,13 +48,13 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function TaskList() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<string | null>(null);
   const [includeDone, setIncludeDone] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [sortStatus, setSortStatus] = useState<DataTableSortStatus<Task>>({
     columnAccessor: 'created_at',
     direction: 'desc',
@@ -247,7 +247,7 @@ export function TaskList() {
           sortStatus={sortStatus}
           onSortStatusChange={setSortStatus}
           highlightOnHover
-          onRowClick={({ record }) => setDetailTaskId(record.id)}
+          onRowClick={({ record }) => navigate(`/tasks/${record.id}`)}
           idAccessor="id"
           minHeight={200}
           borderRadius="md"
@@ -260,11 +260,6 @@ export function TaskList() {
         opened={formOpen}
         onClose={() => setFormOpen(false)}
         task={editingTask}
-      />
-      <TaskDetail
-        taskId={detailTaskId}
-        opened={!!detailTaskId}
-        onClose={() => setDetailTaskId(null)}
       />
     </Stack>
   );

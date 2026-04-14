@@ -306,3 +306,102 @@ export interface TaskAttachment {
   size?: number;
   created_at?: string;
 }
+
+// ── Runs / Routing (v0.2 — PR-10a) ──
+
+export type RunStatus =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'waiting_approval'
+  | 'waiting_input'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'rejected';
+
+export type RunRelationType = 'fallback' | 'resume' | 'retry' | null;
+
+export interface BackendRun {
+  id: string;
+  task_id: string;
+  routing_decision_id: string | null;
+  previous_run_id: string | null;
+  relation_type: RunRelationType;
+  backend_profile_id: string | null;
+  backend_profile_slug: string | null;
+  backend_profile_display_name: string | null;
+  backend_kind: string | null;
+  runtime_kind: string | null;
+  model_resolved: string | null;
+  session_handle: string | null;
+  status: RunStatus;
+  outcome: string | null;
+  exit_code: number | null;
+  error_code: string | null;
+  artifact_root: string | null;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  observed_usage_signals_json: string | null;
+  capability_snapshot_json: string | null;
+  budget_snapshot_json: string | null;
+}
+
+export interface BackendRunEvent {
+  id: string;
+  backend_run_id: string;
+  event_type: string;
+  message: string | null;
+  payload_json: string | null;
+  created_at: string;
+}
+
+export interface RoutingMatchedRule {
+  rule: string;
+  rule_id?: string;
+  rule_name?: string;
+  position?: number;
+  profile_id?: string;
+  slug?: string;
+  prior_run_id?: string;
+  triggers?: unknown;
+}
+
+export interface RoutingBackend {
+  id: string;
+  slug: string | null;
+  display_name: string | null;
+}
+
+export interface RoutingApproval {
+  id: string;
+  status: string;
+  approval_type: string;
+  risk_level: string | null;
+  reason: string | null;
+  requested_at: string;
+  resolved_at: string | null;
+}
+
+export interface RoutingDecision {
+  id: string;
+  task_id: string;
+  decision_index: number | null;
+  requested_profile_id: string | null;
+  selected_profile_id: string | null;
+  selected_backend_slug: string | null;
+  selected_backend_display_name: string | null;
+  reason_summary: string;
+  matched_rules: RoutingMatchedRule[];
+  fallback_chain: RoutingBackend[];
+  estimated_resource_cost: string | null;
+  quota_risk: string | null;
+  contract_version: string | null;
+  created_at: string;
+  approval_required: boolean;
+  approval: RoutingApproval | null;
+}

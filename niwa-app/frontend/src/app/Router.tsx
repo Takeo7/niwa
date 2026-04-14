@@ -1,6 +1,10 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ChatView } from '../features/chat/components/ChatView';
 import { TaskList } from '../features/tasks/components/TaskList';
+import { TaskDetailPage } from '../features/tasks/components/TaskDetailPage';
+import { TaskDetailsTab } from '../features/tasks/components/TaskDetailsTab';
+import { RunsTab } from '../features/runs/components/RunsTab';
+import { RoutingTab } from '../features/runs/components/RoutingTab';
 import { KanbanBoard } from '../features/kanban/components/KanbanBoard';
 import { ProjectList } from '../features/projects/components/ProjectList';
 import { ProjectDetail } from '../features/projects/components/ProjectDetail';
@@ -17,6 +21,11 @@ export function AppRouter() {
       <Route path="/dashboard" element={<DashboardView />} />
       <Route path="/chat" element={<ChatView />} />
       <Route path="/tasks" element={<TaskList />} />
+      <Route path="/tasks/:taskId" element={<TaskDetailPage />}>
+        <Route index element={<TaskDetailsTab />} />
+        <Route path="runs" element={<RunsTab />} />
+        <Route path="routing" element={<RoutingTab />} />
+      </Route>
       <Route path="/kanban" element={<KanbanBoard />} />
       <Route path="/projects" element={<ProjectList />} />
       <Route path="/projects/:slug" element={<ProjectDetail />} />
