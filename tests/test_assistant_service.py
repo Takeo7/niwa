@@ -490,3 +490,186 @@ class TestCallAnthropic:
             tools=None, system="s", timeout=0.3,
         )
         assert captured["timeout"] == 1
+
+
+# ── Tests: domain tools ──────────────────────────────────────────────
+
+class TestDomainTools:
+    """Unit tests for each domain tool function."""
+
+    def setup_method(self):
+        self.fd, self.path, self.conn = _make_db()
+        self.pid = _seed_project(self.conn)
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.fd)
+        os.unlink(self.path)
+
+    def _insert_task(self, status="pendiente", title="Test task"):
+        tid = str(uuid.uuid4())
+        now = assistant_service._now_iso()
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, area, project_id, status, "
+            "priority, created_at, updated_at) "
+            "VALUES (?, ?, 'proyecto', ?, ?, 'media', ?, ?)",
+            (tid, title, self.pid, status, now, now),
+        )
+        self.conn.commit()
+        return tid
+
+    # ── task_list ────────────────────────────────────────────────
+
+    def test_task_list_empty(self):
+        r = assistant_service._tool_task_list(self.conn, self.pid, {})
+        assert r["count"] == 0
+        assert r["tasks"] == []
+
+    def test_task_list_returns_tasks(self):
+        self._insert_task()
+        self._insert_task()
+        r = assistant_service._tool_task_list(self.conn, self.pid, {})
+        assert r["count"] == 2
+
+    def test_task_list_filters_by_status(self):
+        self._insert_task(status="pendiente")
+        self._insert_task(status="en_progreso")
+        r = assistant_service._tool_task_list(
+            self.conn, self.pid, {"status": "pendiente"},
+        )
+        assert r["count"] == 1
+        assert r["tasks"][0]["status"] == "pendiente"
+
+    # ── task_get ─────────────────────────────────────────────────
+
+    def test_task_get_found(self):
+        tid = self._insert_task(title="Hello")
+        r = assistant_service._tool_task_get(self.conn, self.pid, {"task_id": tid})
+        assert r["title"] == "Hello"
+
+    def test_task_get_not_found(self):
+        r = assistant_service._tool_task_get(
+            self.conn, self.pid, {"task_id": "nonexistent"},
+        )
+        assert r["error"] == "task_not_found"
+
+    # ── task_create ──────────────────────────────────────────────
+
+    def test_task_create_success(self):
+        r = assistant_service._tool_task_create(
+            self.conn, self.pid, {"title": "New task", "priority": "alta"},
+        )
+        assert "task_id" in r
+        assert r["status"] == "pendiente"
+        row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (r["task_id"],),
+        ).fetchone()
+        assert row["title"] == "New task"
+        assert row["priority"] == "alta"
+        assert row["project_id"] == self.pid
+
+    def test_task_create_records_event(self):
+        r = assistant_service._tool_task_create(
+            self.conn, self.pid, {"title": "Evented"},
+        )
+        evt = self.conn.execute(
+            "SELECT * FROM task_events WHERE task_id = ? AND type = 'created'",
+            (r["task_id"],),
+        ).fetchone()
+        assert evt is not None
+
+    def test_task_create_missing_title(self):
+        r = assistant_service._tool_task_create(self.conn, self.pid, {})
+        assert r["error"] == "title is required"
+
+    # ── task_cancel ──────────────────────────────────────────────
+
+    def test_task_cancel_from_pendiente(self):
+        tid = self._insert_task(status="pendiente")
+        r = assistant_service._tool_task_cancel(
+            self.conn, self.pid, {"task_id": tid},
+        )
+        assert r["status"] == "archivada"
+        row = self.conn.execute(
+            "SELECT status FROM tasks WHERE id = ?", (tid,),
+        ).fetchone()
+        assert row["status"] == "archivada"
+
+    def test_task_cancel_from_terminal_fails(self):
+        tid = self._insert_task(status="hecha")
+        r = assistant_service._tool_task_cancel(
+            self.conn, self.pid, {"task_id": tid},
+        )
+        assert r["error"] == "cannot_cancel"
+
+    # ── task_resume ──────────────────────────────────────────────
+
+    def test_task_resume_from_bloqueada(self):
+        tid = self._insert_task(status="bloqueada")
+        r = assistant_service._tool_task_resume(
+            self.conn, self.pid, {"task_id": tid},
+        )
+        assert r["status"] == "pendiente"
+
+    def test_task_resume_from_en_progreso_fails(self):
+        tid = self._insert_task(status="en_progreso")
+        r = assistant_service._tool_task_resume(
+            self.conn, self.pid, {"task_id": tid},
+        )
+        assert r["error"] == "cannot_resume"
+
+    # ── project_context ──────────────────────────────────────────
+
+    def test_project_context(self):
+        self._insert_task(status="pendiente")
+        self._insert_task(status="hecha")
+        r = assistant_service._tool_project_context(self.conn, self.pid, {})
+        assert r["project"]["name"] == "Test Project"
+        assert r["task_summary"].get("pendiente", 0) == 1
+        assert r["task_summary"].get("hecha", 0) == 1
+        assert len(r["recent_tasks"]) == 2
+
+
+# ── Tests: ID collection helper ──────────────────────────────────────
+
+class TestCollectIds:
+
+    def test_collects_task_ids_from_list(self):
+        task_ids, approval_ids, run_ids = set(), set(), set()
+        result = {"tasks": [{"id": "t1"}, {"id": "t2"}], "count": 2}
+        assistant_service._collect_ids(
+            "task_list", result, task_ids, approval_ids, run_ids,
+        )
+        assert task_ids == {"t1", "t2"}
+
+    def test_collects_task_id_from_create(self):
+        task_ids, approval_ids, run_ids = set(), set(), set()
+        result = {"task_id": "t1", "status": "pendiente"}
+        assistant_service._collect_ids(
+            "task_create", result, task_ids, approval_ids, run_ids,
+        )
+        assert task_ids == {"t1"}
+
+    def test_collects_cancelled_run_ids(self):
+        task_ids, approval_ids, run_ids = set(), set(), set()
+        result = {"task_id": "t1", "cancelled_run_ids": ["r1", "r2"]}
+        assistant_service._collect_ids(
+            "task_cancel", result, task_ids, approval_ids, run_ids,
+        )
+        assert run_ids == {"r1", "r2"}
+
+    def test_collects_approval_ids_from_list(self):
+        task_ids, approval_ids, run_ids = set(), set(), set()
+        result = {"approvals": [{"id": "a1"}, {"id": "a2"}], "count": 2}
+        assistant_service._collect_ids(
+            "approval_list", result, task_ids, approval_ids, run_ids,
+        )
+        assert approval_ids == {"a1", "a2"}
+
+    def test_collects_run_from_tail(self):
+        task_ids, approval_ids, run_ids = set(), set(), set()
+        result = {"run": {"id": "r1", "status": "running"}, "events": []}
+        assistant_service._collect_ids(
+            "run_tail", result, task_ids, approval_ids, run_ids,
+        )
+        assert run_ids == {"r1"}

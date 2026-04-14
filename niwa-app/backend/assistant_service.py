@@ -172,6 +172,500 @@ def _persist_assistant_message(session_id: str, content: str, conn,
     return msg_id
 
 
+# ── Domain tools ─────────────────────────────────────────────────────
+# Each tool receives (conn, project_id, params) and returns a dict.
+# These are internal Python functions; MCP exposure is PR-09.
+
+
+def _tool_task_list(conn, project_id, params):
+    """List tasks for the current project."""
+    status = params.get("status")
+    limit = min(params.get("limit", 20), 50)
+
+    clauses = ["project_id = ?"]
+    args: list = [project_id]
+    if status:
+        clauses.append("status = ?")
+        args.append(status)
+
+    where = " AND ".join(clauses)
+    rows = conn.execute(
+        f"SELECT id, title, status, priority, created_at, updated_at "
+        f"FROM tasks WHERE {where} ORDER BY updated_at DESC LIMIT ?",
+        args + [limit],
+    ).fetchall()
+    return {"tasks": [dict(r) for r in rows], "count": len(rows)}
+
+
+def _tool_task_get(conn, project_id, params):
+    """Get detailed information about a single task."""
+    task_id = params.get("task_id")
+    if not task_id:
+        return {"error": "task_id is required"}
+    row = conn.execute(
+        "SELECT id, title, description, status, priority, project_id, "
+        "source, notes, created_at, updated_at, current_run_id, "
+        "approval_required "
+        "FROM tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        return {"error": "task_not_found", "task_id": task_id}
+    return dict(row)
+
+
+def _tool_task_create(conn, project_id, params):
+    """Create a new task in the current project."""
+    title = params.get("title", "").strip()
+    if not title:
+        return {"error": "title is required"}
+    description = params.get("description", "")
+    priority = params.get("priority", "media")
+    if priority not in ("baja", "media", "alta", "critica"):
+        priority = "media"
+
+    task_id = str(uuid.uuid4())
+    now = _now_iso()
+    conn.execute(
+        "INSERT INTO tasks "
+        "(id, title, description, area, project_id, status, priority, "
+        " source, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'proyecto', ?, 'pendiente', ?, 'assistant', ?, ?)",
+        (task_id, title, description, project_id, priority, now, now),
+    )
+    conn.execute(
+        "INSERT INTO task_events (id, task_id, type, payload_json, created_at) "
+        "VALUES (?, ?, 'created', ?, ?)",
+        (str(uuid.uuid4()), task_id,
+         json.dumps({"source": "assistant_turn", "title": title}), now),
+    )
+    conn.commit()
+    return {"task_id": task_id, "status": "pendiente"}
+
+
+def _tool_task_cancel(conn, project_id, params):
+    """Cancel a task (transition to archivada) and its active run."""
+    task_id = params.get("task_id")
+    if not task_id:
+        return {"error": "task_id is required"}
+
+    task = conn.execute(
+        "SELECT * FROM tasks WHERE id = ?", (task_id,),
+    ).fetchone()
+    if not task:
+        return {"error": "task_not_found", "task_id": task_id}
+
+    old_status = task["status"]
+    if not state_machines.can_transition_task(old_status, "archivada"):
+        return {
+            "error": "cannot_cancel",
+            "task_id": task_id,
+            "current_status": old_status,
+        }
+
+    now = _now_iso()
+    conn.execute(
+        "UPDATE tasks SET status = 'archivada', updated_at = ? WHERE id = ?",
+        (now, task_id),
+    )
+    conn.execute(
+        "INSERT INTO task_events (id, task_id, type, payload_json, created_at) "
+        "VALUES (?, ?, 'status_changed', ?, ?)",
+        (str(uuid.uuid4()), task_id,
+         json.dumps({"old_status": old_status, "new_status": "archivada",
+                     "source": "assistant_turn"}), now),
+    )
+
+    # Cancel active run if any
+    cancelled_run_ids: list[str] = []
+    current_run_id = task["current_run_id"]
+    if current_run_id:
+        run = conn.execute(
+            "SELECT id, status FROM backend_runs WHERE id = ?",
+            (current_run_id,),
+        ).fetchone()
+        if run:
+            rs = run["status"]
+            target = (
+                "cancelled" if rs in ("running", "waiting_input") else
+                "failed" if rs in ("queued", "starting") else
+                "rejected" if rs == "waiting_approval" else
+                None
+            )
+            if target and state_machines.can_transition_run(rs, target):
+                conn.execute(
+                    "UPDATE backend_runs SET status = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (target, now, run["id"]),
+                )
+                cancelled_run_ids.append(run["id"])
+
+    conn.commit()
+    return {
+        "task_id": task_id,
+        "status": "archivada",
+        "cancelled_run_ids": cancelled_run_ids,
+    }
+
+
+def _tool_task_resume(conn, project_id, params):
+    """Resume a blocked or waiting task (transition to pendiente)."""
+    task_id = params.get("task_id")
+    if not task_id:
+        return {"error": "task_id is required"}
+
+    task = conn.execute(
+        "SELECT * FROM tasks WHERE id = ?", (task_id,),
+    ).fetchone()
+    if not task:
+        return {"error": "task_not_found", "task_id": task_id}
+
+    old_status = task["status"]
+    if not state_machines.can_transition_task(old_status, "pendiente"):
+        return {
+            "error": "cannot_resume",
+            "task_id": task_id,
+            "current_status": old_status,
+        }
+
+    now = _now_iso()
+    conn.execute(
+        "UPDATE tasks SET status = 'pendiente', updated_at = ? WHERE id = ?",
+        (now, task_id),
+    )
+    conn.execute(
+        "INSERT INTO task_events (id, task_id, type, payload_json, created_at) "
+        "VALUES (?, ?, 'status_changed', ?, ?)",
+        (str(uuid.uuid4()), task_id,
+         json.dumps({"old_status": old_status, "new_status": "pendiente",
+                     "source": "assistant_turn"}), now),
+    )
+    conn.commit()
+    return {"task_id": task_id, "status": "pendiente"}
+
+
+def _tool_approval_list(conn, project_id, params):
+    """List approvals, optionally filtered by status or task_id."""
+    status = params.get("status")
+    task_id = params.get("task_id")
+    approvals = approval_service.list_approvals(
+        conn, status=status, task_id=task_id,
+    )
+    return {"approvals": approvals, "count": len(approvals)}
+
+
+def _tool_approval_respond(conn, project_id, params):
+    """Respond to a pending approval (approve or reject)."""
+    approval_id = params.get("approval_id")
+    decision = params.get("decision")
+    if not approval_id:
+        return {"error": "approval_id is required"}
+    if decision not in ("approved", "rejected"):
+        return {"error": "decision must be 'approved' or 'rejected'"}
+
+    note = params.get("note", "")
+    try:
+        result = approval_service.resolve_approval(
+            approval_id, decision, "assistant",
+            conn, resolution_note=note,
+        )
+        return result
+    except LookupError as exc:
+        return {"error": "approval_not_found", "message": str(exc)}
+    except ValueError as exc:
+        return {"error": "invalid_operation", "message": str(exc)}
+
+
+def _tool_run_tail(conn, project_id, params):
+    """Get recent events from a backend run."""
+    run_id = params.get("run_id")
+    if not run_id:
+        return {"error": "run_id is required"}
+    limit = min(params.get("limit", 20), 50)
+
+    run = conn.execute(
+        "SELECT id, task_id, status, started_at, finished_at, "
+        "outcome, error_code "
+        "FROM backend_runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    if not run:
+        return {"error": "run_not_found", "run_id": run_id}
+
+    rows = conn.execute(
+        "SELECT id, event_type, message, created_at "
+        "FROM backend_run_events WHERE backend_run_id = ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (run_id, limit),
+    ).fetchall()
+
+    return {
+        "run": dict(run),
+        "events": [dict(r) for r in reversed(rows)],
+    }
+
+
+def _tool_run_explain(conn, project_id, params):
+    """Explain the routing decision and run history for a task."""
+    task_id = params.get("task_id")
+    if not task_id:
+        return {"error": "task_id is required"}
+
+    decision = conn.execute(
+        "SELECT * FROM routing_decisions WHERE task_id = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if not decision:
+        return {"task_id": task_id,
+                "message": "No routing decision found for this task."}
+
+    d = dict(decision)
+    profile = conn.execute(
+        "SELECT slug, display_name FROM backend_profiles WHERE id = ?",
+        (d.get("selected_profile_id"),),
+    ).fetchone()
+
+    runs = conn.execute(
+        "SELECT id, status, backend_kind, started_at, finished_at, "
+        "outcome, error_code "
+        "FROM backend_runs WHERE routing_decision_id = ? "
+        "ORDER BY created_at",
+        (d["id"],),
+    ).fetchall()
+
+    return {
+        "task_id": task_id,
+        "decision_id": d["id"],
+        "selected_backend": dict(profile) if profile else None,
+        "reason_summary": d.get("reason_summary_json"),
+        "matched_rules": d.get("matched_rules_json"),
+        "runs": [dict(r) for r in runs],
+    }
+
+
+def _tool_project_context(conn, project_id, params):
+    """Get project metadata, task summary, and recent activity."""
+    project = conn.execute(
+        "SELECT id, name, description, area, directory, url "
+        "FROM projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    if not project:
+        return {"error": "project_not_found", "project_id": project_id}
+
+    status_counts = conn.execute(
+        "SELECT status, COUNT(*) as count FROM tasks "
+        "WHERE project_id = ? GROUP BY status",
+        (project_id,),
+    ).fetchall()
+
+    recent = conn.execute(
+        "SELECT id, title, status, priority, updated_at FROM tasks "
+        "WHERE project_id = ? ORDER BY updated_at DESC LIMIT 10",
+        (project_id,),
+    ).fetchall()
+
+    pending_approvals = conn.execute(
+        "SELECT COUNT(*) as count FROM approvals a "
+        "JOIN tasks t ON a.task_id = t.id "
+        "WHERE t.project_id = ? AND a.status = 'pending'",
+        (project_id,),
+    ).fetchone()
+
+    return {
+        "project": dict(project),
+        "task_summary": {r["status"]: r["count"] for r in status_counts},
+        "recent_tasks": [dict(r) for r in recent],
+        "pending_approvals": pending_approvals["count"] if pending_approvals else 0,
+    }
+
+
+# Tool dispatch table (name → function)
+_TOOL_DISPATCH: dict[str, Any] = {
+    "task_list": _tool_task_list,
+    "task_get": _tool_task_get,
+    "task_create": _tool_task_create,
+    "task_cancel": _tool_task_cancel,
+    "task_resume": _tool_task_resume,
+    "approval_list": _tool_approval_list,
+    "approval_respond": _tool_approval_respond,
+    "run_tail": _tool_run_tail,
+    "run_explain": _tool_run_explain,
+    "project_context": _tool_project_context,
+}
+
+
+# ── Tool schemas (Anthropic function calling format) ─────────────────
+
+TOOL_DEFINITIONS: list[dict] = [
+    {
+        "name": "task_list",
+        "description": "List tasks for the current project, optionally filtered by status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by task status.",
+                    "enum": ["inbox", "pendiente", "en_progreso", "bloqueada",
+                             "revision", "waiting_input", "hecha", "archivada"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results (default 20, max 50).",
+                },
+            },
+        },
+    },
+    {
+        "name": "task_get",
+        "description": "Get detailed information about a specific task.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task ID."},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "task_create",
+        "description": "Create a new task. It will be executed by the backend engine asynchronously.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short task title."},
+                "description": {"type": "string", "description": "Detailed description."},
+                "priority": {
+                    "type": "string",
+                    "enum": ["baja", "media", "alta", "critica"],
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "task_cancel",
+        "description": "Cancel a task and its active run (archives the task).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task ID to cancel."},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "task_resume",
+        "description": "Resume a blocked or waiting task (transitions to pendiente).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task ID to resume."},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "approval_list",
+        "description": "List approval requests, optionally filtered.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "approved", "rejected"],
+                },
+                "task_id": {"type": "string", "description": "Filter by task."},
+            },
+        },
+    },
+    {
+        "name": "approval_respond",
+        "description": "Respond to a pending approval (approve or reject).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "approval_id": {"type": "string"},
+                "decision": {"type": "string", "enum": ["approved", "rejected"]},
+                "note": {"type": "string", "description": "Optional note."},
+            },
+            "required": ["approval_id", "decision"],
+        },
+    },
+    {
+        "name": "run_tail",
+        "description": "Get recent events from a backend execution run.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "limit": {"type": "integer", "description": "Max events (default 20)."},
+            },
+            "required": ["run_id"],
+        },
+    },
+    {
+        "name": "run_explain",
+        "description": "Explain routing decision and execution history for a task.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "project_context",
+        "description": "Get project metadata, task summary, and recent activity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+]
+
+
+# ── ID collection helper ────────────────────────────────────────────
+
+def _collect_ids(tool_name: str, result: Any,
+                 task_ids: set, approval_ids: set, run_ids: set) -> None:
+    """Extract entity IDs from a tool result into collector sets."""
+    if not isinstance(result, dict):
+        return
+
+    if "task_id" in result:
+        task_ids.add(result["task_id"])
+    if "tasks" in result and isinstance(result["tasks"], list):
+        for t in result["tasks"]:
+            if isinstance(t, dict) and "id" in t:
+                task_ids.add(t["id"])
+
+    if "approval_id" in result:
+        approval_ids.add(result["approval_id"])
+    if "approvals" in result and isinstance(result["approvals"], list):
+        for a in result["approvals"]:
+            if isinstance(a, dict) and "id" in a:
+                approval_ids.add(a["id"])
+    if tool_name == "approval_respond" and "id" in result:
+        approval_ids.add(result["id"])
+
+    if "run_id" in result:
+        run_ids.add(result["run_id"])
+    if "cancelled_run_ids" in result:
+        run_ids.update(result["cancelled_run_ids"])
+    if "runs" in result and isinstance(result["runs"], list):
+        for r in result["runs"]:
+            if isinstance(r, dict) and "id" in r:
+                run_ids.add(r["id"])
+    if "run" in result and isinstance(result["run"], dict) and "id" in result["run"]:
+        run_ids.add(result["run"]["id"])
+
+
+# ── Routing mode ─────────────────────────────────────────────────────
+
 def _get_routing_mode(conn) -> str | None:
     """Read routing_mode from settings.  Returns None if absent."""
     row = conn.execute(
