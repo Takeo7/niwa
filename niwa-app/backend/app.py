@@ -3674,6 +3674,27 @@ class Handler(BaseHTTPRequestHandler):
             session_id = path.split('/')[4]
             delete_chat_session(session_id)
             return self._json({'ok': True})
+        # ── PR-08: assistant_turn endpoint ──
+        if path == '/api/assistant/turn':
+            import assistant_service
+            session_id = payload.get('session_id', '')
+            project_id = payload.get('project_id', '')
+            message = payload.get('message', '')
+            channel = payload.get('channel', 'web')
+            metadata = payload.get('metadata')
+            with db_conn() as conn:
+                result = assistant_service.assistant_turn(
+                    session_id=session_id,
+                    project_id=project_id,
+                    message=message,
+                    channel=channel,
+                    metadata=metadata,
+                    conn=conn,
+                )
+            status = 200 if 'error' not in result else 400
+            if result.get('error') == 'routing_mode_mismatch':
+                status = 409
+            return self._json(result, status)
         if path == '/api/routines':
             rid = scheduler.create_routine(db_conn, payload)
             return self._json({'ok': True, 'id': rid}, 201)
