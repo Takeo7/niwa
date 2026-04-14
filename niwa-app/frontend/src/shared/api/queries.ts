@@ -3,7 +3,7 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
-import { api, apiPost, apiPatch, apiDelete, ApiError } from './client';
+import { api, apiPost, apiPatch, apiPut, apiDelete, ApiError } from './client';
 import type {
   Task,
   Project,
@@ -34,6 +34,10 @@ import type {
   Approval,
   ApprovalStatus,
   ApprovalDecision,
+  BackendProfile,
+  BackendProfilePatch,
+  CapabilityProfileResponse,
+  CapabilityProfilePatch,
 } from '../types';
 
 // ── Tasks ──
@@ -790,6 +794,51 @@ export function useDeleteProject() {
   return useMutation({
     mutationFn: (slug: string) => apiDelete<{ ok: boolean }>(`projects/${slug}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); },
+  });
+}
+
+// ── Backend profiles (PR-10d) ──
+export function useBackendProfiles() {
+  return useQuery({
+    queryKey: ['backend-profiles'],
+    queryFn: () => api<BackendProfile[]>('backend-profiles'),
+  });
+}
+
+export function useUpdateBackendProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string } & BackendProfilePatch) =>
+      apiPatch<BackendProfile>(`backend-profiles/${id}`, patch),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backend-profiles'] });
+    },
+  });
+}
+
+// ── Capability profiles (PR-10d) ──
+export function useProjectCapabilityProfile(projectKey: string | undefined) {
+  return useQuery({
+    queryKey: ['capability-profile', projectKey],
+    queryFn: () =>
+      api<CapabilityProfileResponse>(
+        `projects/${projectKey}/capability-profile`,
+      ),
+    enabled: !!projectKey,
+  });
+}
+
+export function useUpdateCapabilityProfile(projectKey: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: CapabilityProfilePatch) =>
+      apiPut<CapabilityProfileResponse>(
+        `projects/${projectKey}/capability-profile`,
+        patch,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['capability-profile', projectKey] });
+    },
   });
 }
 

@@ -15,6 +15,7 @@ import { NotesList } from '../features/notes/components/NotesList';
 import { DashboardView } from '../features/dashboard/components/DashboardView';
 import { HistoryView } from '../features/history/components/HistoryView';
 import { ApprovalsPage } from '../features/approvals/components/ApprovalsPage';
+import { SettingsPage } from '../features/settings/components/SettingsPage';
 
 export function AppRouter() {
   return (
@@ -37,6 +38,7 @@ export function AppRouter() {
       <Route path="/notes" element={<NotesList />} />
       <Route path="/history" element={<HistoryView />} />
       <Route path="/approvals" element={<ApprovalsPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );

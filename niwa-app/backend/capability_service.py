@@ -179,6 +179,194 @@ def seed_capability_profiles(conn) -> int:
     return inserted
 
 
+# ── Canonical enum values (PR-10d) ───────────────────────────────
+# Exposed so the HTTP layer can validate input against the same
+# set the SPEC PR-05 defines.  Keep in sync with SPEC.
+
+REPO_MODES = ("none", "read-only", "read-write")
+SHELL_MODES = ("disabled", "whitelist", "free")
+WEB_MODES = ("off", "on")
+NETWORK_MODES = ("off", "on", "restricted")
+
+# Columns that ``upsert_profile_for_project`` will accept.  Any other
+# key in the input dict is rejected as unknown_field by the HTTP layer.
+UPDATABLE_CAPABILITY_FIELDS = (
+    "repo_mode",
+    "shell_mode",
+    "web_mode",
+    "network_mode",
+    "shell_whitelist_json",
+    "filesystem_scope_json",
+    "secrets_scope_json",
+    "resource_budget_json",
+)
+
+
+def validate_capability_input(payload: dict) -> dict | None:
+    """Validate a partial ``project_capability_profile`` payload.
+
+    Returns ``None`` when valid, or ``{"error": code, "field": name,
+    "message": human}`` describing the first problem found.
+
+    Rules:
+      - Unknown fields are rejected (``unknown_field``).
+      - ``repo_mode`` ∈ REPO_MODES.
+      - ``shell_mode`` ∈ SHELL_MODES.
+      - ``web_mode`` ∈ WEB_MODES.
+      - ``network_mode`` ∈ NETWORK_MODES.
+      - ``shell_whitelist_json`` must parse as a JSON list of strings.
+      - ``filesystem_scope_json`` / ``secrets_scope_json`` /
+        ``resource_budget_json`` must parse as JSON (any shape).
+
+    ``name`` updates are intentionally out of scope for the editable
+    surface — the seeded row is always named ``standard``.
+    """
+    if not isinstance(payload, dict):
+        return {"error": "invalid_payload", "field": None,
+                "message": "payload must be a JSON object"}
+
+    for key in payload:
+        if key not in UPDATABLE_CAPABILITY_FIELDS:
+            return {"error": "unknown_field", "field": key,
+                    "message": f"field {key!r} is not editable"}
+
+    enums = {
+        "repo_mode": REPO_MODES,
+        "shell_mode": SHELL_MODES,
+        "web_mode": WEB_MODES,
+        "network_mode": NETWORK_MODES,
+    }
+    for field, allowed in enums.items():
+        if field in payload:
+            value = payload[field]
+            if not isinstance(value, str) or value not in allowed:
+                return {"error": "invalid_enum", "field": field,
+                        "message": (
+                            f"{field!r} must be one of "
+                            f"{list(allowed)}, got {value!r}"
+                        )}
+
+    if "shell_whitelist_json" in payload:
+        value = payload["shell_whitelist_json"]
+        parsed = _parse_json_list(value) if isinstance(value, str) else None
+        if parsed is None or not all(isinstance(c, str) for c in parsed):
+            return {"error": "invalid_json", "field": "shell_whitelist_json",
+                    "message": ("shell_whitelist_json must be a JSON "
+                                "array of strings")}
+
+    for json_field in ("filesystem_scope_json",
+                       "secrets_scope_json",
+                       "resource_budget_json"):
+        if json_field in payload:
+            value = payload[json_field]
+            if not isinstance(value, str):
+                return {"error": "invalid_json", "field": json_field,
+                        "message": f"{json_field} must be a JSON string"}
+            try:
+                json.loads(value)
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                return {"error": "invalid_json", "field": json_field,
+                        "message": f"{json_field} is not valid JSON: {e}"}
+
+    return None
+
+
+def upsert_profile_for_project(project_id: str, payload: dict, conn) -> dict:
+    """Upsert the capability profile row for *project_id*.
+
+    If no row exists, one is created from ``DEFAULT_CAPABILITY_PROFILE``
+    with the fields in *payload* layered on top.  If a row exists,
+    only the fields in *payload* are updated.
+
+    Callers MUST validate *payload* first via
+    ``validate_capability_input()`` — this function assumes it's valid.
+
+    Returns the resulting row as a dict.
+    Raises ``LookupError`` if *project_id* does not exist in projects.
+    """
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE id = ?", (project_id,),
+    ).fetchone()
+    if not proj:
+        raise LookupError(f"project {project_id!r} not found")
+
+    now = _now_iso()
+    existing = conn.execute(
+        "SELECT * FROM project_capability_profiles "
+        "WHERE project_id = ? ORDER BY created_at LIMIT 1",
+        (project_id,),
+    ).fetchone()
+
+    if existing is None:
+        merged = {
+            "repo_mode": DEFAULT_CAPABILITY_PROFILE["repo_mode"],
+            "shell_mode": DEFAULT_CAPABILITY_PROFILE["shell_mode"],
+            "shell_whitelist_json": DEFAULT_CAPABILITY_PROFILE[
+                "shell_whitelist_json"
+            ],
+            "web_mode": DEFAULT_CAPABILITY_PROFILE["web_mode"],
+            "network_mode": DEFAULT_CAPABILITY_PROFILE["network_mode"],
+            "filesystem_scope_json": DEFAULT_CAPABILITY_PROFILE[
+                "filesystem_scope_json"
+            ],
+            "secrets_scope_json": DEFAULT_CAPABILITY_PROFILE[
+                "secrets_scope_json"
+            ],
+            "resource_budget_json": DEFAULT_CAPABILITY_PROFILE[
+                "resource_budget_json"
+            ],
+        }
+        merged.update(payload)
+        row_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO project_capability_profiles "
+            "(id, project_id, name, repo_mode, shell_mode, "
+            " shell_whitelist_json, web_mode, network_mode, "
+            " filesystem_scope_json, secrets_scope_json, "
+            " resource_budget_json, created_at, updated_at) "
+            "VALUES (?, ?, 'standard', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row_id, project_id,
+                merged["repo_mode"], merged["shell_mode"],
+                merged["shell_whitelist_json"],
+                merged["web_mode"], merged["network_mode"],
+                merged["filesystem_scope_json"],
+                merged["secrets_scope_json"],
+                merged["resource_budget_json"],
+                now, now,
+            ),
+        )
+        logger.info(
+            "Created capability_profile for project %s from defaults "
+            "(fields overridden: %s)",
+            project_id, sorted(payload),
+        )
+    else:
+        if payload:
+            sets = [f"{k} = ?" for k in payload]
+            values = list(payload.values())
+            sets.append("updated_at = ?")
+            values.append(now)
+            values.append(existing["id"])
+            conn.execute(
+                f"UPDATE project_capability_profiles "
+                f"SET {', '.join(sets)} WHERE id = ?",
+                values,
+            )
+            logger.info(
+                "Updated capability_profile %s for project %s "
+                "(fields: %s)",
+                existing["id"], project_id, sorted(payload),
+            )
+
+    row = conn.execute(
+        "SELECT * FROM project_capability_profiles "
+        "WHERE project_id = ? ORDER BY created_at LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
 # ── Pre-execution evaluation ─────────────────────────────────────
 
 def evaluate(task: dict, run: dict, profile: dict,

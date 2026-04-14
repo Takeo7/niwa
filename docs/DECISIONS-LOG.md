@@ -712,3 +712,93 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 - Exponer un `renderItem` prop — flexible pero sobre-ingeniería: el único caso de uso en v0.2 es "abrir detalle".
 
 **Impacto:** El inline payload dentro del timeline pasa a renderizarse con `lineClamp=3` (teaser de 3 líneas en vez de payload completo). La autoridad pasa al drawer. Cambio de UX mínimo — antes el payload ocupaba mucho espacio por evento y obligaba a scroll; ahora cada fila tiene altura predecible y el operador abre el drawer si quiere profundizar.
+
+## 2026-04-14 — PR-10d
+
+### Decisión 1: Nuevo top-level `/settings` con sub-tab "Backends" (opción b)
+
+**Decisión:** Se añade una ruta nueva `/settings` como item top-level "Ajustes" en el AppShell, con Tabs y una sola pestaña en PR-10d ("Backends"). No se incrusta dentro del item "Sistema" existente.
+
+**Motivo:** SystemView (`/system`) es operacional (services, agents, config, routines, logs, styles) — un panel de gobierno de runtime. Los perfiles de backend v0.2 definen política de ejecución (router/adapters/capabilities), conceptualmente distinto. Mezclarlos confundiría la navegación y acoplaría PR-11 (installer) al layout de SystemView. Crear `/settings` con un solo tab inicial prepara terreno para que PR-11 añada paneles propios (assistant mode, install options) sin reestructurar el nav.
+
+**Alternativas consideradas:**
+- (a) Nuevo item top-level "Backends" — descartado: no es escalable; PR-11 necesitará más superficie.
+- (c) Extender SystemView con una tab "Backends" — mezcla operacional (services, logs) con política (ejecución v0.2). Degrada la legibilidad del nav.
+
+**Impacto:** Router gana una ruta (`/settings`), nav gana un item (shortcut `J`, visual only). `features/settings/` nace como home de futuras superficies de configuración v0.2.
+
+### Decisión 2: `ProjectDetail` añade tab "Capabilities" con state local, no sub-rutas
+
+**Decisión:** La tab "Capabilities" se integra en `ProjectDetail` (`/projects/:slug`) reutilizando el patrón `Tabs` + `activeTab` state que ya usan `overview/tasks/files/uploads`. No se promueve a sub-rutas tipo `/projects/:slug/capabilities` como hace `TaskDetailPage` (PR-10a Dec 1).
+
+**Motivo:** Scope mínimo del PR. Promover `ProjectDetail` a sub-rutas requiere refactor no trivial (layout con `<Outlet />`, hooks de contexto para propagar `project`, migración de callers que usan `activeTab`). PR-10d no es el sitio para abrir ese frente.
+
+**Matiz explícito:** ProjectDetail queda con patrón de tabs por state local en lugar de sub-rutas deep-linkables como TaskDetailPage (PR-10a). Decisión deliberada de no ampliar scope de PR-10d. La inconsistencia de patrón entre las dos vistas de detalle del producto queda pendiente para un PR de unificación UX. Hasta entonces, compartir URL de "capabilities de un proyecto" no lleva directo a la tab — abre ProjectDetail en su tab por defecto ("overview").
+
+**Alternativas consideradas:**
+- Promover ProjectDetail a sub-rutas en este PR — rechazado por scope.
+- Ruta independiente `/projects/:slug/capabilities` con layout propio — fragmentaría la vista del proyecto y duplicaría header.
+
+**Impacto:** La tab "Capabilities" es el 5º miembro del Tabs. Compartir un permalink del proyecto abre "Resumen" por defecto; el operador hace click en la tab. Unificación pendiente.
+
+### Decisión 3: Edición de JSON con `Textarea` monospace, no extensión de `JsonBlock`
+
+**Decisión:** Los campos JSON editables de `CapabilitiesTab` (`shell_whitelist_json`, `filesystem_scope_json`, `secrets_scope_json`, `resource_budget_json`) se editan en `Textarea` monospace con validación cliente (`JSON.parse`) para bloquear el submit si el texto no parsea. `JsonBlock` permanece como componente read-only y se usa tal cual en `BackendProfileRow` para `capabilities_json`.
+
+**Motivo:** Extender `JsonBlock` a un modo editable introduce acoplamiento entre vista y edición que el componente actual no contempla (necesitaría detección de cambios, estado controlado, onChange, error state). `Textarea` con CSS monospace cumple el requisito sin bifurcar un shared component por un caso concreto.
+
+**Alternativas consideradas:**
+- Extender `JsonBlock` a modo editable — escalado en el prompt; el refactor queda desproporcionado para el beneficio.
+- Añadir un editor JSON con dependencia npm (p.ej. `@monaco-editor/react`) — viola "no dependencias nuevas" del SPEC.
+
+**Impacto:** `JsonBlock` sigue intacto. La validación de forma (enums, shape) la aplica el backend via `validate_capability_input()`; el frontend solo garantiza que el string pasa `JSON.parse`.
+
+### Decisión 4: Ediciones desde UI "congelan" el `upgrade_codex_profile` — semántica heredada respetada, no re-implementada
+
+**Decisión:** El endpoint `PATCH /api/backend-profiles/:id` no contempla ningún tratamiento especial para `codex`. Al persistir cambios manuales (p.ej. `enabled=0` o `priority=99`), el WHERE condicional de `upgrade_codex_profile()` (`WHERE slug='codex' AND enabled=0 AND priority=0`, PR-07 Dec 4) deja de casar y el upgrade automático se vuelve no-op sobre esa fila. No se añade un flag nuevo ni columna auxiliar.
+
+**Motivo:** La semántica de "respetar la configuración del usuario" ya estaba codificada en PR-07. Replicarla en la capa HTTP introduciría una fuente de verdad duplicada y riesgo de deriva.
+
+**Impacto:** La UI muestra un banner informativo al editar `codex` avisando al operador de que su cambio prevalece frente a futuros upgrades automáticos. El test `test_patch_freezes_codex_upgrade` guarda la invariante.
+
+### Decisión 5: Auditoría a stdout como placeholder — no se crea tabla de auditoría en PR-10d
+
+**Decisión:** Cada edición (PATCH backend_profile o PUT capability_profile) emite una línea de log estructurada `AUDIT <entidad>.<campo> <id>: <old> → <new>` vía `logger.info` / `print(..., flush=True)`. No se crea tabla `audit_log` ni migración asociada.
+
+**Motivo:** PR-10d no exige persistencia auditable y añadir schema ahora obliga a decidir modelo de retención, índices y endpoint de consulta — scope de un PR posterior de observabilidad. Una línea en stdout es suficiente para rastrear cambios en entornos v0.2 (single-node, logs capturados por Docker/systemd).
+
+**Alternativas consideradas:**
+- Tabla `audit_log` con migración 012 — rechazado por scope (retention policy, columnas para quién hizo el cambio, endpoint de consulta, etc.).
+- Archivo JSON append-only en `var/audit/` — añade I/O sin beneficio frente al stdout capturado por el runtime.
+
+**Deuda documentada:** Un PR futuro de observabilidad debe materializar `audit_log` con:
+- Tabla con `id, entity_type, entity_id, field, old_value, new_value, actor, created_at`.
+- Migración idempotente.
+- Endpoint `GET /api/audit?entity_type=...&entity_id=...`.
+- Mover los `logger.info(AUDIT ...)` actuales a `audit_service.record_change()`.
+
+**Impacto:** Operadores revisando cambios de política dependen de logs de contenedor hasta que exista audit_service.
+
+### Decisión 6: `PUT` con upsert para capability-profile, no `PATCH` separado de `POST` create
+
+**Decisión:** `/api/projects/:id/capability-profile` acepta `PUT` con semántica de upsert: si no existe fila, la crea desde `DEFAULT_CAPABILITY_PROFILE` + overrides; si existe, aplica el parche. Un body `{}` en un proyecto sin fila materializa la fila con defaults.
+
+**Motivo:** PR-05 Dec 4: los proyectos sin fila usan `DEFAULT_CAPABILITY_PROFILE` como fallback y cualquier edición tiene que crear la fila primero. Exponer dos endpoints distintos (POST create + PATCH update) obliga al cliente a saber de antemano si la fila existe, duplicando lógica. PUT upsert encapsula ambas transiciones bajo una sola llamada atómica.
+
+**Alternativas consideradas:**
+- `POST /api/projects/:id/capability-profile` (create) + `PATCH` (update) — cliente debe consultar estado primero; más round-trips.
+- `PATCH` único con auto-create — PATCH implica recurso existente; usar PUT es más honesto con la semántica HTTP.
+
+**Impacto:** UI simplifica a un único hook `useUpdateCapabilityProfile`. El botón "Personalizar para este proyecto" invoca `PUT {}`, que materializa el row. Un empty PUT posterior sobre el mismo proyecto es idempotente (actualiza `updated_at` si hubiera cambios, pero con `{}` no hay SET clauses y queda como no-op).
+
+### Decisión 7: `capabilities_json` y `command_template` son read-only en v0.2
+
+**Decisión:** Se listan dos campos de `backend_profiles` en `UPDATABLE_BACKEND_PROFILE_FIELDS`: `enabled`, `priority`, `default_model`. Los demás campos (`slug`, `display_name`, `backend_kind`, `runtime_kind`, `capabilities_json`, `command_template`) devuelven `unknown_field` al intentar patcharlos.
+
+**Motivo:** Editar `capabilities_json` requiere validación contra el schema que los adapters consumen (resume_modes, fs_modes, shell_modes, etc.) — cualquier desalineación rompería el router en silencio. `command_template` es un formato interno del executor legacy que está siendo migrado fuera del camino por PR-04+. `slug` y los `*_kind` son identidad inmutable del perfil. Mantener todo esto read-only previene que la UI se convierta en vector de corrupción del seed.
+
+**Alternativas consideradas:**
+- Exponer `capabilities_json` como texto editable con validación JSON básica — deja pasar errores de shape (claves incorrectas, valores fuera de dominio) que el adapter no tolera.
+- Permitir editar `display_name` — trivial pero irrelevante para la semántica; se deja fuera por consistencia (read-only mientras no haya caso de uso).
+
+**Impacto:** La UI expone claramente los campos como read-only con un label "read-only en v0.2". Cualquier ampliación requiere (a) validación de shape en backend, (b) actualizar el frontend para editar. Escalado de scope, no deuda técnica silenciosa.

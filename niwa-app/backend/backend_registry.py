@@ -164,6 +164,126 @@ def seed_backend_profiles(conn) -> int:
     return inserted
 
 
+# ── PR-10d: read + patch helpers ─────────────────────────────────
+
+# Fields the UI is allowed to change in PATCH /api/backend-profiles/:id.
+# ``capabilities_json`` and ``command_template`` are read-only in v0.2
+# (editing them requires shape validation beyond the scope of PR-10d).
+UPDATABLE_BACKEND_PROFILE_FIELDS = (
+    "enabled", "priority", "default_model",
+)
+
+
+def list_backend_profiles(conn) -> list[dict]:
+    """Return all backend_profiles rows ordered by priority DESC, slug ASC.
+
+    The ordering matches what the routing service considers when
+    resolving defaults (highest priority wins).
+    """
+    rows = conn.execute(
+        "SELECT * FROM backend_profiles "
+        "ORDER BY priority DESC, slug ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_backend_profile(profile_id: str, conn) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM backend_profiles WHERE id = ?", (profile_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def validate_backend_profile_patch(payload: dict) -> dict | None:
+    """Validate a partial backend_profile PATCH payload.
+
+    Returns ``None`` when valid, or ``{"error": code, "field": name,
+    "message": human}``.
+    """
+    if not isinstance(payload, dict):
+        return {"error": "invalid_payload", "field": None,
+                "message": "payload must be a JSON object"}
+
+    for key in payload:
+        if key not in UPDATABLE_BACKEND_PROFILE_FIELDS:
+            return {"error": "unknown_field", "field": key,
+                    "message": f"field {key!r} is not editable"}
+
+    if "enabled" in payload:
+        v = payload["enabled"]
+        # Reject non-boolean values — integer coercion would mask typos.
+        if not isinstance(v, bool):
+            return {"error": "invalid_type", "field": "enabled",
+                    "message": "enabled must be boolean"}
+
+    if "priority" in payload:
+        v = payload["priority"]
+        # bool is a subclass of int in Python — reject explicitly.
+        if isinstance(v, bool) or not isinstance(v, int):
+            return {"error": "invalid_type", "field": "priority",
+                    "message": "priority must be integer"}
+
+    if "default_model" in payload:
+        v = payload["default_model"]
+        if v is not None and not isinstance(v, str):
+            return {"error": "invalid_type", "field": "default_model",
+                    "message": "default_model must be string or null"}
+        if isinstance(v, str) and len(v) > 200:
+            return {"error": "invalid_length", "field": "default_model",
+                    "message": "default_model too long (>200 chars)"}
+
+    return None
+
+
+def update_backend_profile(profile_id: str, payload: dict, conn) -> dict:
+    """Apply a validated PATCH payload to a backend_profile row.
+
+    The caller MUST validate *payload* first via
+    ``validate_backend_profile_patch()``.
+
+    Raises ``LookupError`` if the row does not exist.
+    Returns the updated row as a dict.
+    """
+    existing = get_backend_profile(profile_id, conn)
+    if existing is None:
+        raise LookupError(f"backend_profile {profile_id!r} not found")
+
+    if not payload:
+        return existing
+
+    # Normalize values: bool → 0/1 for enabled.
+    normalized: dict[str, Any] = {}
+    for k, v in payload.items():
+        if k == "enabled":
+            normalized[k] = 1 if v else 0
+        else:
+            normalized[k] = v
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sets = [f"{k} = ?" for k in normalized]
+    values = list(normalized.values())
+    sets.append("updated_at = ?")
+    values.append(now)
+    values.append(profile_id)
+
+    conn.execute(
+        f"UPDATE backend_profiles SET {', '.join(sets)} WHERE id = ?",
+        values,
+    )
+
+    # PR-10d audit: stdout placeholder until a dedicated audit table
+    # exists.  Captures old→new per edited field for traceability.
+    for field, new_value in payload.items():
+        old_value = existing.get(field)
+        logger.info(
+            "AUDIT backend_profile.%s %s: %r → %r",
+            field, profile_id, old_value, new_value,
+        )
+
+    updated = get_backend_profile(profile_id, conn)
+    return updated or existing
+
+
 def upgrade_codex_profile(conn) -> bool:
     """Enable the codex profile for existing installs.
 

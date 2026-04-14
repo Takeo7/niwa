@@ -28,6 +28,7 @@ import {
 } from '../hooks/useProjects';
 import { useTasks } from '../../../shared/api/queries';
 import { FileTree } from './FileTree';
+import { CapabilitiesTab } from './CapabilitiesTab';
 import type { Task } from '../../../shared/types';
 
 function TaskRow({ task }: { task: Task }) {
@@ -111,6 +112,7 @@ export function ProjectDetail() {
           <Tabs.Tab value="tasks">Tareas</Tabs.Tab>
           <Tabs.Tab value="files">Archivos</Tabs.Tab>
           <Tabs.Tab value="uploads">Uploads</Tabs.Tab>
+          <Tabs.Tab value="capabilities">Capabilities</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="overview" pt="md">
@@ -157,6 +159,10 @@ export function ProjectDetail() {
 
         <Tabs.Panel value="files" pt="md">
           {slug && <FileTree slug={slug} />}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="capabilities" pt="md">
+          {slug && <CapabilitiesTab projectKey={slug} />}
         </Tabs.Panel>
 
         <Tabs.Panel value="uploads" pt="md">

@@ -36,6 +36,7 @@ import {
   IconSearch,
   IconPlus,
   IconRefresh,
+  IconAdjustmentsHorizontal,
 } from '@tabler/icons-react';
 import { useVersion, useSystemUpdate } from '../api/queries';
 import { usePolling } from '../hooks/usePolling';
@@ -57,6 +58,7 @@ const NAV_ITEMS = [
   { label: 'Notas', icon: IconNotebook, path: '/notes', shortcut: 'N' },
   { label: 'Historial', icon: IconHistory, path: '/history', shortcut: 'Y' },
   { label: 'Métricas', icon: IconChartBar, path: '/metrics', shortcut: 'M' },
+  { label: 'Ajustes', icon: IconAdjustmentsHorizontal, path: '/settings', shortcut: 'J' },
   { label: 'Sistema', icon: IconSettings, path: '/system', shortcut: 'S' },
 ];
 
