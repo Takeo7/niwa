@@ -65,17 +65,19 @@ def server():
     os.environ["NIWA_APP_AUTH_REQUIRED"] = "0"
     os.environ["NIWA_APP_HOST"] = "127.0.0.1"
 
-    # Patch assistant_service before importing app
+    # Patch assistant_service._call_anthropic (private — used as default
+    # when llm_caller is not injected, which is the case for the HTTP
+    # endpoint).
     import assistant_service
 
-    _original_call = assistant_service.call_anthropic
+    _original_call = assistant_service._call_anthropic
 
     def fake_llm(*a, **kw):
         return {
             "content": [{"type": "text", "text": "Fake response."}],
             "stop_reason": "end_turn",
         }
-    assistant_service.call_anthropic = fake_llm
+    assistant_service._call_anthropic = fake_llm
 
     # Force app module to pick up new DB_PATH
     import importlib
@@ -123,7 +125,7 @@ def server():
     yield {"base": base, "pid": pid, "db_path": db_path}
 
     srv.shutdown()
-    assistant_service.call_anthropic = _original_call
+    assistant_service._call_anthropic = _original_call
     os.close(fd)
     os.unlink(db_path)
 
@@ -202,3 +204,39 @@ class TestAssistantTurnEndpoint:
         for key in ("assistant_message", "actions_taken",
                      "task_ids", "approval_ids", "run_ids"):
             assert key in body, f"Missing key: {key}"
+
+    def test_malformed_json_returns_400(self, server):
+        """Invalid JSON body → 400 (handler returns empty dict → missing fields)."""
+        req = Request(
+            f"{server['base']}/api/assistant/turn",
+            data=b"this is not json",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=10) as resp:
+                status = resp.status
+                body = json.loads(resp.read())
+        except Exception as e:
+            status = e.code
+            body = json.loads(e.read())
+        assert status == 400
+        assert body["error"] in ("missing_session_id", "empty_message")
+
+    def test_wrong_content_type_returns_400(self, server):
+        """Non-JSON Content-Type → handler parses as form, fields empty → 400."""
+        req = Request(
+            f"{server['base']}/api/assistant/turn",
+            data=b"garbage=true",
+            headers={"Content-Type": "text/plain"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=10) as resp:
+                status = resp.status
+                body = json.loads(resp.read())
+        except Exception as e:
+            status = e.code
+            body = json.loads(e.read())
+        assert status == 400
+        assert "error" in body

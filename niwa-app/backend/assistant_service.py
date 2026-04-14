@@ -309,7 +309,13 @@ def _tool_task_cancel(conn, project_id, params):
 
 
 def _tool_task_resume(conn, project_id, params):
-    """Resume a blocked or waiting task (transition to pendiente)."""
+    """Resume a blocked or waiting task (transition to pendiente).
+
+    Mitigates Bug 8: if the last run has ``session_handle IS NULL``,
+    a resume would fail with ``--resume None``.  We detect this and
+    return an error so the LLM can explain instead of silently
+    queueing a doomed re-execution.
+    """
     task_id = params.get("task_id")
     if not task_id:
         return {"error": "task_id is required"}
@@ -327,6 +333,27 @@ def _tool_task_resume(conn, project_id, params):
             "task_id": task_id,
             "current_status": old_status,
         }
+
+    # Bug 8 mitigation: check session_handle on latest run
+    current_run_id = task["current_run_id"]
+    if current_run_id:
+        run = conn.execute(
+            "SELECT session_handle, status FROM backend_runs WHERE id = ?",
+            (current_run_id,),
+        ).fetchone()
+        if run and run["session_handle"] is None:
+            # The run failed before emitting a session_id — resume would
+            # attempt --resume None, which is broken.  See BUGS-FOUND Bug 8.
+            return {
+                "error": "session_handle_missing",
+                "task_id": task_id,
+                "run_id": current_run_id,
+                "message": (
+                    "Cannot resume: the last execution failed before "
+                    "establishing a session. The task must be re-created "
+                    "or the run retried from scratch."
+                ),
+            }
 
     now = _now_iso()
     conn.execute(
@@ -749,13 +776,12 @@ def _build_system_prompt(project_name: str, project_id: str) -> str:
     )
 
 
-def call_anthropic(model: str, api_key: str, messages: list,
-                   tools: list | None, system: str,
-                   timeout: float) -> dict:
+def _call_anthropic(model: str, api_key: str, messages: list,
+                    tools: list | None, system: str,
+                    timeout: float) -> dict:
     """Call Anthropic Messages API.  Returns the parsed response dict.
 
-    Exposed as module-level (not underscore-prefixed) so tests can
-    monkey-patch it without reaching into private names.
+    Private — callers use ``assistant_turn(llm_caller=...)`` for DI.
 
     Raises ``urllib.error.HTTPError``, ``urllib.error.URLError``,
     or ``TimeoutError`` on failure.
@@ -795,6 +821,7 @@ def assistant_turn(
     channel: str,
     metadata: dict[str, Any] | None = None,
     conn,
+    llm_caller=None,
 ) -> dict[str, Any]:
     """Process one conversational turn.
 
@@ -814,6 +841,11 @@ def assistant_turn(
         Channel-specific data (e.g. ``external_ref`` for openclaw).
     conn
         sqlite3 connection with row_factory = sqlite3.Row.
+    llm_caller : callable | None
+        Dependency injection for the LLM API call.  Signature must
+        match ``_call_anthropic(model, api_key, messages, tools,
+        system, timeout) -> dict``.  Defaults to the real Anthropic
+        API implementation.
 
     Returns
     -------
@@ -908,6 +940,7 @@ def assistant_turn(
 
     # ── LLM conversation loop ────────────────────────────────────
     deadline = time.monotonic() + TURN_TIMEOUT_S
+    _do_call = llm_caller or _call_anthropic
     actions_taken: list[dict] = []
     task_ids: set[str] = set()
     approval_ids: set[str] = set()
@@ -929,7 +962,7 @@ def assistant_turn(
                     )
                 break
 
-            response = call_anthropic(
+            response = _do_call(
                 model, api_key, messages, TOOL_DEFINITIONS,
                 system, timeout=min(remaining - 1, 25),
             )

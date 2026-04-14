@@ -115,7 +115,7 @@ class TestRoutingModeGate:
         assert result["error"] == "routing_mode_mismatch"
         assert "None" in result["message"]
 
-    def test_routing_mode_v02_reaches_llm(self, monkeypatch):
+    def test_routing_mode_v02_reaches_llm(self):
         """routing_mode='v02' passes the gate and reaches LLM call."""
         pid = _seed_project(self.conn)
         _set_routing_mode(self.conn, "v02")
@@ -125,20 +125,13 @@ class TestRoutingModeGate:
         )
         self.conn.commit()
 
-        # Fake the LLM to return a simple text response
-        def fake_call(*a, **kw):
-            return {
-                "content": [{"type": "text", "text": "Hola, soy Niwa."}],
-                "stop_reason": "end_turn",
-            }
-        monkeypatch.setattr(assistant_service, "call_anthropic", fake_call)
-
         result = assistant_service.assistant_turn(
             session_id="sess-3",
             project_id=pid,
             message="hola",
             channel="web",
             conn=self.conn,
+            llm_caller=_fake_llm_simple("Hola, soy Niwa."),
         )
         assert "error" not in result
         assert result["assistant_message"] == "Hola, soy Niwa."
@@ -436,7 +429,7 @@ class TestCallAnthropic:
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-        result = assistant_service.call_anthropic(
+        result = assistant_service._call_anthropic(
             model="claude-haiku-4-5",
             api_key="sk-test",
             messages=[{"role": "user", "content": "hi"}],
@@ -473,7 +466,7 @@ class TestCallAnthropic:
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-        assistant_service.call_anthropic(
+        assistant_service._call_anthropic(
             model="m", api_key="k",
             messages=[{"role": "user", "content": "hi"}],
             tools=None, system="s", timeout=5,
@@ -498,7 +491,7 @@ class TestCallAnthropic:
 
         monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-        assistant_service.call_anthropic(
+        assistant_service._call_anthropic(
             model="m", api_key="k",
             messages=[{"role": "user", "content": "hi"}],
             tools=None, system="s", timeout=0.3,
@@ -632,6 +625,50 @@ class TestDomainTools:
         )
         assert r["error"] == "cannot_resume"
 
+    def test_task_resume_session_handle_null_bug8(self):
+        """Bug 8 mitigation: resume with session_handle=NULL returns error."""
+        # Create task + profile + routing_decision + run with NULL session_handle
+        tid = self._insert_task(status="bloqueada")
+        now = assistant_service._now_iso()
+        prof_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO backend_profiles (id, slug, display_name, "
+            "backend_kind, runtime_kind, enabled, priority, "
+            "created_at, updated_at) "
+            "VALUES (?, 'test', 'Test', 'claude_code', 'cli', 1, 10, ?, ?)",
+            (prof_id, now, now),
+        )
+        rd_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO routing_decisions (id, task_id, decision_index, "
+            "selected_profile_id, created_at) VALUES (?, ?, 0, ?, ?)",
+            (rd_id, tid, prof_id, now),
+        )
+        run_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO backend_runs (id, task_id, routing_decision_id, "
+            "backend_profile_id, status, session_handle, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'failed', NULL, ?, ?)",
+            (run_id, tid, rd_id, prof_id, now, now),
+        )
+        self.conn.execute(
+            "UPDATE tasks SET current_run_id = ? WHERE id = ?",
+            (run_id, tid),
+        )
+        self.conn.commit()
+
+        r = assistant_service._tool_task_resume(
+            self.conn, self.pid, {"task_id": tid},
+        )
+        assert r["error"] == "session_handle_missing"
+        assert r["run_id"] == run_id
+        # Task should NOT have transitioned
+        row = self.conn.execute(
+            "SELECT status FROM tasks WHERE id = ?", (tid,),
+        ).fetchone()
+        assert row["status"] == "bloqueada"
+
     # ── project_context ──────────────────────────────────────────
 
     def test_project_context(self):
@@ -741,35 +778,29 @@ class TestAssistantTurnLoop:
         os.close(self.fd)
         os.unlink(self.path)
 
-    def test_simple_text_response(self, monkeypatch):
+    def test_simple_text_response(self):
         """LLM returns text only — no tool calls."""
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic",
-            _fake_llm_simple("Todo bien."),
-        )
         r = assistant_service.assistant_turn(
             session_id="s1", project_id=self.pid,
             message="¿cómo va?", channel="web", conn=self.conn,
+            llm_caller=_fake_llm_simple("Todo bien."),
         )
         assert r["assistant_message"] == "Todo bien."
         assert r["actions_taken"] == []
         assert r["task_ids"] == []
 
-    def test_tool_call_creates_task(self, monkeypatch):
+    def test_tool_call_creates_task(self):
         """LLM calls task_create, then responds with text."""
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic",
-            _fake_llm_tool_then_text(
+        r = assistant_service.assistant_turn(
+            session_id="s2", project_id=self.pid,
+            message="crea una tarea para deploy v2", channel="web",
+            conn=self.conn,
+            llm_caller=_fake_llm_tool_then_text(
                 "task_create",
                 {"title": "Deploy v2", "priority": "alta"},
                 "tu-1",
                 "Tarea creada.",
             ),
-        )
-        r = assistant_service.assistant_turn(
-            session_id="s2", project_id=self.pid,
-            message="crea una tarea para deploy v2", channel="web",
-            conn=self.conn,
         )
         assert r["assistant_message"] == "Tarea creada."
         assert len(r["task_ids"]) == 1
@@ -783,9 +814,8 @@ class TestAssistantTurnLoop:
         assert row["title"] == "Deploy v2"
         assert row["priority"] == "alta"
 
-    def test_tool_call_task_list(self, monkeypatch):
+    def test_tool_call_task_list(self):
         """LLM calls task_list and gets results."""
-        # Seed a task
         now = assistant_service._now_iso()
         tid = str(uuid.uuid4())
         self.conn.execute(
@@ -796,15 +826,12 @@ class TestAssistantTurnLoop:
         )
         self.conn.commit()
 
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic",
-            _fake_llm_tool_then_text(
-                "task_list", {}, "tu-2", "Hay 1 tarea pendiente.",
-            ),
-        )
         r = assistant_service.assistant_turn(
             session_id="s3", project_id=self.pid,
             message="lista tareas", channel="web", conn=self.conn,
+            llm_caller=_fake_llm_tool_then_text(
+                "task_list", {}, "tu-2", "Hay 1 tarea pendiente.",
+            ),
         )
         assert r["assistant_message"] == "Hay 1 tarea pendiente."
         assert tid in r["task_ids"]
@@ -816,7 +843,6 @@ class TestAssistantTurnLoop:
         )
         self.conn.commit()
 
-        # Clear env too
         old = os.environ.pop("ANTHROPIC_API_KEY", None)
         old2 = os.environ.pop("NIWA_LLM_API_KEY", None)
         try:
@@ -831,26 +857,25 @@ class TestAssistantTurnLoop:
             if old2 is not None:
                 os.environ["NIWA_LLM_API_KEY"] = old2
 
-    def test_http_error_persists_message(self, monkeypatch):
+    def test_http_error_persists_message(self):
         """HTTP 429 from API → error message persisted."""
         def fake_fail(*a, **kw):
             raise urllib.error.HTTPError(
                 "https://api.anthropic.com/v1/messages",
                 429, "Rate limited", {}, None,
             )
-        monkeypatch.setattr(assistant_service, "call_anthropic", fake_fail)
 
         r = assistant_service.assistant_turn(
             session_id="s5", project_id=self.pid,
             message="hola", channel="web", conn=self.conn,
+            llm_caller=fake_fail,
         )
         assert "429" in r["assistant_message"]
-        # Verify persisted
         msgs = _get_chat_messages(self.conn, r["session_id"])
         assert msgs[-1]["role"] == "assistant"
         assert "429" in msgs[-1]["content"]
 
-    def test_max_iterations_respected(self, monkeypatch):
+    def test_max_iterations_respected(self):
         """Loop stops after MAX_TOOL_ITERATIONS even if LLM keeps calling tools."""
         call_count = {"n": 0}
 
@@ -866,12 +891,10 @@ class TestAssistantTurnLoop:
                 "stop_reason": "tool_use",
             }
 
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic", fake_always_tool,
-        )
         r = assistant_service.assistant_turn(
             session_id="s6", project_id=self.pid,
             message="hola", channel="web", conn=self.conn,
+            llm_caller=fake_always_tool,
         )
         # Should have stopped at MAX_TOOL_ITERATIONS
         assert len(r["actions_taken"]) <= assistant_service.MAX_TOOL_ITERATIONS
@@ -882,14 +905,13 @@ class TestAssistantTurnLoop:
         import time as _time
 
         original_monotonic = _time.monotonic
-        # Simulate time passing: first call normal, second call near deadline
         call_count = {"n": 0}
         base = original_monotonic()
 
         def fast_time():
             call_count["n"] += 1
             if call_count["n"] > 4:
-                return base + 29  # near the 30s deadline
+                return base + 29
             return base + call_count["n"]
 
         monkeypatch.setattr(_time, "monotonic", fast_time)
@@ -902,24 +924,20 @@ class TestAssistantTurnLoop:
                 }],
                 "stop_reason": "tool_use",
             }
-        monkeypatch.setattr(assistant_service, "call_anthropic", fake_tool)
 
         r = assistant_service.assistant_turn(
             session_id="s7", project_id=self.pid,
             message="hola", channel="web", conn=self.conn,
+            llm_caller=fake_tool,
         )
-        # Should have stopped due to timeout, not max iterations
         assert len(r["actions_taken"]) < assistant_service.MAX_TOOL_ITERATIONS
 
-    def test_turn_persists_both_messages_on_success(self, monkeypatch):
+    def test_turn_persists_both_messages_on_success(self):
         """Successful turn writes user + assistant to chat_messages."""
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic",
-            _fake_llm_simple("Respuesta."),
-        )
         r = assistant_service.assistant_turn(
             session_id="s8", project_id=self.pid,
             message="pregunta", channel="web", conn=self.conn,
+            llm_caller=_fake_llm_simple("Respuesta."),
         )
         msgs = _get_chat_messages(self.conn, r["session_id"])
         assert len(msgs) == 2
@@ -928,9 +946,8 @@ class TestAssistantTurnLoop:
         assert msgs[1]["role"] == "assistant"
         assert msgs[1]["content"] == "Respuesta."
 
-    def test_approval_pre_routing_returns_ids(self, monkeypatch):
+    def test_approval_pre_routing_returns_ids(self):
         """If LLM queries approvals, IDs appear in response."""
-        # Seed a task + approval
         now = assistant_service._now_iso()
         tid = str(uuid.uuid4())
         self.conn.execute(
@@ -948,15 +965,12 @@ class TestAssistantTurnLoop:
         )
         self.conn.commit()
 
-        monkeypatch.setattr(
-            assistant_service, "call_anthropic",
-            _fake_llm_tool_then_text(
-                "approval_list", {"status": "pending"}, "tu-a",
-                "Hay una aprobación pendiente.",
-            ),
-        )
         r = assistant_service.assistant_turn(
             session_id="s9", project_id=self.pid,
             message="¿hay aprobaciones?", channel="web", conn=self.conn,
+            llm_caller=_fake_llm_tool_then_text(
+                "approval_list", {"status": "pending"}, "tu-a",
+                "Hay una aprobación pendiente.",
+            ),
         )
         assert aid in r["approval_ids"]
