@@ -409,11 +409,18 @@ def generate_catalog_yaml(
             data = json.load(_f)
             tasks_tools.extend(data.get("tools", []))
 
-    # If a contract is specified, filter tools to only those in the contract
+    # If a contract is specified, the contract's tools list becomes the
+    # authoritative advertised surface. PR-09's v02-assistant tools
+    # (assistant_turn, task_cancel, …) live only in
+    # servers/tasks-mcp/server.py::_V02_TOOL_DEFS, not in the v0.1
+    # catalog JSONs. Intersecting with tasks_tools would drop them.
+    # The server-side filter (NIWA_MCP_CONTRACT env) guarantees the
+    # tasks-mcp container actually implements only these tools.
     if contract_file and Path(contract_file).exists():
         contract = json.loads(Path(contract_file).read_text())
-        allowed = set(contract.get("tools", []))
-        tasks_tools = [t for t in tasks_tools if t in allowed]
+        contract_tools = contract.get("tools", [])
+        if contract_tools:
+            tasks_tools = list(contract_tools)
 
     tools_yaml = "\n".join(f'      - name: "{t}"' for t in tasks_tools)
 
@@ -1299,6 +1306,11 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_TELEGRAM_BOT_TOKEN": cfg.telegram_bot_token,
         "NIWA_TELEGRAM_CHAT_ID": cfg.telegram_chat_id,
         "NIWA_WEBHOOK_URL": cfg.webhook_url,
+        # PR-11: assistant-mode MCP contract wiring. Empty in core mode
+        # (the app's is_authenticated() falls back to cookie auth and
+        # servers/tasks-mcp/server.py exposes the 21 legacy tools).
+        "NIWA_MCP_CONTRACT": cfg.mcp_contract or "",
+        "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token or "",
     }
 
     # Write secrets file
@@ -1315,13 +1327,31 @@ def execute_install(cfg: WizardConfig) -> None:
     shutil.copy(REPO_ROOT / "caddy" / "Caddyfile", cfg.niwa_home / "caddy" / "Caddyfile")
     ok("Copied Caddyfile")
 
-    # Generate catalog yaml
+    # Generate catalog yaml. PR-11: in assistant mode, filter the
+    # tasks-mcp surface via the v02-assistant contract and inject the
+    # server-side env the tasks-mcp container needs.
+    contract_file = None
+    tasks_env = None
+    if cfg.mcp_contract:
+        contract_path = REPO_ROOT / "config" / "mcp-contract" / f"{cfg.mcp_contract}.json"
+        if contract_path.is_file():
+            contract_file = str(contract_path)
+            tasks_env = {
+                "NIWA_MCP_CONTRACT": cfg.mcp_contract,
+                "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token,
+                "NIWA_APP_URL": f"http://{cfg.instance_name}-app:8080",
+            }
+        else:
+            warn(f"Contract file not found: {contract_path} — "
+                 f"falling back to unfiltered catalog")
     catalog = generate_catalog_yaml(
         cfg.server_names,
         str(cfg.db_path),
         str(cfg.fs_workspace),
         str(cfg.fs_memory),
         cfg.instance_name,
+        contract_file=contract_file,
+        tasks_env=tasks_env,
     )
     (cfg.niwa_home / "config" / "niwa-catalog.yaml").write_text(catalog)
     # Generate niwa-config.yaml (still needed by gateway --config flag)
