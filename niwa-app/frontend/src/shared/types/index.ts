@@ -453,3 +453,71 @@ export interface Approval {
 }
 
 export type ApprovalDecision = 'approve' | 'reject';
+
+// ── Backend profiles + capability profiles (PR-10d) ──
+
+export type BackendKind = 'claude_code' | 'codex';
+export type RuntimeKind = 'cli' | 'api' | 'acp' | 'local';
+
+// Rows from the ``backend_profiles`` table.  ``enabled`` is stored
+// as 0/1 in SQLite; we keep the integer shape and coerce when
+// rendering to avoid surprises when the UI hits staging DBs.
+export interface BackendProfile {
+  id: string;
+  slug: string;
+  display_name: string;
+  backend_kind: BackendKind;
+  runtime_kind: RuntimeKind;
+  default_model: string | null;
+  command_template: string | null;
+  capabilities_json: string | null;
+  enabled: number;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackendProfilePatch {
+  enabled?: boolean;
+  priority?: number;
+  default_model?: string | null;
+}
+
+// Canonical enum values (must mirror capability_service.py).
+export type RepoMode = 'none' | 'read-only' | 'read-write';
+export type ShellMode = 'disabled' | 'whitelist' | 'free';
+export type WebMode = 'off' | 'on';
+export type NetworkMode = 'off' | 'on' | 'restricted';
+
+export interface CapabilityProfile {
+  id?: string;
+  project_id?: string;
+  name: string;
+  repo_mode: RepoMode;
+  shell_mode: ShellMode;
+  shell_whitelist_json: string;
+  web_mode: WebMode;
+  network_mode: NetworkMode;
+  filesystem_scope_json: string;
+  secrets_scope_json: string;
+  resource_budget_json: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CapabilityProfileResponse {
+  project_id: string;
+  is_default: boolean;
+  profile: CapabilityProfile;
+}
+
+export interface CapabilityProfilePatch {
+  repo_mode?: RepoMode;
+  shell_mode?: ShellMode;
+  web_mode?: WebMode;
+  network_mode?: NetworkMode;
+  shell_whitelist_json?: string;
+  filesystem_scope_json?: string;
+  secrets_scope_json?: string;
+  resource_budget_json?: string;
+}
