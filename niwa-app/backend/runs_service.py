@@ -303,6 +303,29 @@ def list_events_for_run(run_id: str, conn, *,
     return [dict(r) for r in rows]
 
 
+def list_artifacts_for_run(run_id: str, conn) -> list[dict]:
+    """Return all ``artifacts`` registered for a run, oldest first.
+
+    Rows are returned as plain dicts.  ``path`` is the value stored in
+    the DB (relative to ``artifact_root`` as set by the adapter per
+    PR-04 Decisión 10) — the caller MUST NOT expose the absolute host
+    path; only the relative path travels to the UI.
+
+    Ordering mirrors ``list_events_for_run``: ``created_at ASC, rowid
+    ASC``.  ``created_at`` truncates to whole seconds, so ``rowid`` is
+    the stable tie-breaker for files registered inside the same scan.
+    """
+    rows = conn.execute(
+        "SELECT id, task_id, backend_run_id, artifact_type, path, "
+        "       size_bytes, sha256, created_at "
+        "FROM artifacts "
+        "WHERE backend_run_id = ? "
+        "ORDER BY created_at ASC, rowid ASC",
+        (run_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_routing_decision_for_task(task_id: str, conn) -> dict | None:
     """Return the most recent routing_decision for a task.
 

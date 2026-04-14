@@ -3440,6 +3440,19 @@ class Handler(BaseHTTPRequestHandler):
                     run_id, conn, limit=limit if limit > 0 else None,
                 )
             return self._json(events)
+        if re.match(r'^/api/runs/[^/]+/artifacts$', path):
+            run_id = path.split('/')[3]
+            import runs_service
+            with db_conn() as conn:
+                run = conn.execute(
+                    'SELECT id FROM backend_runs WHERE id=?', (run_id,),
+                ).fetchone()
+                if not run:
+                    return self._json({'error': 'run_not_found'}, 404)
+                artifacts = runs_service.list_artifacts_for_run(
+                    run_id, conn,
+                )
+            return self._json(artifacts)
         if re.match(r'^/api/runs/[^/]+$', path) and path.count('/') == 3:
             run_id = path.split('/')[3]
             import runs_service

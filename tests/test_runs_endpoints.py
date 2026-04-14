@@ -1,10 +1,11 @@
-"""Tests for PR-10a HTTP endpoints — runs + routing (read-only).
+"""Tests for PR-10a/10c HTTP endpoints — runs + routing + artifacts.
 
 Covers:
-  - GET /api/tasks/:id/runs
-  - GET /api/tasks/:id/routing-decision
-  - GET /api/runs/:id
-  - GET /api/runs/:id/events
+  - GET /api/tasks/:id/runs                   (PR-10a)
+  - GET /api/tasks/:id/routing-decision       (PR-10a)
+  - GET /api/runs/:id                         (PR-10a)
+  - GET /api/runs/:id/events                  (PR-10a)
+  - GET /api/runs/:id/artifacts               (PR-10c)
 
 Each endpoint tested for: auth enforcement, 404 on missing resource,
 happy path with joined shape.
@@ -184,6 +185,26 @@ def server():
                 app.now_iso(),
             ),
         )
+    # Artifacts on run1 (PR-10c) — paths are relative to artifact_root.
+    art_specs = [
+        ("code", "src/main.py", 1024,
+         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ("document", "README.md", 256,
+         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ("log", "run.log", 2048, None),  # sha256 NULL — Bug 8 tolerance.
+    ]
+    art_ids = []
+    for atype, apath, size, sha in art_specs:
+        aid = str(uuid.uuid4())
+        art_ids.append(aid)
+        conn.execute(
+            "INSERT INTO artifacts "
+            "(id, task_id, backend_run_id, artifact_type, path, "
+            " size_bytes, sha256, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (aid, task_id, run1_id, atype, apath, size, sha,
+             app.now_iso()),
+        )
     conn.commit()
     conn.close()
 
@@ -209,6 +230,7 @@ def server():
         "run1_id": run1_id,
         "run2_id": run2_id,
         "db_path": db_path,
+        "artifact_ids": art_ids,
     }
 
     srv.shutdown()
@@ -357,6 +379,79 @@ class TestRoutingDecisionEndpoint:
         assert body["error"] == "task_not_found"
 
 
+# ── GET /api/runs/:id/artifacts (PR-10c) ────────────────────────────
+
+
+class TestRunArtifactsEndpoint:
+
+    def test_returns_all_artifacts_oldest_first(self, server):
+        status, body = _get(
+            server["base"],
+            f"/api/runs/{server['run1_id']}/artifacts",
+        )
+        assert status == 200
+        assert len(body) == 3
+        assert [a["artifact_type"] for a in body] == [
+            "code", "document", "log",
+        ]
+        # Order matches insertion (created_at + rowid tie-breaker).
+        assert [a["id"] for a in body] == server["artifact_ids"]
+
+    def test_paths_are_relative_not_absolute(self, server):
+        """UI contract: paths must NEVER expose the host filesystem."""
+        status, body = _get(
+            server["base"],
+            f"/api/runs/{server['run1_id']}/artifacts",
+        )
+        assert status == 200
+        for a in body:
+            assert not a["path"].startswith("/"), (
+                f"path leaked absolute filesystem: {a['path']!r}"
+            )
+
+    def test_artifact_shape_includes_size_and_hash(self, server):
+        status, body = _get(
+            server["base"],
+            f"/api/runs/{server['run1_id']}/artifacts",
+        )
+        assert status == 200
+        first = body[0]
+        assert first["size_bytes"] == 1024
+        assert first["sha256"] == "a" * 64
+        assert first["path"] == "src/main.py"
+        assert first["backend_run_id"] == server["run1_id"]
+        assert first["task_id"] == server["task_id"]
+        assert isinstance(first["created_at"], str)
+
+    def test_sha256_null_is_tolerated(self, server):
+        """Bug 8 (sha256 may be NULL on early failure) — endpoint must
+        still return the row without crashing."""
+        status, body = _get(
+            server["base"],
+            f"/api/runs/{server['run1_id']}/artifacts",
+        )
+        assert status == 200
+        log_row = next(a for a in body if a["artifact_type"] == "log")
+        assert log_row["sha256"] is None
+        assert log_row["size_bytes"] == 2048
+
+    def test_empty_for_run_without_artifacts(self, server):
+        """run2 has zero artifacts seeded."""
+        status, body = _get(
+            server["base"],
+            f"/api/runs/{server['run2_id']}/artifacts",
+        )
+        assert status == 200
+        assert body == []
+
+    def test_404_for_missing_run(self, server):
+        status, body = _get(
+            server["base"], "/api/runs/nope/artifacts",
+        )
+        assert status == 404
+        assert body["error"] == "run_not_found"
+
+
 # ── Auth enforcement ────────────────────────────────────────────────
 
 
@@ -423,5 +518,11 @@ class TestAuthRequired:
         status, body = _get(
             auth_server["base"],
             "/api/tasks/anything/routing-decision",
+        )
+        assert status == 401
+
+    def test_artifacts_require_auth(self, auth_server):
+        status, body = _get(
+            auth_server["base"], "/api/runs/anything/artifacts",
         )
         assert status == 401
