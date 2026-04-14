@@ -113,7 +113,7 @@ Formato sugerido:
 **Descripción:** `tests/test_pr01_schema.py::TestTableStructure::test_routing_decisions_columns` compara el conjunto de columnas esperadas contra las reales. PR-09 añadió la columna `contract_version` a `routing_decisions` (migration 011), pero el test no se actualizó. Resultado: el test falla con `extra={'contract_version'}`. Pre-existente a PR-10a — reproducible en la rama limpia en cuanto se aplica la migration 011.
 **Ubicación:** `tests/test_pr01_schema.py:493-499` (el set `expected` no incluye `'contract_version'`).
 **Severidad:** baja (falso positivo en tests, no afecta funcionalidad).
-**PR futuro donde se arreglará:** pendiente de asignar (fix trivial: añadir `'contract_version'` al set `expected`).
+**Estado:** **ARREGLADO en PR-12.** Se añade `'contract_version'` al set `expected` con comentario explicativo en `tests/test_pr01_schema.py::TestTableStructure::test_routing_decisions_columns`.
 
 ### Bug 13: test_assistant_turn_endpoint falla en full-suite por module-state pollution
 
