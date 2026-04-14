@@ -174,10 +174,10 @@ def _persist_assistant_message(session_id: str, content: str, conn,
 
 # ── Domain tools ─────────────────────────────────────────────────────
 # Each tool receives (conn, project_id, params) and returns a dict.
-# These are internal Python functions; MCP exposure is PR-09.
+# Public API — reused by HTTP endpoints (PR-09) and MCP server.
 
 
-def _tool_task_list(conn, project_id, params):
+def tool_task_list(conn, project_id, params):
     """List tasks for the current project."""
     status = params.get("status")
     limit = min(params.get("limit", 20), 50)
@@ -197,7 +197,7 @@ def _tool_task_list(conn, project_id, params):
     return {"tasks": [dict(r) for r in rows], "count": len(rows)}
 
 
-def _tool_task_get(conn, project_id, params):
+def tool_task_get(conn, project_id, params):
     """Get detailed information about a single task."""
     task_id = params.get("task_id")
     if not task_id:
@@ -214,7 +214,7 @@ def _tool_task_get(conn, project_id, params):
     return dict(row)
 
 
-def _tool_task_create(conn, project_id, params):
+def tool_task_create(conn, project_id, params):
     """Create a new task in the current project."""
     title = params.get("title", "").strip()
     if not title:
@@ -243,7 +243,7 @@ def _tool_task_create(conn, project_id, params):
     return {"task_id": task_id, "status": "pendiente"}
 
 
-def _tool_task_cancel(conn, project_id, params):
+def tool_task_cancel(conn, project_id, params):
     """Cancel a task (transition to archivada) and its active run."""
     task_id = params.get("task_id")
     if not task_id:
@@ -308,7 +308,7 @@ def _tool_task_cancel(conn, project_id, params):
     }
 
 
-def _tool_task_resume(conn, project_id, params):
+def tool_task_resume(conn, project_id, params):
     """Resume a blocked or waiting task (transition to pendiente).
 
     Mitigates Bug 8: if the last run has ``session_handle IS NULL``,
@@ -371,7 +371,7 @@ def _tool_task_resume(conn, project_id, params):
     return {"task_id": task_id, "status": "pendiente"}
 
 
-def _tool_approval_list(conn, project_id, params):
+def tool_approval_list(conn, project_id, params):
     """List approvals, optionally filtered by status or task_id."""
     status = params.get("status")
     task_id = params.get("task_id")
@@ -381,7 +381,7 @@ def _tool_approval_list(conn, project_id, params):
     return {"approvals": approvals, "count": len(approvals)}
 
 
-def _tool_approval_respond(conn, project_id, params):
+def tool_approval_respond(conn, project_id, params):
     """Respond to a pending approval (approve or reject)."""
     approval_id = params.get("approval_id")
     decision = params.get("decision")
@@ -403,7 +403,7 @@ def _tool_approval_respond(conn, project_id, params):
         return {"error": "invalid_operation", "message": str(exc)}
 
 
-def _tool_run_tail(conn, project_id, params):
+def tool_run_tail(conn, project_id, params):
     """Get recent events from a backend run."""
     run_id = params.get("run_id")
     if not run_id:
@@ -432,7 +432,7 @@ def _tool_run_tail(conn, project_id, params):
     }
 
 
-def _tool_run_explain(conn, project_id, params):
+def tool_run_explain(conn, project_id, params):
     """Explain the routing decision and run history for a task."""
     task_id = params.get("task_id")
     if not task_id:
@@ -471,7 +471,7 @@ def _tool_run_explain(conn, project_id, params):
     }
 
 
-def _tool_project_context(conn, project_id, params):
+def tool_project_context(conn, project_id, params):
     """Get project metadata, task summary, and recent activity."""
     project = conn.execute(
         "SELECT id, name, description, area, directory, url "
@@ -509,17 +509,19 @@ def _tool_project_context(conn, project_id, params):
 
 
 # Tool dispatch table (name → function)
-_TOOL_DISPATCH: dict[str, Any] = {
-    "task_list": _tool_task_list,
-    "task_get": _tool_task_get,
-    "task_create": _tool_task_create,
-    "task_cancel": _tool_task_cancel,
-    "task_resume": _tool_task_resume,
-    "approval_list": _tool_approval_list,
-    "approval_respond": _tool_approval_respond,
-    "run_tail": _tool_run_tail,
-    "run_explain": _tool_run_explain,
-    "project_context": _tool_project_context,
+# Functions are public (tool_*) so HTTP endpoints and MCP servers can
+# reuse them.  Signature: (conn, project_id, params) → dict.
+TOOL_DISPATCH: dict[str, Any] = {
+    "task_list": tool_task_list,
+    "task_get": tool_task_get,
+    "task_create": tool_task_create,
+    "task_cancel": tool_task_cancel,
+    "task_resume": tool_task_resume,
+    "approval_list": tool_approval_list,
+    "approval_respond": tool_approval_respond,
+    "run_tail": tool_run_tail,
+    "run_explain": tool_run_explain,
+    "project_context": tool_project_context,
 }
 
 
@@ -996,7 +998,7 @@ def assistant_turn(
                 tool_input = tu.get("input", {})
                 tool_id = tu["id"]
 
-                fn = _TOOL_DISPATCH.get(tool_name)
+                fn = TOOL_DISPATCH.get(tool_name)
                 if fn is None:
                     result = {"error": f"Unknown tool: {tool_name}"}
                 else:
