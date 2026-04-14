@@ -1,10 +1,11 @@
-"""Tests for PR-10a — read-only query helpers in runs_service.
+"""Tests for PR-10a/10c — read-only query helpers in runs_service.
 
-Covers the four helpers that back the Web UI endpoints:
-  - list_runs_for_task()
-  - get_run_detail()
-  - list_events_for_run()
-  - get_routing_decision_for_task()
+Covers the helpers that back the Web UI endpoints:
+  - list_runs_for_task()             (PR-10a)
+  - get_run_detail()                 (PR-10a)
+  - list_events_for_run()            (PR-10a)
+  - get_routing_decision_for_task()  (PR-10a)
+  - list_artifacts_for_run()         (PR-10c)
 
 These helpers join with backend_profiles so the UI does not need
 a second round-trip, and they bypass Bug 11 (which lives in
@@ -355,3 +356,77 @@ class TestGetRoutingDecisionForTask:
             seeded["task_id"], conn,
         )
         assert got["reason_summary"] == "Rule 'complex_to_claude' matched"
+
+
+# ── list_artifacts_for_run (PR-10c) ─────────────────────────────────
+
+
+def _create_run(conn, seeded, **kwargs):
+    rd_id = _insert_routing_decision(
+        conn, seeded["task_id"], seeded["claude_id"],
+    )
+    return runs_service.create_run(
+        seeded["task_id"], rd_id, seeded["claude_id"], conn,
+        backend_kind="claude_code", runtime_kind="cli", **kwargs,
+    )
+
+
+class TestListArtifactsForRun:
+
+    def test_returns_empty_list_when_no_artifacts(self, conn, seeded):
+        run = _create_run(conn, seeded)
+        assert runs_service.list_artifacts_for_run(run["id"], conn) == []
+
+    def test_returns_registered_artifacts_with_metadata(self, conn, seeded):
+        run = _create_run(conn, seeded)
+        aid = runs_service.register_artifact(
+            seeded["task_id"], run["id"], "code", "src/main.py", conn,
+            size_bytes=1024, sha256="a" * 64,
+        )
+        rows = runs_service.list_artifacts_for_run(run["id"], conn)
+        assert len(rows) == 1
+        assert rows[0]["id"] == aid
+        assert rows[0]["artifact_type"] == "code"
+        assert rows[0]["path"] == "src/main.py"
+        assert rows[0]["size_bytes"] == 1024
+        assert rows[0]["sha256"] == "a" * 64
+        assert rows[0]["task_id"] == seeded["task_id"]
+        assert rows[0]["backend_run_id"] == run["id"]
+
+    def test_tolerates_null_sha256_and_size(self, conn, seeded):
+        """Bug 8: adapter may persist sha256/size as NULL on early
+        failure.  Helper must return those rows without crashing."""
+        run = _create_run(conn, seeded)
+        runs_service.register_artifact(
+            seeded["task_id"], run["id"], "log", "run.log", conn,
+        )
+        [row] = runs_service.list_artifacts_for_run(run["id"], conn)
+        assert row["sha256"] is None
+        assert row["size_bytes"] is None
+
+    def test_scopes_to_run(self, conn, seeded):
+        """Artifacts of other runs must not leak into this one."""
+        run_a = _create_run(conn, seeded)
+        run_b = _create_run(conn, seeded)
+        runs_service.register_artifact(
+            seeded["task_id"], run_a["id"], "code", "a.py", conn,
+        )
+        runs_service.register_artifact(
+            seeded["task_id"], run_b["id"], "code", "b.py", conn,
+        )
+        rows_a = runs_service.list_artifacts_for_run(run_a["id"], conn)
+        rows_b = runs_service.list_artifacts_for_run(run_b["id"], conn)
+        assert [r["path"] for r in rows_a] == ["a.py"]
+        assert [r["path"] for r in rows_b] == ["b.py"]
+
+    def test_orders_by_insertion_with_rowid_tiebreak(self, conn, seeded):
+        """Artifacts registered within the same second must preserve
+        insertion order via the rowid secondary sort."""
+        run = _create_run(conn, seeded)
+        paths = ["01.py", "02.py", "03.py", "04.py"]
+        for p in paths:
+            runs_service.register_artifact(
+                seeded["task_id"], run["id"], "code", p, conn,
+            )
+        rows = runs_service.list_artifacts_for_run(run["id"], conn)
+        assert [r["path"] for r in rows] == paths

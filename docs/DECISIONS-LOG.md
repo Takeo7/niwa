@@ -656,3 +656,59 @@ El layout vive en `TaskDetailPage.tsx`, que renderiza header + `<Tabs>` + `<Outl
 **Alternativas consideradas:** Invalidar solo lo relacionado con el approval y dejar que el polling de tasks (si existe) refresque su lista — asume un loop de polling que el repo no garantiza (`useTasks` no tiene `refetchInterval`).
 
 **Impacto:** Un resolve toca 6 query keys. Sobrecoste de red mínimo; la UI queda coherente en el siguiente render.
+
+## 2026-04-14 — PR-10c
+
+### Decisión 1: Artifacts viven dentro de la tab "Runs", no como ruta o tab propia
+
+**Decisión:** La vista de artefactos se integra como tercera sección dentro de `RunsTab` (`/tasks/:taskId/runs`), debajo del grid `RunList`/`RunTimeline`. No se añade una ruta nueva (`/runs/:runId`) ni una tab aparte a `TaskDetailPage`. El contenido cambia según el run seleccionado en `RunList`.
+
+**Motivo:** Los artifacts son por `backend_run_id`, no por tarea — no encajan como sub-tab a nivel de tarea (PR-10a Dec 1 decidió que los sub-tabs son por tarea). Crear una ruta top-level `/runs/:runId` introduciría un punto de entrada asimétrico: los runs solo se alcanzan desde el contexto de una tarea, así que un permalink a run suelto no tiene ancla natural en la navegación. Mantenerlos en `RunsTab` preserva el flujo "entro en tarea → miro su ejecución → veo sus artefactos" sin saltos.
+
+**Alternativas consideradas:**
+- Ruta independiente `/runs/:runId` con pestañas Timeline/Artifacts — rechazada porque duplica el header de run y requeriría propagar el contexto de tarea de vuelta (breadcrumb). Sin ganancia clara.
+- Sub-tab "Artifacts" en `TaskDetailPage` — rechazado: un task tiene N runs con M artifacts cada uno; agrupar por tarea mezclaría artifacts de runs distintos y confundiría qué artifact pertenece a qué ejecución.
+
+**Impacto:** `RunsTab` gana una sección pero no rutas. Si en un futuro se quiere permalink a artifacts de un run concreto, se podría añadir query param (`?run=<id>`) sin mover el componente.
+
+### Decisión 2: Sin endpoint separado de event detail — `GET /api/runs/:id/events` ya devuelve `payload_json`
+
+**Decisión:** El drawer de detalle de evento consume el mismo payload ya cargado por `useRunEvents`. No se crea `GET /api/runs/:id/events/:eventId`. El hook encuentra el evento por id en el array cacheado y lo pasa al drawer.
+
+**Motivo:** El endpoint de PR-10a ya emite la fila completa (`id, backend_run_id, event_type, message, payload_json, created_at`). El tamaño por evento es del orden de KBs; el array completo por run es manejable en cliente. Duplicar un endpoint por elemento añadiría round-trips y complicaría el routing para nada.
+
+**Alternativas consideradas:** Endpoint dedicado `GET /api/runs/:id/events/:eventId` que cargue sólo el evento seleccionado — útil si los payloads fueran megabytes. No es el caso: los eventos de `stream-json` raramente superan decenas de KB. La optimización prematura no aplica.
+
+**Impacto:** Si un run genera cientos de miles de eventos, la carga inicial del timeline podría ser pesada — pero eso es un problema de `list_events_for_run` (paginación), no de detail. El parámetro `limit` del endpoint ya existe para acotar la lista.
+
+### Decisión 3: Sin preview inline de artifacts en v0.2
+
+**Decisión:** `ArtifactList` muestra solo metadata (tipo, path relativo, tamaño humano, sha256 truncado, timestamp). No abre ni descarga el contenido. Cualquier viewer (texto, imagen, JSON) queda para un PR futuro dedicado.
+
+**Motivo:** Instrucción explícita del prompt de PR-10c: "Si requiere más complejidad que eso, NO — solo muestra metadata y queda para futuro PR de viewer." Abrir el contenido exige: (a) un endpoint nuevo que sirva el archivo con content-type correcto, (b) controles de tamaño máximo por tipo, (c) guardas contra path traversal al traducir `path` relativo a la ruta real del host, (d) decisiones sobre caching. Todo eso desborda el scope "read-only quick win" de PR-10c.
+
+**Alternativas consideradas:** Preview solo para text/JSON con límite de 100KB — aún así añade endpoint y manejo de errores; mejor un PR limpio dedicado.
+
+**Impacto:** La UI es estrictamente observacional en v0.2. Un operador que quiera inspeccionar el contenido debe ir al filesystem vía SSH/terminal.
+
+### Decisión 4: `JsonBlock` usa `JSON.stringify(v, null, 2)` — sin dependencia de `react-json-view`
+
+**Decisión:** El pretty-print del payload de eventos en el drawer se implementa con `JSON.stringify(value, null, 2)` dentro de un `<Code block>` de Mantine. No se añade `react-json-view`, `@uiw/react-json-view`, `react-json-pretty` ni ningún paquete equivalente.
+
+**Motivo:** Instrucción explícita del prompt de PR-10c (restricción F): "Esa es la opción correcta para v0.2." Añadir una dependencia nueva para un feature read-only de diagnóstico es desproporcionado — la mayoría de consumidores quiere ver el JSON, no editarlo ni colapsar niveles de forma interactiva. Un bloque monospace con indentación es suficiente.
+
+**Alternativas consideradas:** `@mantine/code-highlight` (ya en el árbol) con `language=json` para colorizar keys/strings — útil pero también requiere importar CSS adicional y añade peso al bundle por un detalle cosmético. Si el feedback de usuarios lo pide, se puede migrar en un PR posterior sin romper el contrato.
+
+**Impacto:** Cero dependencias nuevas en PR-10c. El bloque de payload es funcional y legible aunque no tenga coloreo sintáctico. Futuros PRs pueden reemplazar la implementación de `JsonBlock` manteniendo su interfaz.
+
+### Decisión 5: `Timeline.onItemClick` como prop opcional — extensión retrocompatible
+
+**Decisión:** `shared/components/Timeline.tsx` gana dos props opcionales: `onItemClick?: (item) => void` y `activeItemId?: string | null`. Cuando `onItemClick` está definido, cada fila se renderiza dentro de un `UnstyledButton`. Cuando no, el renderizado es idéntico al de PR-10a (sin click handler, sin cursor pointer). El único consumidor actual (`RunTimeline`) activa la extensión; otros callers hipotéticos seguirían funcionando sin cambios.
+
+**Motivo:** Evitar bifurcar el componente (`ClickableTimeline` vs `Timeline`) y evitar obligar a todos los callers a manejar click events que no les importan. El patrón props opcionales es canónico en Mantine.
+
+**Alternativas consideradas:**
+- Crear un componente nuevo `InteractiveTimeline` — duplica 120 líneas para añadir un callback.
+- Exponer un `renderItem` prop — flexible pero sobre-ingeniería: el único caso de uso en v0.2 es "abrir detalle".
+
+**Impacto:** El inline payload dentro del timeline pasa a renderizarse con `lineClamp=3` (teaser de 3 líneas en vez de payload completo). La autoridad pasa al drawer. Cambio de UX mínimo — antes el payload ocupaba mucho espacio por evento y obligaba a scroll; ahora cada fila tiene altura predecible y el operador abre el drawer si quiere profundizar.

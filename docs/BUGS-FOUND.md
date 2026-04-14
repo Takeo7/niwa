@@ -129,3 +129,16 @@ Formato sugerido:
 **Severidad:** baja (tiempo de carga inicial subóptimo; no afecta funcionalidad).
 **PR futuro donde se arreglará:** pendiente de asignar (PR de performance de frontend).
 **Impacto:** Primera carga más lenta de lo necesario, especialmente en conexiones móviles o VPS con bandwidth limitado. Route-based splitting con `React.lazy` por feature o `manualChunks` agrupando Mantine/dnd-kit/recharts por separado son caminos razonables.
+
+## 2026-04-14 — encontrado durante PR-10c
+
+### Bug 15: ESLint del frontend sin config ejecutable
+
+**Descripción:** `eslint` está instalado como devDependency en `niwa-app/frontend/package.json` (v9.39.4) pero no existe `eslint.config.js` (ni `.eslintrc.*`) en el repo. `npm run lint` falla con:
+```
+ESLint couldn't find an eslint.config.(js|mjs|cjs) file.
+```
+El proyecto no tiene linting de frontend en ejecución. Esto probablemente explica inconsistencias sutiles acumuladas en imports y tipos que un lint activo habría detectado temprano.
+**Ubicación:** `niwa-app/frontend/` (ausencia de archivo de config).
+**Severidad:** baja (no afecta funcionalidad; sí afecta calidad sostenida del código frontend).
+**PR futuro donde se arreglará:** candidato al PR de infra de tests de frontend (que añadirá vitest según PR-10a Dec 2). Lint + test infra deberían ir juntos, probablemente antes de PR-12.

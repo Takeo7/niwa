@@ -4,5 +4,6 @@ export {
   useTaskRuns,
   useRun,
   useRunEvents,
+  useRunArtifacts,
   useTaskRoutingDecision,
 } from '../../../shared/api/queries';
