@@ -3495,6 +3495,54 @@ class Handler(BaseHTTPRequestHandler):
             if approval is None:
                 return self._json({'error': 'approval_not_found'}, 404)
             return self._json(approval)
+        # ── PR-10d: backend profiles + capability profiles read ──
+        if path == '/api/backend-profiles':
+            import backend_registry
+            with db_conn() as conn:
+                profiles = backend_registry.list_backend_profiles(conn)
+            return self._json(profiles)
+        if re.match(r'^/api/backend-profiles/[^/]+$', path) and path.count('/') == 3:
+            profile_id = path.split('/')[3]
+            import backend_registry
+            with db_conn() as conn:
+                profile = backend_registry.get_backend_profile(
+                    profile_id, conn,
+                )
+            if profile is None:
+                return self._json({'error': 'backend_profile_not_found'}, 404)
+            return self._json(profile)
+        _m_cap_get = re.match(
+            r'^/api/projects/([^/]+)/capability-profile$', path,
+        )
+        if _m_cap_get:
+            import capability_service
+            key = _m_cap_get.group(1)
+            with db_conn() as conn:
+                proj = conn.execute(
+                    'SELECT id FROM projects WHERE id=? OR slug=?',
+                    (key, key),
+                ).fetchone()
+                if not proj:
+                    return self._json({'error': 'project_not_found'}, 404)
+                project_id = proj['id']
+                row = conn.execute(
+                    'SELECT * FROM project_capability_profiles '
+                    'WHERE project_id = ? ORDER BY created_at LIMIT 1',
+                    (project_id,),
+                ).fetchone()
+            if row:
+                return self._json({
+                    'project_id': project_id,
+                    'is_default': False,
+                    'profile': dict(row),
+                })
+            default = dict(capability_service.DEFAULT_CAPABILITY_PROFILE)
+            default['project_id'] = project_id
+            return self._json({
+                'project_id': project_id,
+                'is_default': True,
+                'profile': default,
+            })
         if re.match(r'^/api/tasks/[^/]+/labels$', path):
             task_id = path.split('/')[3]
             return self._json(fetch_task_labels(task_id))
@@ -4025,6 +4073,75 @@ class Handler(BaseHTTPRequestHandler):
             routine_id = path.split('/')[3]
             scheduler.update_routine(db_conn, routine_id, payload)
             return self._json({'ok': True})
+        # ── PR-10d: backend profile edit ──
+        _m_bp_patch = re.match(
+            r'^/api/backend-profiles/([^/]+)$', path,
+        )
+        if _m_bp_patch and path.count('/') == 3:
+            import backend_registry
+            profile_id = _m_bp_patch.group(1)
+            err = backend_registry.validate_backend_profile_patch(payload)
+            if err is not None:
+                return self._json(err, 400)
+            with db_conn() as conn:
+                try:
+                    updated = backend_registry.update_backend_profile(
+                        profile_id, payload, conn,
+                    )
+                except LookupError:
+                    return self._json(
+                        {'error': 'backend_profile_not_found'}, 404,
+                    )
+                conn.commit()
+            return self._json(updated)
+        return self._json({'error': 'not_found'}, 404)
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        if self._require_auth():
+            return
+        payload = self._read_form_or_json()
+        # ── PR-10d: capability profile upsert ──
+        _m_cap_put = re.match(
+            r'^/api/projects/([^/]+)/capability-profile$', path,
+        )
+        if _m_cap_put:
+            import capability_service
+            key = _m_cap_put.group(1)
+            err = capability_service.validate_capability_input(payload)
+            if err is not None:
+                return self._json(err, 400)
+            with db_conn() as conn:
+                proj = conn.execute(
+                    'SELECT id FROM projects WHERE id=? OR slug=?',
+                    (key, key),
+                ).fetchone()
+                if not proj:
+                    return self._json({'error': 'project_not_found'}, 404)
+                project_id = proj['id']
+                before = conn.execute(
+                    'SELECT * FROM project_capability_profiles '
+                    'WHERE project_id = ? ORDER BY created_at LIMIT 1',
+                    (project_id,),
+                ).fetchone()
+                updated = capability_service.upsert_profile_for_project(
+                    project_id, payload, conn,
+                )
+                conn.commit()
+            # PR-10d audit: stdout placeholder, per-field old→new.
+            before_dict = dict(before) if before else {}
+            for field, new_value in payload.items():
+                old_value = before_dict.get(field)
+                print(
+                    f"AUDIT capability_profile.{field} project={project_id}: "
+                    f"{old_value!r} → {new_value!r}",
+                    flush=True,
+                )
+            return self._json({
+                'project_id': project_id,
+                'is_default': False,
+                'profile': updated,
+            })
         return self._json({'error': 'not_found'}, 404)
 
     def do_DELETE(self):
