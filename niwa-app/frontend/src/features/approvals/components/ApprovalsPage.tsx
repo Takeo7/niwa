@@ -7,8 +7,9 @@ import {
   Title,
 } from '@mantine/core';
 import { ApprovalList } from './ApprovalList';
+import { ApprovalResolveModal } from './ApprovalResolveModal';
 import { useApprovals } from '../hooks/useApprovals';
-import type { ApprovalStatus } from '../../../shared/types';
+import type { Approval, ApprovalStatus } from '../../../shared/types';
 
 type Filter = ApprovalStatus | 'all';
 
@@ -20,6 +21,7 @@ type Filter = ApprovalStatus | 'all';
  *  grows large enough to need it. */
 export function ApprovalsPage() {
   const [filter, setFilter] = useState<Filter>('pending');
+  const [resolving, setResolving] = useState<Approval | null>(null);
   const { data: approvals, isLoading } = useApprovals(filter);
 
   return (
@@ -50,11 +52,17 @@ export function ApprovalsPage() {
       <ApprovalList
         approvals={approvals ?? []}
         isLoading={isLoading}
+        onResolve={setResolving}
         empty={
           filter === 'pending'
             ? 'No hay approvals pendientes. Todo al día.'
             : 'No hay approvals que coincidan con el filtro.'
         }
+      />
+
+      <ApprovalResolveModal
+        approval={resolving}
+        onClose={() => setResolving(null)}
       />
     </Stack>
   );

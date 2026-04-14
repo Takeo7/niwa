@@ -1,13 +1,17 @@
+import { useState } from 'react';
 import { Stack, Text, Title } from '@mantine/core';
 import { useParams } from 'react-router-dom';
 import { ApprovalList } from './ApprovalList';
+import { ApprovalResolveModal } from './ApprovalResolveModal';
 import { useTaskApprovals } from '../hooks/useApprovals';
+import type { Approval } from '../../../shared/types';
 
 /** /tasks/:taskId/approvals — approvals scoped to a single task.
  *  Tab is always visible (even when empty) so the URL remains a
  *  stable deep-link. */
 export function ApprovalsTab() {
   const { taskId } = useParams<{ taskId: string }>();
+  const [resolving, setResolving] = useState<Approval | null>(null);
   const { data: approvals, isLoading } = useTaskApprovals(taskId);
 
   return (
@@ -26,7 +30,13 @@ export function ApprovalsTab() {
         approvals={approvals ?? []}
         isLoading={isLoading}
         hideTaskColumn
+        onResolve={setResolving}
         empty="Esta tarea aún no ha generado ningún approval."
+      />
+
+      <ApprovalResolveModal
+        approval={resolving}
+        onClose={() => setResolving(null)}
       />
     </Stack>
   );
