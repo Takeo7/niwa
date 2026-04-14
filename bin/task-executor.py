@@ -966,7 +966,6 @@ _TRANSIENT_ERROR_CODES = frozenset({
     "timed_out",
     "adapter_exception",
     "subprocess_error",
-    "codex_no_token",
 })
 
 

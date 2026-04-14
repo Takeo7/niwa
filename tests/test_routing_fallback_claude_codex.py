@@ -438,20 +438,19 @@ class TestFallbackEscalation(TestCase):
         self.assertEqual(len(runs), 2)
         self.assertEqual(dict(runs[1])["relation_type"], "fallback")
 
-    def test_capability_denied_not_in_transient_codes(self):
-        """capability_denied and adapter_not_implemented must NOT
-        appear in the transient error codes set in the executor."""
+    def test_non_transient_codes_excluded(self):
+        """capability_denied, adapter_not_implemented, and
+        codex_no_token must NOT be in the transient set."""
         executor_path = os.path.join(
             ROOT_DIR, "bin", "task-executor.py")
         source = open(executor_path, encoding="utf-8").read()
-        # Find the _TRANSIENT_ERROR_CODES definition
         start = source.find("_TRANSIENT_ERROR_CODES")
         self.assertNotEqual(start, -1,
                             "_TRANSIENT_ERROR_CODES not found")
-        # Grab next ~300 chars to capture the full frozenset
         snippet = source[start:start + 400]
         self.assertNotIn("capability_denied", snippet)
         self.assertNotIn("adapter_not_implemented", snippet)
+        self.assertNotIn("codex_no_token", snippet)
 
     def test_transient_codes_include_expected(self):
         """Known transient codes must be in the executor's set."""
@@ -461,8 +460,7 @@ class TestFallbackEscalation(TestCase):
         start = source.find("_TRANSIENT_ERROR_CODES")
         snippet = source[start:start + 400]
         for code in ("auth_failed", "rate_limited", "timed_out",
-                     "adapter_exception", "subprocess_error",
-                     "codex_no_token"):
+                     "adapter_exception", "subprocess_error"):
             self.assertIn(code, snippet,
                           f"{code} not in _TRANSIENT_ERROR_CODES")
 
