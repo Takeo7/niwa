@@ -115,19 +115,33 @@ class TestRoutingModeGate:
         assert result["error"] == "routing_mode_mismatch"
         assert "None" in result["message"]
 
-    def test_routing_mode_v02_proceeds_to_not_implemented(self):
-        """routing_mode='v02' passes the gate (hits NotImplementedError)."""
+    def test_routing_mode_v02_reaches_llm(self, monkeypatch):
+        """routing_mode='v02' passes the gate and reaches LLM call."""
         pid = _seed_project(self.conn)
         _set_routing_mode(self.conn, "v02")
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("svc.llm.anthropic.api_key", "sk-test"),
+        )
+        self.conn.commit()
 
-        with pytest.raises(NotImplementedError, match="LLM conversation loop"):
-            assistant_service.assistant_turn(
-                session_id="sess-3",
-                project_id=pid,
-                message="hola",
-                channel="web",
-                conn=self.conn,
-            )
+        # Fake the LLM to return a simple text response
+        def fake_call(*a, **kw):
+            return {
+                "content": [{"type": "text", "text": "Hola, soy Niwa."}],
+                "stop_reason": "end_turn",
+            }
+        monkeypatch.setattr(assistant_service, "call_anthropic", fake_call)
+
+        result = assistant_service.assistant_turn(
+            session_id="sess-3",
+            project_id=pid,
+            message="hola",
+            channel="web",
+            conn=self.conn,
+        )
+        assert "error" not in result
+        assert result["assistant_message"] == "Hola, soy Niwa."
 
 
 # ── Tests: error-path persistence ────────────────────────────────────
@@ -673,3 +687,276 @@ class TestCollectIds:
             "run_tail", result, task_ids, approval_ids, run_ids,
         )
         assert run_ids == {"r1"}
+
+
+# ── Tests: full assistant_turn loop (with fake LLM) ──────────────────
+
+def _fake_llm_simple(text):
+    """Return a fake call_anthropic that always replies with text."""
+    def fake(*a, **kw):
+        return {
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+        }
+    return fake
+
+
+def _fake_llm_tool_then_text(tool_name, tool_input, tool_id, final_text):
+    """Fake that first calls a tool, then responds with text."""
+    call_count = {"n": 0}
+
+    def fake(model, api_key, messages, tools, system, timeout):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return {
+                "content": [{
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }],
+                "stop_reason": "tool_use",
+            }
+        return {
+            "content": [{"type": "text", "text": final_text}],
+            "stop_reason": "end_turn",
+        }
+    return fake
+
+
+class TestAssistantTurnLoop:
+
+    def setup_method(self):
+        self.fd, self.path, self.conn = _make_db()
+        self.pid = _seed_project(self.conn)
+        _set_routing_mode(self.conn, "v02")
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("svc.llm.anthropic.api_key", "sk-test"),
+        )
+        self.conn.commit()
+
+    def teardown_method(self):
+        self.conn.close()
+        os.close(self.fd)
+        os.unlink(self.path)
+
+    def test_simple_text_response(self, monkeypatch):
+        """LLM returns text only — no tool calls."""
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic",
+            _fake_llm_simple("Todo bien."),
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s1", project_id=self.pid,
+            message="¿cómo va?", channel="web", conn=self.conn,
+        )
+        assert r["assistant_message"] == "Todo bien."
+        assert r["actions_taken"] == []
+        assert r["task_ids"] == []
+
+    def test_tool_call_creates_task(self, monkeypatch):
+        """LLM calls task_create, then responds with text."""
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic",
+            _fake_llm_tool_then_text(
+                "task_create",
+                {"title": "Deploy v2", "priority": "alta"},
+                "tu-1",
+                "Tarea creada.",
+            ),
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s2", project_id=self.pid,
+            message="crea una tarea para deploy v2", channel="web",
+            conn=self.conn,
+        )
+        assert r["assistant_message"] == "Tarea creada."
+        assert len(r["task_ids"]) == 1
+        assert len(r["actions_taken"]) == 1
+        assert r["actions_taken"][0]["tool"] == "task_create"
+
+        # Verify task in DB
+        row = self.conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (r["task_ids"][0],),
+        ).fetchone()
+        assert row["title"] == "Deploy v2"
+        assert row["priority"] == "alta"
+
+    def test_tool_call_task_list(self, monkeypatch):
+        """LLM calls task_list and gets results."""
+        # Seed a task
+        now = assistant_service._now_iso()
+        tid = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, area, project_id, status, "
+            "priority, created_at, updated_at) "
+            "VALUES (?, 'Existing', 'proyecto', ?, 'pendiente', 'media', ?, ?)",
+            (tid, self.pid, now, now),
+        )
+        self.conn.commit()
+
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic",
+            _fake_llm_tool_then_text(
+                "task_list", {}, "tu-2", "Hay 1 tarea pendiente.",
+            ),
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s3", project_id=self.pid,
+            message="lista tareas", channel="web", conn=self.conn,
+        )
+        assert r["assistant_message"] == "Hay 1 tarea pendiente."
+        assert tid in r["task_ids"]
+
+    def test_llm_not_configured_error(self):
+        """No API key → llm_not_configured error."""
+        self.conn.execute(
+            "DELETE FROM settings WHERE key = 'svc.llm.anthropic.api_key'",
+        )
+        self.conn.commit()
+
+        # Clear env too
+        old = os.environ.pop("ANTHROPIC_API_KEY", None)
+        old2 = os.environ.pop("NIWA_LLM_API_KEY", None)
+        try:
+            r = assistant_service.assistant_turn(
+                session_id="s4", project_id=self.pid,
+                message="hola", channel="web", conn=self.conn,
+            )
+            assert r["error"] == "llm_not_configured"
+        finally:
+            if old is not None:
+                os.environ["ANTHROPIC_API_KEY"] = old
+            if old2 is not None:
+                os.environ["NIWA_LLM_API_KEY"] = old2
+
+    def test_http_error_persists_message(self, monkeypatch):
+        """HTTP 429 from API → error message persisted."""
+        def fake_fail(*a, **kw):
+            raise urllib.error.HTTPError(
+                "https://api.anthropic.com/v1/messages",
+                429, "Rate limited", {}, None,
+            )
+        monkeypatch.setattr(assistant_service, "call_anthropic", fake_fail)
+
+        r = assistant_service.assistant_turn(
+            session_id="s5", project_id=self.pid,
+            message="hola", channel="web", conn=self.conn,
+        )
+        assert "429" in r["assistant_message"]
+        # Verify persisted
+        msgs = _get_chat_messages(self.conn, r["session_id"])
+        assert msgs[-1]["role"] == "assistant"
+        assert "429" in msgs[-1]["content"]
+
+    def test_max_iterations_respected(self, monkeypatch):
+        """Loop stops after MAX_TOOL_ITERATIONS even if LLM keeps calling tools."""
+        call_count = {"n": 0}
+
+        def fake_always_tool(*a, **kw):
+            call_count["n"] += 1
+            return {
+                "content": [{
+                    "type": "tool_use",
+                    "id": f"tu-{call_count['n']}",
+                    "name": "project_context",
+                    "input": {},
+                }],
+                "stop_reason": "tool_use",
+            }
+
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic", fake_always_tool,
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s6", project_id=self.pid,
+            message="hola", channel="web", conn=self.conn,
+        )
+        # Should have stopped at MAX_TOOL_ITERATIONS
+        assert len(r["actions_taken"]) <= assistant_service.MAX_TOOL_ITERATIONS
+        assert call_count["n"] == assistant_service.MAX_TOOL_ITERATIONS
+
+    def test_timeout_respected(self, monkeypatch):
+        """Turn respects 30s deadline."""
+        import time as _time
+
+        original_monotonic = _time.monotonic
+        # Simulate time passing: first call normal, second call near deadline
+        call_count = {"n": 0}
+        base = original_monotonic()
+
+        def fast_time():
+            call_count["n"] += 1
+            if call_count["n"] > 4:
+                return base + 29  # near the 30s deadline
+            return base + call_count["n"]
+
+        monkeypatch.setattr(_time, "monotonic", fast_time)
+
+        def fake_tool(*a, **kw):
+            return {
+                "content": [{
+                    "type": "tool_use", "id": "tu-t",
+                    "name": "project_context", "input": {},
+                }],
+                "stop_reason": "tool_use",
+            }
+        monkeypatch.setattr(assistant_service, "call_anthropic", fake_tool)
+
+        r = assistant_service.assistant_turn(
+            session_id="s7", project_id=self.pid,
+            message="hola", channel="web", conn=self.conn,
+        )
+        # Should have stopped due to timeout, not max iterations
+        assert len(r["actions_taken"]) < assistant_service.MAX_TOOL_ITERATIONS
+
+    def test_turn_persists_both_messages_on_success(self, monkeypatch):
+        """Successful turn writes user + assistant to chat_messages."""
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic",
+            _fake_llm_simple("Respuesta."),
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s8", project_id=self.pid,
+            message="pregunta", channel="web", conn=self.conn,
+        )
+        msgs = _get_chat_messages(self.conn, r["session_id"])
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "pregunta"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"] == "Respuesta."
+
+    def test_approval_pre_routing_returns_ids(self, monkeypatch):
+        """If LLM queries approvals, IDs appear in response."""
+        # Seed a task + approval
+        now = assistant_service._now_iso()
+        tid = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO tasks (id, title, area, project_id, status, "
+            "priority, created_at, updated_at) "
+            "VALUES (?, 'Blocked', 'proyecto', ?, 'en_progreso', 'media', ?, ?)",
+            (tid, self.pid, now, now),
+        )
+        aid = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO approvals (id, task_id, approval_type, reason, "
+            "risk_level, status, requested_at) "
+            "VALUES (?, ?, 'capability_denied', 'test', 'medium', 'pending', ?)",
+            (aid, tid, now),
+        )
+        self.conn.commit()
+
+        monkeypatch.setattr(
+            assistant_service, "call_anthropic",
+            _fake_llm_tool_then_text(
+                "approval_list", {"status": "pending"}, "tu-a",
+                "Hay una aprobación pendiente.",
+            ),
+        )
+        r = assistant_service.assistant_turn(
+            session_id="s9", project_id=self.pid,
+            message="¿hay aprobaciones?", channel="web", conn=self.conn,
+        )
+        assert aid in r["approval_ids"]

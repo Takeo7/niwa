@@ -875,7 +875,175 @@ def assistant_turn(
             message=error_text,
         )
 
-    # ── TODO: LLM conversation loop (steps 2-5) ─────────────────
-    raise NotImplementedError(
-        "LLM conversation loop not yet implemented (PR-08 step 2+)."
+    # ── Get LLM config ───────────────────────────────────────────
+    model, api_key = _get_llm_config(conn)
+    if not api_key:
+        error_text = (
+            "No hay API key configurada para el LLM conversacional. "
+            "Configura svc.llm.anthropic.api_key en settings o "
+            "ANTHROPIC_API_KEY en el entorno."
+        )
+        _persist_assistant_message(canonical_sid, error_text, conn)
+        return _make_result(
+            session_id=canonical_sid,
+            assistant_message=error_text,
+            error="llm_not_configured",
+            message=error_text,
+        )
+
+    # ── Load conversation history ────────────────────────────────
+    history_rows = conn.execute(
+        "SELECT role, content FROM chat_messages "
+        "WHERE session_id = ? AND status = 'done' AND content != '' "
+        "ORDER BY created_at ASC",
+        (canonical_sid,),
+    ).fetchall()
+
+    messages: list[dict] = []
+    for h in [dict(r) for r in history_rows[-_HISTORY_LIMIT:]]:
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": message.strip()})
+
+    system = _build_system_prompt(project["name"], project_id)
+
+    # ── LLM conversation loop ────────────────────────────────────
+    deadline = time.monotonic() + TURN_TIMEOUT_S
+    actions_taken: list[dict] = []
+    task_ids: set[str] = set()
+    approval_ids: set[str] = set()
+    run_ids: set[str] = set()
+    assistant_text = ""
+
+    try:
+        for _round in range(MAX_TOOL_ITERATIONS):
+            remaining = deadline - time.monotonic()
+            if remaining < 3:
+                logger.warning(
+                    "assistant_turn: timeout approaching (%.1fs left), "
+                    "stopping after %d rounds", remaining, _round,
+                )
+                if not assistant_text:
+                    assistant_text = (
+                        "Se agotó el tiempo de procesamiento. "
+                        "Intenta de nuevo."
+                    )
+                break
+
+            response = call_anthropic(
+                model, api_key, messages, TOOL_DEFINITIONS,
+                system, timeout=min(remaining - 1, 25),
+            )
+
+            # Parse response content blocks
+            text_parts: list[str] = []
+            tool_uses: list[dict] = []
+            for block in response.get("content", []):
+                btype = block.get("type")
+                if btype == "text":
+                    text_parts.append(block["text"])
+                elif btype == "tool_use":
+                    tool_uses.append(block)
+
+            if text_parts:
+                assistant_text = "\n".join(text_parts)
+
+            if not tool_uses:
+                break  # No tool calls — conversation complete
+
+            # Append assistant message (with tool_use blocks) to history
+            messages.append({
+                "role": "assistant",
+                "content": response["content"],
+            })
+
+            # Execute each tool and collect results
+            tool_results: list[dict] = []
+            for tu in tool_uses:
+                tool_name = tu["name"]
+                tool_input = tu.get("input", {})
+                tool_id = tu["id"]
+
+                fn = _TOOL_DISPATCH.get(tool_name)
+                if fn is None:
+                    result = {"error": f"Unknown tool: {tool_name}"}
+                else:
+                    try:
+                        result = fn(conn, project_id, tool_input)
+                    except Exception as exc:
+                        logger.exception("Tool %s raised: %s", tool_name, exc)
+                        result = {"error": f"Tool error: {exc}"}
+
+                _collect_ids(
+                    tool_name, result, task_ids, approval_ids, run_ids,
+                )
+                actions_taken.append({
+                    "tool": tool_name,
+                    "input": tool_input,
+                    "result": result,
+                })
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": json.dumps(
+                        result, ensure_ascii=False, default=str,
+                    ),
+                })
+
+            # Send tool results back to the LLM
+            messages.append({"role": "user", "content": tool_results})
+
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        logger.error("Anthropic API error %s: %s", exc.code, body)
+        assistant_text = (
+            f"Error al comunicar con el modelo de lenguaje "
+            f"(HTTP {exc.code}). Intenta de nuevo."
+        )
+    except urllib.error.URLError as exc:
+        logger.error("Anthropic API connection error: %s", exc.reason)
+        assistant_text = (
+            "No se pudo conectar con el modelo de lenguaje. "
+            "Verifica la configuración de red."
+        )
+    except (TimeoutError, OSError) as exc:
+        if "timed out" in str(exc).lower() or isinstance(exc, TimeoutError):
+            logger.error("assistant_turn: socket timeout: %s", exc)
+            assistant_text = (
+                "Se agotó el tiempo de conexión con el modelo. "
+                "Intenta con una solicitud más simple."
+            )
+        else:
+            raise
+    except Exception as exc:
+        logger.exception("assistant_turn unexpected error: %s", exc)
+        assistant_text = f"Error interno: {exc}"
+
+    # ── Check hard timeout ───────────────────────────────────────
+    elapsed = time.monotonic() - (deadline - TURN_TIMEOUT_S)
+    if elapsed > TURN_TIMEOUT_S:
+        logger.error(
+            "assistant_turn: exceeded %ds deadline (%.1fs)",
+            TURN_TIMEOUT_S, elapsed,
+        )
+
+    # ── Persist assistant message ────────────────────────────────
+    if not assistant_text:
+        assistant_text = "He procesado tu solicitud."
+
+    first_task_id = next(iter(task_ids), None)
+    _persist_assistant_message(
+        canonical_sid, assistant_text, conn, task_id=first_task_id,
+    )
+
+    return _make_result(
+        session_id=canonical_sid,
+        assistant_message=assistant_text,
+        actions_taken=actions_taken,
+        task_ids=sorted(task_ids),
+        approval_ids=sorted(approval_ids),
+        run_ids=sorted(run_ids),
     )
