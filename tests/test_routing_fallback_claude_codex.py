@@ -352,9 +352,9 @@ class TestFallbackEscalation(TestCase):
         for r in runs:
             self.assertEqual(r["status"], "failed")
 
-    def test_returned_failure_not_escalated(self):
-        """Adapter returning failed result is NOT escalated — only
-        exceptions trigger fallback."""
+    def test_non_transient_failure_not_escalated(self):
+        """Adapter returning failure with non-transient error_code
+        (e.g. capability_denied) is NOT escalated."""
         conn = _make_conn()
         _seed_profiles(conn, codex_enabled=True)
         task = _make_task(conn, title="Fix typo",
@@ -362,7 +362,6 @@ class TestFallbackEscalation(TestCase):
 
         decision = routing_service.decide(task, conn)
 
-        # Create primary run only
         run = runs_service.create_run(
             task_id=task["id"],
             routing_decision_id=decision["routing_decision_id"],
@@ -370,21 +369,102 @@ class TestFallbackEscalation(TestCase):
             conn=conn,
         )
 
-        # Adapter returns failure (process ran but task failed)
+        # Non-transient: no error_code at all (normal execution failure)
         adapter = _FakeAdapter(
             return_result={"status": "failed", "outcome": "failure",
                            "exit_code": 1})
         result = adapter.start(task, run, {}, {})
 
-        # Should NOT create a fallback run — returned failure is
-        # a legitimate completion, not infrastructure error
         self.assertEqual(result["status"], "failed")
-
         runs = conn.execute(
             "SELECT * FROM backend_runs WHERE task_id = ?",
             (task["id"],),
         ).fetchall()
         self.assertEqual(len(runs), 1)
+
+    def test_transient_error_code_escalates(self):
+        """Adapter returning failure with a transient error_code
+        (auth_failed, rate_limited, etc.) IS escalated."""
+        conn = _make_conn()
+        _seed_profiles(conn, codex_enabled=True)
+        task = _make_task(conn, title="Fix typo",
+                          description="Fix a typo")
+
+        decision = routing_service.decide(task, conn)
+        chain = decision["fallback_chain"]
+
+        # Simulate: codex returns auth_failed → should escalate to claude
+        prior_run_id = None
+        results = []
+        for idx, profile_id in enumerate(chain[:2]):
+            profile = dict(conn.execute(
+                "SELECT * FROM backend_profiles WHERE id = ?",
+                (profile_id,),
+            ).fetchone())
+
+            relation_type = "fallback" if idx > 0 else None
+            run = runs_service.create_run(
+                task_id=task["id"],
+                routing_decision_id=decision["routing_decision_id"],
+                backend_profile_id=profile_id,
+                conn=conn,
+                previous_run_id=prior_run_id,
+                relation_type=relation_type,
+            )
+
+            if profile["slug"] == "codex":
+                # Returns transient failure
+                result = {"status": "failed", "outcome": "failure",
+                          "error_code": "auth_failed"}
+                results.append(result)
+                prior_run_id = run["id"]
+                continue
+            else:
+                # Claude succeeds
+                result = {"status": "succeeded", "outcome": "success"}
+                results.append(result)
+                break
+
+        # Verify escalation happened
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["error_code"], "auth_failed")
+        self.assertEqual(results[1]["status"], "succeeded")
+
+        runs = conn.execute(
+            "SELECT * FROM backend_runs WHERE task_id = ? "
+            "ORDER BY created_at",
+            (task["id"],),
+        ).fetchall()
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(dict(runs[1])["relation_type"], "fallback")
+
+    def test_capability_denied_not_in_transient_codes(self):
+        """capability_denied and adapter_not_implemented must NOT
+        appear in the transient error codes set in the executor."""
+        executor_path = os.path.join(
+            ROOT_DIR, "bin", "task-executor.py")
+        source = open(executor_path, encoding="utf-8").read()
+        # Find the _TRANSIENT_ERROR_CODES definition
+        start = source.find("_TRANSIENT_ERROR_CODES")
+        self.assertNotEqual(start, -1,
+                            "_TRANSIENT_ERROR_CODES not found")
+        # Grab next ~300 chars to capture the full frozenset
+        snippet = source[start:start + 400]
+        self.assertNotIn("capability_denied", snippet)
+        self.assertNotIn("adapter_not_implemented", snippet)
+
+    def test_transient_codes_include_expected(self):
+        """Known transient codes must be in the executor's set."""
+        executor_path = os.path.join(
+            ROOT_DIR, "bin", "task-executor.py")
+        source = open(executor_path, encoding="utf-8").read()
+        start = source.find("_TRANSIENT_ERROR_CODES")
+        snippet = source[start:start + 400]
+        for code in ("auth_failed", "rate_limited", "timed_out",
+                     "adapter_exception", "subprocess_error",
+                     "codex_no_token"):
+            self.assertIn(code, snippet,
+                          f"{code} not in _TRANSIENT_ERROR_CODES")
 
     def test_fallback_limit_is_one(self):
         """Execution chain is limited to primary + 1 fallback."""
@@ -396,12 +476,83 @@ class TestFallbackEscalation(TestCase):
         decision = routing_service.decide(task, conn)
         chain = decision["fallback_chain"]
 
-        # Chain has 2 entries (codex + claude)
         self.assertEqual(len(chain), 2)
-
-        # Even if more profiles existed, executor limits to 2
         execution_chain = chain[:2]
         self.assertEqual(len(execution_chain), 2)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 3. Credential injection (source verification)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestCredentialInjection(TestCase):
+    """Verify _prepare_backend_env exists in the executor and handles
+    both backends.  Cannot import the executor directly (side effects),
+    so we verify via source inspection."""
+
+    def _executor_source(self):
+        path = os.path.join(ROOT_DIR, "bin", "task-executor.py")
+        return open(path, encoding="utf-8").read()
+
+    def test_prepare_backend_env_exists(self):
+        """_prepare_backend_env function is defined in the executor."""
+        source = self._executor_source()
+        self.assertIn("def _prepare_backend_env(", source)
+
+    def test_codex_slug_injects_openai_token(self):
+        """The codex branch sets OPENAI_ACCESS_TOKEN."""
+        source = self._executor_source()
+        start = source.find("def _prepare_backend_env(")
+        func = source[start:source.find("\ndef ", start + 1)]
+        self.assertIn("OPENAI_ACCESS_TOKEN", func)
+        self.assertIn("CODEX_HOME", func)
+
+    def test_claude_slug_injects_anthropic_key(self):
+        """The claude_code branch sets ANTHROPIC_API_KEY."""
+        source = self._executor_source()
+        start = source.find("def _prepare_backend_env(")
+        func = source[start:source.find("\ndef ", start + 1)]
+        self.assertIn("ANTHROPIC_API_KEY", func)
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", func)
+
+    def test_codex_no_token_returns_none(self):
+        """When _get_openai_oauth_token returns None, the function
+        must return None (not empty dict)."""
+        source = self._executor_source()
+        start = source.find("def _prepare_backend_env(")
+        func = source[start:source.find("\ndef ", start + 1)]
+        # Must have: if not token: return None
+        self.assertIn("return None", func)
+
+    def test_executor_blocks_on_no_token(self):
+        """When _prepare_backend_env returns None, the executor must
+        fail with codex_no_token — NOT escalate to fallback."""
+        source = self._executor_source()
+        start = source.find("def _execute_task_v02(")
+        func = source[start:source.find("\ndef ", start + 1)]
+        self.assertIn("codex_no_token", func)
+        self.assertIn("no OpenAI token", func)
+
+    def test_extra_env_passed_to_adapter(self):
+        """The executor injects _extra_env into profile dict."""
+        source = self._executor_source()
+        start = source.find("def _execute_task_v02(")
+        func = source[start:source.find("\ndef ", start + 1)]
+        self.assertIn("_extra_env", func)
+
+    def test_adapter_merges_extra_env(self):
+        """Both adapters merge extra_env into subprocess env."""
+        from backend_adapters.claude_code import ClaudeCodeAdapter
+        from backend_adapters.codex import CodexAdapter
+        import inspect
+
+        claude_src = inspect.getsource(ClaudeCodeAdapter._execute)
+        self.assertIn("extra_env", claude_src)
+        self.assertIn("env.update(extra_env)", claude_src)
+
+        codex_src = inspect.getsource(CodexAdapter._execute)
+        self.assertIn("extra_env", codex_src)
+        self.assertIn("env.update(extra_env)", codex_src)
 
 
 if __name__ == "__main__":

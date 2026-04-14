@@ -85,3 +85,12 @@ Formato sugerido:
 **Ubicación:** `niwa-app/backend/approval_service.py:31-56`
 **Severidad:** baja (no causa errores funcionales, pero permite datos inconsistentes).
 **PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de approval_service).
+
+## 2026-04-14 — encontrado durante PR-07
+
+### Bug 10: _execute_task_v02 no inyectaba credenciales en el subprocess (pre-existente desde PR-06)
+
+**Descripción:** `_execute_task_v02()` no configuraba `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` (para Claude) ni `OPENAI_ACCESS_TOKEN`/`CODEX_HOME` (para Codex) en el entorno del subprocess. El camino legacy (`_run_llm_command`) sí lo hacía. Los adapters hacían `os.environ.copy()` y heredaban lo que tuviera el proceso executor, lo cual funciona para Claude (cuyas credenciales suelen estar en el entorno del shell) pero no para Codex (cuyo token viene de la BD vía OAuth).
+**Ubicación:** `bin/task-executor.py:_execute_task_v02()` — faltaba `_prepare_backend_env()`.
+**Severidad:** alta para Codex (bloqueante), baja para Claude (funciona por herencia de env).
+**PR donde se arregla:** PR-07 — se añade `_prepare_backend_env()` que inyecta credenciales en el profile como `_extra_env`, y los adapters lo mergen en el subprocess env.

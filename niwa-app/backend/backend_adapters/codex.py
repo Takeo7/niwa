@@ -128,6 +128,7 @@ class CodexAdapter(BackendAdapter):
             cmd=cmd, cwd=cwd, run=run, task=task,
             prompt_text=prompt, artifact_root=artifact_root,
             capability_profile=capability_profile,
+            extra_env=profile.get("_extra_env"),
         )
 
     def resume(self, task: dict, prior_run: dict, new_run: dict,
@@ -582,11 +583,17 @@ class CodexAdapter(BackendAdapter):
     def _execute(self, *, cmd: list[str], cwd: str, run: dict,
                  task: dict, prompt_text: str,
                  artifact_root: str | None,
-                 capability_profile: dict | None = None) -> dict:
+                 capability_profile: dict | None = None,
+                 extra_env: dict | None = None) -> dict:
         """Core execution loop: spawn process, stream events, finish run.
 
         Blocks until the Codex process exits.  A daemon heartbeat
         thread updates ``heartbeat_at`` independently of stdout.
+
+        *extra_env*, when provided, is merged into the subprocess
+        environment.  Used by the executor to inject credentials
+        (``OPENAI_ACCESS_TOKEN``, ``CODEX_HOME``, etc.) without
+        polluting ``os.environ``.
         """
         import runs_service
 
@@ -602,6 +609,8 @@ class CodexAdapter(BackendAdapter):
 
             env = os.environ.copy()
             env["NO_COLOR"] = "1"
+            if extra_env:
+                env.update(extra_env)
 
             proc = subprocess.Popen(
                 cmd,
