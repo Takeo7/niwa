@@ -3448,6 +3448,40 @@ class Handler(BaseHTTPRequestHandler):
             if run is None:
                 return self._json({'error': 'run_not_found'}, 404)
             return self._json(run)
+        # ── PR-10b: approvals read + resolve endpoints ──
+        if path == '/api/approvals':
+            import approval_service
+            status = (qs.get('status') or [None])[0]
+            if status == '':
+                status = None
+            with db_conn() as conn:
+                approvals = approval_service.list_approvals_enriched(
+                    conn, status=status,
+                )
+            return self._json(approvals)
+        if re.match(r'^/api/tasks/[^/]+/approvals$', path):
+            task_id = path.split('/')[3]
+            import approval_service
+            with db_conn() as conn:
+                task = conn.execute(
+                    'SELECT id FROM tasks WHERE id=?', (task_id,),
+                ).fetchone()
+                if not task:
+                    return self._json({'error': 'task_not_found'}, 404)
+                approvals = approval_service.list_approvals_enriched(
+                    conn, task_id=task_id,
+                )
+            return self._json(approvals)
+        if re.match(r'^/api/approvals/[^/]+$', path) and path.count('/') == 3:
+            approval_id = path.split('/')[3]
+            import approval_service
+            with db_conn() as conn:
+                approval = approval_service.get_approval_enriched(
+                    approval_id, conn,
+                )
+            if approval is None:
+                return self._json({'error': 'approval_not_found'}, 404)
+            return self._json(approval)
         if re.match(r'^/api/tasks/[^/]+/labels$', path):
             task_id = path.split('/')[3]
             return self._json(fetch_task_labels(task_id))
@@ -3749,6 +3783,46 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'label required'}, 400)
             add_task_label(task_id, label)
             return self._json({'ok': True}, 201)
+        # ── PR-10b: resolve approval (approve / reject) ──
+        if re.match(r'^/api/approvals/[^/]+/resolve$', path):
+            approval_id = path.split('/')[3]
+            import approval_service
+            decision = (payload.get('decision') or '').strip().lower()
+            if decision not in ('approve', 'reject'):
+                return self._json(
+                    {'error': 'invalid_decision',
+                     'message': "decision must be 'approve' or 'reject'"},
+                    400,
+                )
+            new_status = 'approved' if decision == 'approve' else 'rejected'
+            resolution_note = payload.get('resolution_note')
+            if isinstance(resolution_note, str):
+                resolution_note = resolution_note.strip() or None
+            else:
+                resolution_note = None
+            with db_conn() as conn:
+                try:
+                    updated = approval_service.resolve_approval(
+                        approval_id, new_status, NIWA_APP_USERNAME,
+                        conn, resolution_note=resolution_note,
+                    )
+                except LookupError:
+                    return self._json(
+                        {'error': 'approval_not_found'}, 404,
+                    )
+                except ValueError as e:
+                    # Already resolved with the opposite status: a
+                    # race with another session.  Surface as 409 so
+                    # the UI can tell the user "already resolved".
+                    return self._json(
+                        {'error': 'approval_conflict',
+                         'message': str(e)},
+                        409,
+                    )
+                enriched = approval_service.get_approval_enriched(
+                    approval_id, conn,
+                ) or approval_service._approval_row_to_api(updated)
+            return self._json(enriched)
         if path == '/api/notes':
             note_id = create_note(payload)
             return self._json({'ok': True, 'id': note_id}, 201)
