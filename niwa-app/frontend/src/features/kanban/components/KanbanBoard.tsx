@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Title,
@@ -24,11 +25,11 @@ import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
 import { useKanbanColumns, useTasks, useUpdateTask } from '../hooks/useKanban';
 import { useProjects } from '../../../shared/api/queries';
-import { TaskDetail } from '../../tasks/components/TaskDetail';
 import { TaskForm } from '../../tasks/components/TaskForm';
 import type { Task } from '../../../shared/types';
 
 export function KanbanBoard() {
+  const navigate = useNavigate();
   const { data: columns, isLoading: colsLoading } = useKanbanColumns();
   const [showDone, setShowDone] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
@@ -36,7 +37,6 @@ export function KanbanBoard() {
   const { data: projects } = useProjects();
   const updateTask = useUpdateTask();
   const [activeTask, setActiveTask] = useState<Task | null>(null);
-  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [addTaskStatus, setAddTaskStatus] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -141,7 +141,7 @@ export function KanbanBoard() {
                 key={col.id}
                 column={col}
                 tasks={tasksByStatus[col.status] || []}
-                onTaskClick={setDetailTaskId}
+                onTaskClick={(id) => navigate(`/tasks/${id}`)}
                 onAddTask={() => setAddTaskStatus(col.status)}
               />
             ))}
@@ -151,12 +151,6 @@ export function KanbanBoard() {
           </DragOverlay>
         </DndContext>
       </ScrollArea>
-
-      <TaskDetail
-        taskId={detailTaskId}
-        opened={!!detailTaskId}
-        onClose={() => setDetailTaskId(null)}
-      />
 
       <TaskForm
         opened={!!addTaskStatus}
