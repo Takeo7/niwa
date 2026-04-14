@@ -399,3 +399,12 @@ Además, en el prompt de Tier 1 (línea 441) se sigue instruyendo al chat a usar
 **Motivo:** `evaluate_runtime_event()` solo evalúa eventos con `type="tool_use"`. Codex usa un formato diferente (`type="command"`). Normalizar permite reutilizar toda la infraestructura de capability checks (shell whitelist, deletion, network, filesystem scope) sin duplicar código.
 **Alternativas consideradas:** (a) Modificar `evaluate_runtime_event()` para aceptar ambos formatos — rechazado porque contamina el servicio de capabilities con lógica específica de un backend. (b) No hacer runtime monitoring en Codex — rechazado porque el SPEC dice "Runtime monitoring sobre los events que Codex emita".
 **Impacto:** Si la CLI real de Codex emite eventos en un formato diferente al esperado, `_normalize_for_runtime_check()` necesitará ajuste.
+
+## 2026-04-14 — PR-08
+
+### Decisión 1: Modelo del LLM conversacional — `agent.assistant.model` aislado del legacy
+
+**Decisión:** El LLM conversacional de `assistant_turn` lee su modelo de `agent.assistant` (JSON en tabla `settings`, campo `model`). Cadena de fallback: `agent.assistant.model` → `agent.chat.model` → `svc.llm.anthropic.default_model` → `"claude-haiku-4-5"`. La API key sigue la cadena existente: `svc.llm.anthropic.api_key` → `int.llm_api_key` → env `ANTHROPIC_API_KEY` → env `NIWA_LLM_API_KEY`.
+**Motivo:** El tier conversacional v0.2 (`assistant_turn`) es un subsistema nuevo que no tiene relación con el Tier 1 legacy (Haiku chat vía CLI). Reutilizar directamente `agent.chat.model` acoplaría ambos: cambiar el modelo del pipeline legacy afectaría al cerebro conversacional v0.2 y viceversa. Un setting aislado permite divergir sin interferencia. El fallback a `agent.chat.model` cubre installs que no hayan configurado el nuevo setting.
+**Alternativas consideradas:** (a) Reutilizar `agent.chat.model` directamente — rechazado por el acoplamiento legacy↔v0.2. (b) Crear un setting completamente nuevo sin fallback a agent.chat — rechazado porque forzaría configuración manual en toda instalación existente.
+**Impacto:** Installs existentes sin `agent.assistant` en settings funcionan sin cambios (fallback). La UI de PR-10 podrá exponer la configuración del modelo conversacional como setting separado.

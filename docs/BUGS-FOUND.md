@@ -77,6 +77,8 @@ Formato sugerido:
 **Descripción:** En `ClaudeCodeAdapter._execute()`, el session_id se extrae del stream JSON y se persiste via `runs_service.update_session_handle()`. Si el stream no emite un evento con session_id (error temprano, timeout antes del primer mensaje), `session_handle` queda como `NULL` en la BD. No hay manejo explícito de este caso — un resume posterior fallaría con `--resume None`.
 **Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py` (bloque de streaming)
 **Severidad:** baja (edge case, requiere fallo muy temprano del proceso Claude).
+**Mitigación parcial (PR-08):** `assistant_service._tool_task_resume()` detecta `session_handle IS NULL` en el run previo y devuelve `error="session_handle_missing"` al LLM en lugar de marcar la tarea como pendiente. El LLM informa al usuario en vez de encolar un resume condenado a fallar.
+**Bug subyacente sigue abierto:** el adapter debería manejar el caso de forma explícita (e.g., marcar el run como no-resumable, o grabar un session_handle sentinel).
 **PR futuro donde se arreglará:** pendiente de asignar (PR de limpieza de claude_code.py).
 
 ### Bug 9: Validación de risk_level en approval_service
