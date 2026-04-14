@@ -121,3 +121,11 @@ Formato sugerido:
 **Ubicación:** `tests/test_assistant_turn_endpoint.py:62-95` (fixture `server`).
 **Severidad:** baja (falso negativo en CI full-suite; los tests son correctos en sí).
 **PR futuro donde se arreglará:** pendiente de asignar (fix: reemplazar el env var por `app.NIWA_APP_AUTH_REQUIRED = False` directamente tras el import, mismo patrón que aplica `test_runs_endpoints.py`).
+
+### Bug 14: Bundle del frontend supera 1.47MB sin code splitting
+
+**Descripción:** `npm run build` emite un único chunk JS de ~1.47MB (427KB gzipped) en `dist/assets/index-*.js`. Vite emite el warning estándar `(!) Some chunks are larger than 500 kB after minification`. `vite.config.ts` no configura `build.rollupOptions.output.manualChunks` ni usa `React.lazy`/dynamic `import()` para code-splitting por ruta. Todas las rutas (dashboard, tasks, kanban, projects, runs, system, metrics, notes, history, chat) se cargan en el primer bundle.
+**Ubicación:** `niwa-app/frontend/vite.config.ts` (sin `manualChunks`), más cualquier consumidor de rutas en `niwa-app/frontend/src/app/Router.tsx` que podría hacer lazy-load.
+**Severidad:** baja (tiempo de carga inicial subóptimo; no afecta funcionalidad).
+**PR futuro donde se arreglará:** pendiente de asignar (PR de performance de frontend).
+**Impacto:** Primera carga más lenta de lo necesario, especialmente en conexiones móviles o VPS con bandwidth limitado. Route-based splitting con `React.lazy` por feature o `manualChunks` agrupando Mantine/dnd-kit/recharts por separado son caminos razonables.
