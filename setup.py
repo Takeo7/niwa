@@ -354,6 +354,53 @@ def detect_port_free(port: int) -> bool:
 REPO_ROOT = Path(__file__).resolve().parent
 
 
+def _apply_sql_idempotent(conn, sql: str) -> None:
+    """Apply a SQL script idempotently, emulating ADD COLUMN IF NOT EXISTS.
+
+    SQLite does not support ``ALTER TABLE ADD COLUMN IF NOT EXISTS``, so on a
+    fresh install (where schema.sql already defines the v0.2 columns in the
+    ``tasks`` table) running migration 007 via ``conn.executescript`` fails
+    with ``duplicate column name``. This helper parses the script into
+    individual statements; for each ``ALTER TABLE ADD COLUMN`` it consults
+    ``PRAGMA table_info`` and skips the statement when the column already
+    exists. All other statements are executed directly.
+
+    This must stay behaviourally equivalent to
+    ``niwa-app/backend/app.py::_apply_sql_idempotent`` and the copy in
+    ``tests/test_pr01_schema.py`` so that the installer bootstrap, the
+    app-level migration runner, and the tests agree on migration semantics.
+    The helper is duplicated here (instead of imported) because
+    ``niwa-app/backend/app.py`` pulls in FastAPI and other heavy runtime
+    deps that are not available inside the installer's Python environment.
+    """
+    lines: list[str] = []
+    for line in sql.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('--') or not stripped:
+            continue
+        if ' --' in line:
+            line = line[:line.index(' --')]
+        lines.append(line)
+    cleaned = '\n'.join(lines)
+
+    for stmt in cleaned.split(';'):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        m = re.match(
+            r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)',
+            stmt, re.IGNORECASE,
+        )
+        if m:
+            table, column = m.group(1), m.group(2)
+            existing = {r[1] for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()}
+            if column in existing:
+                continue
+        conn.execute(stmt)
+
+
 def substitute_template(text: str, vars: dict[str, str]) -> str:
     """Replace ${KEY} placeholders with vars[KEY]."""
     def repl(match):
@@ -1388,14 +1435,21 @@ def execute_install(cfg: WizardConfig) -> None:
                 ("proj-default", "default", "Default", "proyecto", f"Default project for {cfg.instance_name}", 1, ts, ts),
             )
             # Run all migrations on top of the base schema.
-            # Migrations use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS
-            # so they are safe to run on a fresh schema that already has these objects.
+            #
+            # Tables/indexes use CREATE ... IF NOT EXISTS, but SQLite does NOT
+            # support ALTER TABLE ADD COLUMN IF NOT EXISTS — and migration 007
+            # adds columns to `tasks` that schema.sql already creates, which
+            # would blow up a fresh install with "duplicate column name".
+            # _apply_sql_idempotent parses each statement and skips ALTER TABLE
+            # ADD COLUMN when the column is already present, mirroring the
+            # behaviour of niwa-app/backend/app.py::_run_migrations and the
+            # test harness in tests/test_pr01_schema.py.
             migrations_dir = REPO_ROOT / "niwa-app" / "db" / "migrations"
             if migrations_dir.is_dir():
                 import glob as _glob
                 for mfile in sorted(_glob.glob(str(migrations_dir / "*.sql"))):
                     mig_sql = Path(mfile).read_text()
-                    conn.executescript(mig_sql)
+                    _apply_sql_idempotent(conn, mig_sql)
 
             # Track which migrations have been applied so `bin/niwa migrate`
             # won't re-run them.
