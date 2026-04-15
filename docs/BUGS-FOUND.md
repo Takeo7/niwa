@@ -385,17 +385,33 @@ El UPDATE es directo en SQL — no pasa por `_assert_task_transition()` (que só
 
 **Detectado por:** Explore agent (audit pre-mortem); verificado leyendo código directamente.
 
-**Estado:** **ARREGLADO en PR-29.** Fix en dos sitios — uno no era suficiente:
+**Estado:** **ARREGLADO en PR-29.** Fix en dos sitios estructurales (review independiente detectó que el diseño inicial con la transición en el HTTP handler era incompleto — la ruta del assistant/MCP bypasseaba el handler):
 
-1. **`bin/task-executor.py::_execute_task_v02`**: en lugar de UPDATEar a `pendiente`, transiciona la tarea a `waiting_input` (el estado canónico per SPEC §2 para "necesita acción humana antes de proceder"). Validado con `_assert_task_transition('en_progreso', 'waiting_input')` antes del UPDATE para que una regresión futura falle loud en vez de silenciosa.
+1. **`bin/task-executor.py::_execute_task_v02`**: en lugar de UPDATEar a `pendiente`, transiciona la tarea a `waiting_input` (el estado canónico per SPEC §2 para "necesita acción humana antes de proceder"). Validado con `_assert_task_transition('en_progreso', 'waiting_input')` antes del UPDATE.
 
-2. **`niwa-app/backend/app.py` endpoint `POST /api/approvals/:id/resolve`**: tras `approval_service.resolve_approval(...)` exitoso con `new_status='approved'`, si la tarea asociada sigue en `waiting_input`, el handler la transiciona a `pendiente` validando con `state_machines.assert_task_transition`. Sin esta segunda pata la tarea quedaba orfana en `waiting_input` (el executor sólo reclama tasks en `pendiente`, y nada más en el backend re-dispacha desde `waiting_input` automáticamente — verificado por agente Explore trazando approval_service, app.py endpoints y assistant_service). `Reject` deliberadamente NO dispara la transición — el operador puede archivar o reintentar manualmente.
+2. **`niwa-app/backend/approval_service.resolve_approval`**: la transición inversa `waiting_input → pendiente` vive **dentro** del service, no en el handler HTTP. Tras la UPDATE de `approvals`, si `status == "approved"` y la tarea asociada sigue en `waiting_input`, el service la UPDATE a `pendiente` validando con `state_machines.assert_task_transition`. Diseño elegido para que **toda ruta que resuelva un approval** reciba el fix:
+   - `POST /api/approvals/:id/resolve` (handler directo UI).
+   - `POST /api/assistant/tools/approval_respond` (handler assistant).
+   - `assistant_service.tool_approval_respond` (llamada directa desde MCP proxy).
+   - Cualquier test/integración futuro que llame `resolve_approval` directo.
+
+   `Reject` deliberadamente NO dispara la transición — el operador puede archivar, retomar manualmente o redirigir a otro backend.
+
+**Limitación conocida (documentada en DECISIONS-LOG.md PR-29 Decisión 4):** `waiting_input` puede ser set por otros flows (p.ej. `task_request_input` MCP tool). Si una tarea está en `waiting_input` por un `task_request_input` pendiente Y tiene un approval pending, aprobar el approval flippea la tarea a `pendiente` aunque la pregunta del `task_request_input` siga sin respuesta. Race estrecha (requiere ambas causas simultáneas); accepted trade-off por la simplicidad del gating. Fix más riguroso (registrar en el approval la causa concurrente, o contar reasons) queda como follow-up si el race se observa en producción.
 
 Tests:
-- `tests/test_task_executor_approval_state.py` (6 casos): invariantes estáticos de source (UPDATE a waiting_input y NO a pendiente, `_assert_task_transition` llamado), compliance con state_machines canónica (en_progreso→waiting_input OK, en_progreso→pendiente rechazado, waiting_input→pendiente OK), comportamiento end-to-end del executor con routing_service mockeado.
-- `tests/test_approvals_resolve_transitions_task.py` (5 casos): approve sobre waiting_input transiciona a pendiente, approve sobre otros estados NO fuerza transición (defensive), reject deja la tarea intacta, idempotencia de approve repetido, invariante estático sobre el source de app.py.
+- `tests/test_task_executor_approval_state.py` (6 casos): invariantes estáticos + compliance state machine + end-to-end con routing mockeado.
+- `tests/test_approvals_resolve_transitions_task.py` (9 casos):
+  - approve sobre `waiting_input` → `pendiente`.
+  - approve sobre otros estados (archivada/pendiente/en_progreso) → no fuerza.
+  - reject → no toca.
+  - idempotencia: segundo approve es no-op.
+  - `tool_approval_respond` (ruta assistant/MCP) también dispara la transición.
+  - `tool_approval_respond` reject deja la tarea intacta.
+  - state machine compliance (`waiting_input → pendiente` permitido, import de `assert_task_transition` presente).
+  - app.py handler NO duplica la lógica (pin contra regresión a la arquitectura anterior).
 
-242/242 tests (installer+executor+routing+approval) pasan.
+112/112 tests approval+executor pasan.
 
 ### Bug 24: `artifact_root.mkdir()` puede lanzar `OSError`/`PermissionError` no capturado en `ClaudeCodeAdapter.start()`
 

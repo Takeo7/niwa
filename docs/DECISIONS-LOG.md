@@ -1196,27 +1196,44 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** 5 líneas cambiadas en `bin/task-executor.py::_execute_task_v02`. Cero cambios en `state_machines.py`.
 
-### Decisión 2: la inversa (`waiting_input → pendiente`) se dispara en el handler de approval resolve, no en un scheduler ni en el executor
+### Decisión 2: la transición inversa vive DENTRO de `approval_service.resolve_approval`, no en el HTTP handler
 
-**Decisión:** cuando `POST /api/approvals/:id/resolve` aprueba un approval, el handler en `app.py` transiciona sincronamente la tarea asociada de `waiting_input` a `pendiente`, validando con `state_machines.assert_task_transition`. El executor no observa approvals directamente; el scheduler no tiene knowledge de este flow.
+**Decisión:** la UPDATE de `tasks.status` desde `waiting_input` a `pendiente` vive en `approval_service.resolve_approval` — NO en el handler HTTP `POST /api/approvals/:id/resolve` de `app.py`. Se ejecuta dentro de la misma transacción que la UPDATE de `approvals`.
 
-**Motivo:** el handler ya tiene la conexión DB abierta (`with db_conn() as conn`), ya conoce el task_id vía `updated["task_id"]`, ya es sincrono. Meter la lógica aquí mantiene la transición atómica con la aprobación del approval — si el UPDATE de tasks falla, la transacción rollbackea el resolve también (aunque en la implementación actual cada paso tiene su commit propio — candidato a endurecer en futuro). Alternativas:
+**Motivo (post-review):** el diseño inicial de PR-29 ponía la transición en el handler HTTP. Review independiente (agente de double-check sobre el primer commit) descubrió que `assistant_service.tool_approval_respond` — reachable vía `POST /api/assistant/tools/approval_respond` Y vía el MCP tool `approval_respond` — llama `resolve_approval` directo, bypasseando el handler HTTP. Con la lógica sólo en el handler, el path assistant/MCP seguía dejando tasks orfanas en `waiting_input` (exacto el failure mode que Bug 23 claims to fix). Lección: la lógica que debe dispararse en cada resolve pertenece al service que hace el resolve, no a uno de los múltiples callers.
 
-- (a) Scheduler/worker que haga poll de approvals recién aprobadas y re-dispache tasks — rechazado: latency artificial, complejidad innecesaria cuando el handler ya puede hacerlo sincronamente.
-- (b) Executor observa approvals via poll — rechazado: rompe el principio de "executor sólo ve tasks con status='pendiente'". Acopla executor al approval_service.
-- (c) Callback/webhook desde approval_service al task_service — rechazado: añade indirección sin beneficio. El handler HTTP es el punto natural de confluence entre "approval changed" y "task needs to move".
-
-**Reject** deliberadamente NO dispara la inversa — el operador que rechaza un approval puede querer archivar la tarea, retomarla más tarde, o moverla a otro backend manualmente. Forzar la transición automática cerraría esas opciones. Documentado.
-
-**Impacto:** ~20 LOC añadidas al handler de resolve. Cero impacto en otros call sites de `approval_service.resolve_approval`.
-
-### Decisión 3: fix en dos sitios requiere dos bloques de tests independientes
-
-**Decisión:** Bug 23 tiene dos mitades estructurales (executor side + approval handler side). Cada mitad tiene su archivo de tests — `tests/test_task_executor_approval_state.py` y `tests/test_approvals_resolve_transitions_task.py` — con invariantes estáticos (regex sobre source) + behaviour tests (sqlite real + HTTP handler mock donde aplica).
-
-**Motivo:** si alguien refactoriza una de las dos mitades sin entender que la otra depende de ella, queremos que los tests de la mitad afectada fallen loud y apunten a la otra. Los dos archivos referencian mutuamente en sus docstrings para que un lector que toca uno sepa que hay un contrato con el otro.
+Ubicar la transición en el service garantiza que **toda ruta presente y futura** que llame `resolve_approval` reciba el fix automáticamente. Cero coupling nuevo entre callers — al contrario, elimina duplicación latente (el handler y el tool habrían acabado copiando la misma lógica si se mantenía en el handler).
 
 **Alternativas consideradas:**
-- (a) Un solo archivo de tests que cubre ambas mitades — rechazado: confunde el scope de cada test (¿estoy probando el executor o el handler?) y hace difícil localizar el fallo cuando uno de los sides rompe.
+- (a) Extraer un helper `_transition_task_on_approve(task_id, conn)` y llamarlo desde cada caller (handler + tool_approval_respond + futuros) — rechazado: requiere modificar cada caller presente y futuro. El bug original fue exactamente que un caller olvidó el paso.
+- (b) Scheduler/worker que haga poll de approvals recién aprobadas — rechazado: latency artificial, complejidad innecesaria, acopla un nuevo componente a un flow sincrono que ya funciona.
+- (c) Executor observa approvals via poll — rechazado: rompe el principio de "executor sólo ve tasks con status='pendiente'". Acopla executor al approval_service.
+- (d) Callback/webhook desde approval_service al task_service — rechazado: indirección innecesaria cuando ambos viven en el mismo proceso, misma conn, misma transacción.
 
-**Impacto:** +11 tests nuevos. 242/242 pasa la suite installer/executor/routing/approval.
+**Reject** deliberadamente NO dispara la inversa — el operador que rechaza un approval puede querer archivar, retomar, o redirigir manualmente.
+
+**Impacto:** +40 LOC en `resolve_approval`. `app.py` handler simplificado (-45 LOC — elimina la duplicación que había metido la versión inicial). `tool_approval_respond` NO se toca, recibe el fix automáticamente por llamar al service.
+
+### Decisión 3: aceptar la race con `task_request_input` como limitación documentada, no arreglar en PR-29
+
+**Decisión:** `waiting_input` es un estado compartido — puede ser set por el routing-approval flow (PR-29) o por el MCP tool `task_request_input` (PR-02). `resolve_approval` gateia sólo en `task.status == 'waiting_input'`, sin verificar la causa. En la race estrecha donde una tarea está en `waiting_input` por un `task_request_input` pendiente Y simultáneamente tiene un approval pending, aprobar el approval fuerza la tarea a `pendiente` aunque la pregunta del `task_request_input` siga sin respuesta.
+
+**Motivo para NO arreglar ahora:** la race requiere **ambas causas simultáneas**. El approval_required de routing se evalúa en pre-execution; si se disparó, la tarea nunca llegó a ejecutar el subprocess del adapter, y `task_request_input` — que sólo se puede llamar desde dentro del subprocess ejecutando — no tiene oportunidad de dispararse en esta iteración. La única manera de tener ambas simultáneas es: tarea ejecuta, termina pidiendo `task_request_input` → `waiting_input`; luego alguien crea manualmente un approval sobre esa tarea (path manual sin workflow automático en v0.2) o capability_service detecta violación retrospectiva (no hay camino hoy). El race es real pero sólo si alguien crea approvals manualmente sobre tasks ya en `waiting_input`, que no es un workflow documentado.
+
+**Alternativas consideradas:**
+- (a) Registrar en `approvals` cuál fue el motivo del `waiting_input` para disambiguar en resolve — rechazado: requiere columna nueva + migration + cambios en callers que crean approvals. Scope desproporcionado para un race narrow.
+- (b) Contar "motivos" de `waiting_input` en una tabla separada — rechazado: igual overhead.
+- (c) Documentar como limitación y atacar sólo si se observa en producción — aceptado.
+
+**Impacto:** cero LOC. Documentación en BUGS-FOUND.md entry del Bug 23 y en el docstring de `resolve_approval`. Si el race se observa en producción, abrir un issue con repro y atacar entonces.
+
+### Decisión 4: fix en dos sitios requiere dos bloques de tests independientes — el de la ruta assistant/MCP es crítico
+
+**Decisión:** Bug 23 tiene dos mitades estructurales (executor side + approval_service side). Cada mitad tiene su archivo de tests — `tests/test_task_executor_approval_state.py` y `tests/test_approvals_resolve_transitions_task.py` — con invariantes estáticos (regex sobre source) + behaviour tests (sqlite real + llamadas directas al service). El test de `tool_approval_respond` específicamente verifica que el service-centric design funciona para la ruta del assistant/MCP (el gap que review detectó en el primer commit).
+
+**Motivo:** si alguien refactoriza una de las dos mitades sin entender que la otra depende de ella, queremos que los tests de la mitad afectada fallen loud y apunten a la otra. Los dos archivos referencian mutuamente en sus docstrings. El test `TestHandlerNoLongerHasDuplicateBlock` pinea explícitamente que el handler HTTP no re-duplique la lógica (guard contra la arquitectura anterior).
+
+**Alternativas consideradas:**
+- (a) Un solo archivo de tests que cubre ambas mitades — rechazado: confunde el scope de cada test y hace difícil localizar el fallo cuando uno de los sides rompe.
+
+**Impacto:** 15 tests nuevos (9 en el archivo approval + 6 en el executor). 112/112 pasa la suite approval+executor.
