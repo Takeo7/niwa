@@ -1044,3 +1044,43 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** los helpers son puros, el 15s real sólo corre en producción (o si alguien invoca el código sin inyectar `sleep`), y la suite entera de PR-25 corre en <0.2s.
 
+## 2026-04-15 — PR-26
+
+### Decisión 1: hosting binary se copia a `/home/niwa/.<instance>/bin/`, no se intenta abrir `/root/` al niwa user
+
+**Decisión:** `install_hosting_server`, cuando corre como root, replica el patrón pre-existente de `_install_systemd_unit` (executor) y copia `hosting-server.py` a `/home/niwa/.<instance>/bin/hosting-server.py` antes de baker el `ExecStart` del unit. El path swap es explícito: `dest = niwa_hosting_dest` antes del template del unit.
+
+**Motivo:** `cfg.niwa_home` cuando el installer corre con `sudo` resuelve a `/root/.<instance>` (HOME del invoker, no del target user). El unit corre como `User=niwa` y `/root/` es `drwx------` por distro policy — niwa no puede ni siquiera hacer `stat()`, y python3 sale con exit 2 antes de parsear el archivo. El executor ya resolvía esto; que hosting no lo hiciera fue un Chesterton's fence asimétrico.
+
+**Alternativas consideradas:**
+- (a) Cambiar los permisos de `/root/` para que niwa pueda leer — rechazado: violación grave de la política estándar del sistema, amplia attack surface, rompe políticas de seguridad estándar de distros.
+- (b) Hacer que `cfg.niwa_home` apunte directamente a `/home/niwa/...` cuando running-as-root desde el principio — rechazado: cambio invasivo que afecta a docenas de call-sites distintos; el swap local dentro de `install_hosting_server` es quirúrgico y preserva la semántica existente de "el install root es donde el invoker vive, los artefactos runtime migran al target user".
+- (c) Extraer un helper `_get_niwa_runtime_home(cfg)` compartido entre executor y hosting — tentador pero out-of-scope para PR-26. Candidato para un PR de refactor cuando haya un tercer call-site.
+
+**Impacto:** fix quirúrgico, +20 LOC en `install_hosting_server`. El executor queda intacto. Tests regex pin-ean el orden: copy → chown → `dest = ...` → unit template.
+
+### Decisión 2: pre-crear `hosting.log` aunque hosting-server.py no abra el fichero hoy
+
+**Decisión:** PR-26 también añade `hosting_log.touch(exist_ok=True)` + `chown niwa:niwa hosting_log` antes del `systemctl enable --now` para el hosting service. Mirror exacto de lo que PR-23 hizo para el executor.
+
+**Motivo:** sub-bug 18a de `docs/BUGS-FOUND.md` estaba documentado como latente: "no crashea hoy porque `hosting-server.py` usa `print()` y hereda el fd de systemd; cualquier logger Python-level futuro reproducirá Bug 18". Pre-crearlo ahora cierra la puerta definitivamente y cuesta dos líneas. Defense-in-depth por la ley del cheapest-win-wins.
+
+**Alternativas consideradas:**
+- (a) Esperar al primer logger Python-level real antes de pagar el coste — rechazado: el coste del "fix preventivo" son dos líneas; el coste del bug real sería otro crash-loop silencioso (el health check de PR-25 lo detectaría pero el install abortaría, no queremos llegar ahí).
+- (b) Extraer el patrón "pre-create log + chown" a un helper — declinado: dos call-sites, no hay presión de duplicación; esperar a un tercer servicio antes de refactorizar.
+
+**Impacto:** cierra parcialmente sub-bug 18a (el patrón estructural queda cubierto; el detector de PR-25 cubre el resto). +3 LOC.
+
+### Decisión 3: `chown -R` del hosting_projects_dir para writes de runtime
+
+**Decisión:** `hosting_projects_dir = /opt/<instance>/data/projects` recibe un `chown -R niwa:niwa` explícito en `install_hosting_server`. Técnicamente el executor-install ya hace `chown -R niwa:niwa /opt/<instance>` antes, pero ese chown ocurre en `_install_systemd_unit` y se aplica sobre el árbol existente en ese momento; `hosting_projects_dir` se crea DESPUÉS (en `install_hosting_server`) y sin este chown quedaría con ownership `root:root`.
+
+**Motivo:** el hosting server escribe bundles de proyectos bajo ese directorio. Sin el chown, el primer intento de escritura tras el install falla con `PermissionError` — no crash-loop (el servicio arranca OK) pero el feature principal del hosting no funciona, y el fallo aparece en runtime, no en el install. Anti-patrón "fail late and confusing".
+
+**Alternativas consideradas:**
+- (a) Reordenar el install para que `hosting_projects_dir.mkdir()` ocurra antes del `chown -R` del executor — rechazado: acopla dos funciones que deberían estar desacopladas; el `install_hosting_server` debe ser autocontenido respecto a los permisos de lo que crea.
+- (b) Crear el directorio con `os.makedirs(mode=0o777)` — rechazado: permisos world-writable son un olor a suciedad; ownership correcto es mejor que permisos permisivos.
+
+**Impacto:** +3 LOC, chown targeted, semántica clara.
+
+

@@ -2196,9 +2196,51 @@ def install_hosting_server(cfg: WizardConfig) -> None:
         unit_name = f"niwa-{cfg.instance_name}-hosting.service"
 
         if run_as_root:
+            # Bug 21 (docs/BUGS-FOUND.md): when the installer runs as
+            # root, `cfg.niwa_home` lives under `/root/.<instance>`,
+            # which is mode 0700 (drwx------). The unit runs as
+            # ``User=niwa`` and cannot read anything under /root, so
+            # ``ExecStart=/usr/bin/env python3 /root/.niwa/bin/hosting-server.py``
+            # dies immediately with ``can't open file: Permission
+            # denied`` (exit code 2). The executor already side-steps
+            # this by copying its binary into ``/home/niwa/.<instance>/bin/``
+            # inside `_install_systemd_unit`; we mirror that pattern
+            # here for the hosting binary.
+            niwa_home = Path("/home/niwa") / f".{cfg.instance_name}"
+            (niwa_home / "bin").mkdir(parents=True, exist_ok=True)
+            niwa_hosting_dest = niwa_home / "bin" / "hosting-server.py"
+            shutil.copy(str(dest), str(niwa_hosting_dest))
+            niwa_hosting_dest.chmod(0o755)
+            subprocess.run(
+                ["chown", "niwa:niwa", str(niwa_hosting_dest)],
+                capture_output=True,
+            )
+            # From here on the unit points at the niwa-readable copy.
+            dest = niwa_hosting_dest
+
             shared_dir = Path("/opt") / cfg.instance_name
             hosting_projects_dir = shared_dir / "data" / "projects"
             hosting_projects_dir.mkdir(parents=True, exist_ok=True)
+            # Defense in depth against sub-bug 18a
+            # (docs/BUGS-FOUND.md): pre-create hosting.log with
+            # niwa:niwa ownership so systemd's ``append:`` directive
+            # reuses this fd instead of creating the file as root the
+            # first time the service starts. Hosting today doesn't
+            # open the log at Python level, but any future logging
+            # refactor would otherwise reproduce Bug 18 silently.
+            hosting_log = shared_dir / "logs" / "hosting.log"
+            hosting_log.parent.mkdir(parents=True, exist_ok=True)
+            hosting_log.touch(exist_ok=True)
+            subprocess.run(
+                ["chown", "niwa:niwa", str(hosting_log)],
+                capture_output=True,
+            )
+            # Ensure the projects dir is writable by niwa too — the
+            # hosting server will write project bundles under it.
+            subprocess.run(
+                ["chown", "-R", "niwa:niwa", str(hosting_projects_dir)],
+                capture_output=True,
+            )
             unit_dir = Path("/etc/systemd/system")
             unit = f"""[Unit]
 Description=Niwa hosting server ({cfg.instance_name})
