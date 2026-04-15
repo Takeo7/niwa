@@ -170,9 +170,12 @@ class TestBug22RegressionScenario:
 
 
 class TestCallSitesUseReservedSet:
-    """Static regex guard: ``build_quick_config`` (the wizard) must
-    thread a reserved set through every ``_quick_free_port`` call.
-    Pins the invariant against future copy-paste that forgets."""
+    """Static regex guard: every wizard path that allocates ports
+    must thread a reserved set through. ``build_quick_config`` (the
+    --quick non-interactive path) and ``step_ports`` (the legacy
+    interactive wizard) both need this — discovered during PR-28
+    review that ``step_ports`` had its own inline copy of the
+    free-port logic without the reservation guard."""
 
     def test_every_wizard_quick_free_port_call_passes_reserved(self):
         import re
@@ -200,3 +203,74 @@ class TestCallSitesUseReservedSet:
                 f"not pass a reserved set: args=({call_args}). "
                 f"Without the second arg the Bug 22 race reopens."
             )
+
+
+class TestStepPortsHasReservation:
+    """``step_ports`` (interactive wizard) does not call
+    ``_quick_free_port`` — it has its own inline auto-bump loop.
+    The reservation set must be threaded there too, otherwise the
+    interactive path reopens Bug 22 even though --quick is fixed.
+
+    Tests are static (regex over source). We don't drive the
+    interactive prompt because it requires user input; the regex
+    pins the invariant that the body references ``_reserved_ports``
+    in the right places.
+
+    Caught during PR-28 review by a second agent — original PR
+    only patched ``build_quick_config`` and missed the legacy
+    interactive path."""
+
+    def _step_ports_body(self) -> str:
+        import re
+
+        src = (REPO_ROOT / "setup.py").read_text()
+        start = src.index("def step_ports(")
+        tail = src[start:]
+        end = re.search(r"\n(?=def [a-zA-Z_])", tail)
+        return tail[: end.start() + 1] if end else tail
+
+    def test_step_ports_initialises_reserved_set(self):
+        body = self._step_ports_body()
+        assert "_reserved_ports" in body, (
+            "step_ports must initialise a _reserved_ports set so "
+            "consecutive port allocations don't collide. Without it, "
+            "Bug 22 reproduces on the interactive path even after "
+            "PR-28's --quick fix."
+        )
+        assert "set()" in body, (
+            "_reserved_ports must be a set() — list lookups are "
+            "O(n) and slower for repeated containment checks"
+        )
+
+    def test_step_ports_skips_reserved_in_auto_bump(self):
+        """In the auto-bump loop, candidates already in the
+        reserved set must be skipped (the OS may still report
+        them free)."""
+        body = self._step_ports_body()
+        assert "in _reserved_ports" in body, (
+            "step_ports must check `candidate in _reserved_ports` "
+            "in the auto-bump loop — that's exactly the guard "
+            "--quick added"
+        )
+
+    def test_step_ports_adds_to_reserved_after_assignment(self):
+        body = self._step_ports_body()
+        assert "_reserved_ports.add(" in body, (
+            "step_ports must call _reserved_ports.add(n) after "
+            "setattr(cfg, attr, n) so the next iteration sees the "
+            "port as taken"
+        )
+
+    def test_step_ports_rejects_user_typed_collision(self):
+        """If the user types a port that this wizard already
+        assigned to another service, step_ports must reject it
+        with an actionable message. Otherwise the user can
+        manually recreate the collision."""
+        body = self._step_ports_body()
+        # The check `if n in _reserved_ports` must appear inside
+        # the user-input validation block (where `n = int(answer)`).
+        assert "n in _reserved_ports" in body, (
+            "step_ports must check `if n in _reserved_ports` on "
+            "user-typed input — otherwise the user can manually "
+            "type a colliding port and the wizard accepts it"
+        )

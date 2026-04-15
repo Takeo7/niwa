@@ -332,10 +332,20 @@ Test en `tests/test_installer_hosting_path.py` (7 casos): regex estático sobre 
 
 **Repro observada en VPS:** dos intentos consecutivos de `./niwa install --quick --mode assistant --yes` en un VPS con un install previo colgado. Workaround: limpiar containers (`docker rm -f $(docker ps -aq)`) antes de reinstalar.
 
-**Ubicación:** `setup.py::_quick_free_port` (implementación actual no mantiene un set de puertos ya reservados durante la sesión del wizard).
+**Ubicación:** dos paths del wizard, ambos con la misma vulnerabilidad estructural:
+- `setup.py::_quick_free_port` (helper usado por el path `--quick`).
+- `setup.py::step_ports` (path interactivo legacy, tiene su propia copia inline del auto-bump loop sin reutilizar `_quick_free_port`).
 
-**Severidad:** media (no corrupt data, no bloquea fresh installs sin ocupación previa; sí rompe reinstalls o installs en hosts compartidos). Encontrado por Claude-VPS durante la verificación de PR-25.
+**Severidad:** media (no corrupt data, no bloquea fresh installs sin ocupación previa; sí rompe reinstalls o installs en hosts compartidos). Encontrado por Claude-VPS durante la verificación de PR-25; segundo path (`step_ports`) detectado durante la review independiente de PR-28.
 
-**Estado:** **ARREGLADO en PR-28.** `_quick_free_port` ahora acepta un parámetro `reserved: Optional[set]` que el wizard inicializa al empezar la asignación de puertos (`build_quick_config`) y al que añade cada puerto asignado tras cada llamada. La función skipea cualquier port en `reserved` antes de consultar `detect_port_free`, evitando que dos servicios cuyos defaults sean consecutivos (gateway 18810 / caddy 18811) acaben en el mismo offset cuando el primero está ocupado a nivel SO. El default de `reserved=None` preserva backwards-compat para call sites no-wizard que sólo necesitan check OS-level.
+**Estado:** **ARREGLADO en PR-28** (en ambos paths del wizard).
 
-Tests: `tests/test_installer_port_reservation.py` (10 casos) — semántica del helper con `monkeypatch` sobre `detect_port_free` (cero sockets reales), repro literal del escenario que Claude-VPS observó (4 ports secuenciales con 18810 ocupado → todos distintos), guard estático que cada `_quick_free_port` en `build_quick_config` pasa el set reservado, no-mutación del set por el helper.
+1. **`--quick` (no-interactivo):** `_quick_free_port` ahora acepta `reserved: Optional[set]`. `build_quick_config` inicializa un `_reserved_ports = set()` local y le añade cada puerto asignado tras cada llamada. La función skipea cualquier port en `reserved` antes de consultar `detect_port_free`, evitando que dos servicios cuyos defaults sean consecutivos (gateway 18810 / caddy 18811) acaben en el mismo offset cuando el primero está ocupado a nivel SO. Default `reserved=None` preserva backwards-compat.
+
+2. **`step_ports` (interactivo, legacy):** mismo patrón aplicado en su auto-bump loop inline. `_reserved_ports = set()` local al inicio del step. En el auto-bump, candidates ya reservados se saltan (`continue`). Tras `setattr(cfg, attr, n)`, `_reserved_ports.add(n)`. Además, el path interactivo añade un check sobre el input del usuario: si el usuario teclea manualmente un port ya asignado a otro servicio en este install, se rechaza con mensaje explícito (cierra el agujero adicional de "el usuario se equivoca y el wizard lo acepta").
+
+Tests: `tests/test_installer_port_reservation.py` (14 casos):
+- 8 unit del helper con `monkeypatch` sobre `detect_port_free` (cero sockets reales).
+- 1 repro literal del escenario VPS (4 ports con 18810 ocupado → todos distintos, gateway != caddy).
+- 1 guard estático sobre `build_quick_config` (cada `_quick_free_port` pasa el set reservado).
+- 4 guard estáticos sobre `step_ports` (init del set, skip en auto-bump, add tras assign, rechazo de input colisivo).

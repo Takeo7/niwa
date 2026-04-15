@@ -844,22 +844,39 @@ def step_ports(cfg: WizardConfig) -> None:
         ("Niwa app web UI", "app_port", 8080),
         ("Web terminal", "terminal_port", 7681),
     ]
+    # Bug 22 (docs/BUGS-FOUND.md, PR-28): the interactive wizard
+    # iterates port defaults the same way the --quick path does, so
+    # without an intra-session reservation set two consecutive ports
+    # whose defaults are adjacent (e.g. gateway 18810 → 18811 / caddy
+    # 18811) can both land on the same offset when the OS reports
+    # the auto-bumped port "free" (the first service hasn't bound
+    # yet). The set is shared with the auto-suggestion logic AND
+    # with the user-typed validation below.
+    _reserved_ports: set = set()
     for label, attr, default in defaults:
-        # Auto-find a free port if default is in use
+        # Auto-find a free port if default is in use OR already
+        # reserved by an earlier iteration in this same wizard.
         actual_default = default
-        if not detect_port_free(default):
-            # Try incrementing until we find a free one
+        if default in _reserved_ports or not detect_port_free(default):
             for offset in range(1, 100):
                 candidate = default + offset
+                if candidate in _reserved_ports:
+                    continue
                 if detect_port_free(candidate):
                     actual_default = candidate
                     info(f"Puerto {default} en uso — usando {candidate} automáticamente")
                     break
-        in_use = not detect_port_free(actual_default)
+        in_use = (
+            actual_default in _reserved_ports
+            or not detect_port_free(actual_default)
+        )
         suffix = f" {YELLOW}(in use!){RESET}" if in_use else ""
         while True:
             answer = prompt(f"{label} port{suffix}", default=str(actual_default), validator=valid_port)
             n = int(answer)
+            if n in _reserved_ports:
+                warn(f"  Port {n} ya asignado a otro servicio en este install. Pick another.")
+                continue
             if not detect_port_free(n):
                 if n == actual_default and not prompt_bool(
                     f"  Port {n} appears to be in use. Continue anyway?", default=False
@@ -869,6 +886,7 @@ def step_ports(cfg: WizardConfig) -> None:
                     warn(f"  Port {n} appears to be in use. Pick another.")
                     continue
             setattr(cfg, attr, n)
+            _reserved_ports.add(n)
             break
 
 
