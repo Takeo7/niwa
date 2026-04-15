@@ -41,7 +41,9 @@ export function App() {
   }
 
   if (!authenticated) {
-    return <LoginPage onSuccess={() => setAuthenticated(true)} />;
+    // LoginPage does a hard reload to ``/`` on success (see its comment),
+    // so we don't need an onSuccess callback to flip the store flag.
+    return <LoginPage />;
   }
 
   return (
