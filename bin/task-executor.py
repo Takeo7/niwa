@@ -655,15 +655,19 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
     if not command:
         return False, "NIWA_LLM_COMMAND is not configured"
     import pty, select
-    # Write prompt to temp file — Claude Code interprets long positional
-    # args as file paths, causing ENAMETOOLONG with enriched prompts.
-    import tempfile
-    prompt_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", prefix="niwa-prompt-", delete=False,
-    )
-    prompt_file.write(prompt)
-    prompt_file.close()
-    cmd = shlex.split(command) + [prompt_file.name]
+    # Pipe the prompt via stdin (see subprocess.Popen below). The old
+    # approach wrote the prompt to a temp file and appended the path
+    # as a positional argument — broken in two ways:
+    #   1. ``claude -p <path>`` treats ``<path>`` as prompt *text*, not
+    #      as a file reference. Claude then tries to open it via its
+    #      Read tool permission system and fails, emitting
+    #      "I need permission to read that file." as the whole output.
+    #      Every task processed this way got garbage as its result.
+    #   2. Long prompts passed as argv hit ``ENAMETOOLONG``.
+    # Stdin piping avoids both. Verified empirically:
+    #   ``claude -p /tmp/x.md``            → permission error
+    #   ``cat /tmp/x.md | claude -p``       → correct answer
+    cmd = shlex.split(command)
     log.info("exec in %s: %s ...", cwd, " ".join(shlex.quote(c) for c in cmd[:6]))
     run_env = os.environ.copy()
     run_env["TERM"] = "dumb"
@@ -697,12 +701,24 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
         run_env["CODEX_HOME"] = _codex_tmp_home
     try:
         master_fd, slave_fd = pty.openpty()
+        # stdin uses a regular pipe (separate from the PTY) so we can
+        # write the prompt and send EOF cleanly. stdout/stderr keep the
+        # PTY because Claude Code writes progress to ``/dev/tty`` and
+        # would bypass a plain pipe entirely.
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=run_env,
-            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            stdin=subprocess.PIPE, stdout=slave_fd, stderr=slave_fd,
             close_fds=True,
         )
         os.close(slave_fd)
+        # Feed the prompt and close stdin so the child sees EOF and
+        # starts processing. A missing close() here would make claude
+        # hang forever waiting for more input.
+        if proc.stdin is not None:
+            try:
+                proc.stdin.write(prompt.encode("utf-8"))
+            finally:
+                proc.stdin.close()
         # Read output from master until process exits or timeout
         chunks: list[bytes] = []
         import time as _t
@@ -750,10 +766,6 @@ def _run_llm(prompt: str, cwd: Path, llm_command: str = "", timeout: int = 0) ->
     except Exception as e:
         return False, f"[error: {e}]"
     finally:
-        try:
-            os.unlink(prompt_file.name)
-        except Exception:
-            pass
         # Clean up temporary Codex home dir
         if _codex_tmp_home:
             import shutil as _shutil

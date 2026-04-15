@@ -206,3 +206,59 @@ Verificado en producción (VPS real) tras el install del 2026-04-15: el executor
 
 - **Sub-bug 18a (severidad media, pendiente):** `niwa-<instance>-hosting.service` tiene el mismo patrón (`StandardOutput=append:/opt/<instance>/logs/hosting.log` + `User=niwa`) pero no crashea porque `bin/hosting-server.py` no hace Python-level `open()` del fichero — usa `print()` y hereda el fd de systemd. Bug latente: cualquier futuro intento de logging Python-level en hosting reproducirá Bug 18.
 - **Sub-bug 18b (severidad media, pendiente):** `setup.py` reporta "✓ Enabled and started" tras `systemctl enable --now` sin verificar que el servicio esté _stable_ (i.e. no en restart loop). Propuesta: esperar 15s y confirmar que `systemctl is-active == active` y el contador de restarts no está creciendo. Si no, abortar el install con mensaje claro. Esto matches el principio "fail loud" del proyecto.
+
+## 2026-04-15 — encontrado durante PR-24
+
+### Bug 19: El executor pasa el path del prompt como argumento posicional — toda tarea devuelve "I need permission to read that file"
+
+**Descripción:** `bin/task-executor.py::_run_llm` invocaba `claude -p` así:
+
+```python
+prompt_file = tempfile.NamedTemporaryFile(
+    mode="w", suffix=".md", prefix="niwa-prompt-", delete=False,
+)
+prompt_file.write(prompt)
+prompt_file.close()
+cmd = shlex.split(command) + [prompt_file.name]
+```
+
+El intento era evitar `ENAMETOOLONG` al pasar prompts largos por argv. Pero `claude -p <path>` **no** interpreta ese positional como referencia a un fichero — lo trata como **texto del prompt**. El modelo entonces ve "por favor procesa esta ruta", invoca su tool `Read` con el path, la permission check falla (o no está pre-aprobada) y toda la respuesta del LLM es:
+
+```
+I need permission to read that file.
+```
+
+**Impacto:** **crítico**. Desde la versión que introdujo esta aproximación de tempfile, **todas las tareas ejecutadas por el executor Niwa devolvieron basura**. El executor marca las tareas como `hecha` (exit code 0 del proceso) pero el output es inútil. El pipeline entero (UI → DB → executor → claude) está roto en el último metro.
+
+Verificado empíricamente en VPS:
+
+| Invocación                              | Output                                  |
+|-----------------------------------------|-----------------------------------------|
+| `claude -p /tmp/niwa-prompt-test.md`    | "I need permission to read that file."  |
+| `cat /tmp/niwa-prompt-test.md \| claude -p` | "SMOKE-OK 2026-04-15" (correcto)        |
+
+**Ubicación:** `bin/task-executor.py::_run_llm` (líneas ~658-666 pre-fix: `tempfile.NamedTemporaryFile` + `cmd = shlex.split(command) + [prompt_file.name]`).
+**Severidad:** **crítica** (bloqueante; ninguna tarea se ejecuta correctamente).
+**Estado:** **ARREGLADO en PR-24.** El prompt se pasa vía stdin con `stdin=subprocess.PIPE` en el `Popen`, se escribe el prompt al fd de stdin y se cierra para enviar EOF. stdout/stderr siguen usando PTY (claude-code escribe progreso a `/dev/tty`, un pipe plano lo perdería). Se elimina la creación/cleanup del tempfile. Tests en `tests/test_task_executor_stdin.py` (5 casos): verifican que argv no contiene paths de tmp, `stdin=subprocess.PIPE`, prompt escrito al stdin del child, `close()` llamado para señalar EOF. Control negativo verificado durante desarrollo.
+
+### Bug 20: v0.2 routing pipeline falla en host por módulos Python no instalados — add ~5s de latencia por tarea
+
+**Descripción:** Cuando el setting `routing_mode=v02` está activo (default en instalaciones con `--mode assistant`), el executor intenta despachar la tarea por el "v0.2 routing pipeline":
+
+```
+10:11:02 [INFO]  task 82bf3c4f: using v0.2 routing pipeline
+10:11:02 [ERROR] v0.2 modules not available — cannot execute in v02 mode
+                 ModuleNotFoundError: No module named 'routing_service'
+```
+
+El executor corre en el host (como user `niwa`), fuera del contenedor Docker. Los módulos de v0.2 (`routing_service`, `runs_service`, `backend_adapters/*`, etc.) viven en `niwa-app/backend/` y sólo están en el `PYTHONPATH` cuando la app corre dentro del contenedor. El executor en el host no los encuentra, el import explota, la rama v02 falla, y el executor hace retry en el "tier-3 executor" (camino legacy con `claude -p` directo) que sí funciona.
+
+**Mitigación actual:** el retry automático funciona — las tareas se ejecutan por el camino legacy. El único coste visible es **~5s de latencia extra** por tarea + ruido de logs + trazas `ERROR` engañosas (el failure no es fatal pero lo parece).
+
+**Ubicación:** `bin/task-executor.py:~987` (import de `routing_service` sin `sys.path` incluyendo `niwa-app/backend/`).
+**Severidad:** media (no bloquea, pero ensucia logs y añade latencia; además implica que la ruta v0.2 nunca se ejerce en producción, lo cual es preocupante — probablemente todas las instalaciones están operando en modo legacy sin enterarse).
+**PR futuro donde se arreglará:** pendiente de asignar. Dos caminos posibles:
+1. **Incluir `niwa-app/backend/` en el sys.path del executor** (add a `sys.path.insert(0, ...)` en task-executor.py pointing al backend dir). Simple, pero hay que verificar que los módulos v02 no tienen dependencias runtime en el contenedor (volúmenes, sockets, etc.).
+2. **Mover la lógica v02 a un módulo compartido** en `bin/` o `niwa-app/common/` importable desde ambos entornos.
+
+Camino 1 es más rápido. Documentar la decisión en DECISIONS-LOG cuando se aborde.
