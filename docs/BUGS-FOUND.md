@@ -142,3 +142,30 @@ El proyecto no tiene linting de frontend en ejecución. Esto probablemente expli
 **Ubicación:** `niwa-app/frontend/` (ausencia de archivo de config).
 **Severidad:** baja (no afecta funcionalidad; sí afecta calidad sostenida del código frontend).
 **PR futuro donde se arreglará:** candidato al PR de infra de tests de frontend (que añadirá vitest según PR-10a Dec 2). Lint + test infra deberían ir juntos, probablemente antes de PR-12.
+
+## 2026-04-15 — encontrado durante PR-22
+
+### Bug 16: Chat conversacional sólo soporta Anthropic API key — no admite suscripciones CLI ni otros proveedores
+
+**Descripción:** `niwa-app/backend/assistant_service.py` (endpoint `assistant_turn`, el chat web v0.2) está hardcodeado contra `https://api.anthropic.com/v1/messages` con header `x-api-key`. Si el usuario sólo tiene la **suscripción Claude Pro/Max** (configurada vía `claude setup-token`) el chat no funciona — `claude -p` CLI y la API HTTPS son sistemas de auth/billing distintos y el setup_token no vale como API key. Tampoco se soporta OpenAI (suscripción ChatGPT o API key), Gemini, Ollama, ni ningún otro provider de los listados en la UI "Proveedores LLM" (`Sistema → Agentes`). La UI ofrece esas opciones pero el backend del chat las ignora — sólo consulta `svc.llm.anthropic.api_key`. Niwa ya tiene el concepto de "runtime CLI" para ejecución de tareas (backends `claude_code` / `codex` con `runtime_kind=cli` que consumen suscripciones vía CLI autenticado), pero el camino del chat no lo usa.
+
+Impacto práctico: un usuario con suscripción Claude y `claude setup-token` puesto crea tareas, tiene `claude_code` backend verde, configura "llm_anthropic" en la UI con setup_token → cree que está todo listo, abre el Chat, recibe `llm_not_configured` sin contexto de por qué.
+**Ubicación:**
+- Backend chat: `niwa-app/backend/assistant_service.py::_call_anthropic` (línea ~781) y `_get_llm_config` (línea ~710-760).
+- Lookup hardcodeado: sólo `svc.llm.anthropic.api_key` / `int.llm_api_key` / env `ANTHROPIC_API_KEY`.
+- Frontend: `niwa-app/frontend/src/features/chat/` asume un solo provider.
+- UI "Proveedores LLM" (`SERVICES_REGISTRY` en `niwa-app/backend/app.py`) exhibe OpenAI/Gemini/Ollama como configurables sin señalar que el chat no los usa.
+**Severidad:** media (feature gap. Bloquea a usuarios con suscripción-only y a los que prefieren OpenAI/Gemini. No rompe funcionalidad actual, pero contradice la expectativa del usuario construida por la propia UI de proveedores).
+**PR futuro donde se arreglará:** pendiente de asignar. Propuesta: PR-NN "LLM runtime unificado para chat conversacional" — añade un router por `svc.llm.<provider>.runtime_kind` (`api` | `cli` | `oauth`) y adapters:
+- CLI (`claude -p`, `codex -p`): usa la suscripción vía CLI autenticado. Trade-off: sin function calling estructurado → las tools MCP no son accesibles desde chat. Más lento (arranque de proceso por turno).
+- API HTTPS OpenAI: misma estrategia que Anthropic actual, pay-per-use.
+- OAuth ChatGPT/Codex: el token del CLI Codex ya se persiste vía el flujo OAuth existente (`niwa-app/backend/oauth.py`) — podría reutilizarse.
+
+Scope estimado: ~200-400 LOC (router + adapters + tests).
+
+### Bug 17: Estado "CONFIGURADO" mentiroso del servicio llm_anthropic cuando sólo hay Setup Token
+
+**Descripción:** `_get_service_status('llm_anthropic')` devolvía `{"status": "configured", "message": "Setup Token configurado ✓"}` cuando el usuario sólo tenía Setup Token (sin API key). La UI renderizaba un badge verde "Configurado". Pero el camino del chat (`assistant_turn`) **no** usa Setup Token — requiere API key — así que el usuario abría el Chat y recibía `llm_not_configured` sin pista de por qué el panel decía verde. "Fail silently" típico: un estado agregado que miente sobre qué superficies están efectivamente cubiertas.
+**Ubicación:** `niwa-app/backend/app.py::_get_service_status` caso `service_id == "llm_anthropic"` (líneas ~1949-1960 pre-fix).
+**Severidad:** baja (confunde pero no corrompe datos ni rompe nada que ya funcionaba).
+**Estado:** **ARREGLADO en PR-22.** El status ahora devuelve `warning` cuando sólo hay Setup Token, con mensaje explícito: "Setup Token OK para tareas (CLI). Falta API key para el chat conversacional." `configured` sólo si la API key está presente. Test matrix en `tests/test_service_status_llm_anthropic.py` cubre las 4 celdas (api_key × setup_token). Relacionado con el gap de Bug 16 — ese gap persiste y justifica el `warning`; cuando Bug 16 se resuelva (runtime CLI para chat), el Setup Token solo podría volver a ser "configured" honestamente.
