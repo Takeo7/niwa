@@ -26,7 +26,15 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (res.status === 401 || res.status === 302) {
-    window.location.href = '/login';
+    // If we're already on /login, don't reload — that would re-mount the
+    // React tree, re-fire this same query (useSettings from the root of
+    // the tree, hit before any cookie is set) and produce an infinite
+    // reload loop that locks the user out of even typing their password.
+    // The LoginPage doesn't depend on any API data, so we just surface
+    // the error and let React Query hold it.
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
     throw new ApiError('No autenticado', res.status);
   }
 

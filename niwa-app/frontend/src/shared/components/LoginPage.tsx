@@ -14,11 +14,7 @@ import {
 import { IconAlertCircle } from '@tabler/icons-react';
 import { login } from '../api/client';
 
-interface Props {
-  onSuccess: () => void;
-}
-
-export function LoginPage({ onSuccess }: Props) {
+export function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -31,10 +27,16 @@ export function LoginPage({ onSuccess }: Props) {
     try {
       const ok = await login(username, password);
       if (ok) {
-        onSuccess();
-      } else {
-        setError('Usuario o contraseña incorrectos.');
+        // Hard reload to ``/`` rather than just toggling ``authenticated``
+        // in the store: React Query holds the pre-auth 401 errors from
+        // queries fired at the root of the tree (e.g. ``useSettings`` in
+        // ``useCustomTheme``) and won't auto-refetch them after state
+        // flips. Reloading gives a clean-start with the session cookie
+        // already in place, so every query resolves with 200 first try.
+        window.location.href = '/';
+        return;
       }
+      setError('Usuario o contraseña incorrectos.');
     } catch {
       setError('Error de conexión. Intenta de nuevo.');
     } finally {

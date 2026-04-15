@@ -36,7 +36,11 @@ async function callAssistantTurn(
     body: JSON.stringify(body),
   });
   if (res.status === 401 || res.status === 302) {
-    window.location.href = '/login';
+    // Avoid reload loop if already on /login — mirror the guard in
+    // shared/api/client.ts::api. See that file for the full rationale.
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
     throw new Error('No autenticado');
   }
   let data: AssistantTurnResponse;
