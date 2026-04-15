@@ -103,6 +103,56 @@ class TestApplySqlIdempotent:
         }
         assert "a" in tables
 
+    def test_skips_explicit_transaction_control(self):
+        """Regression for the "cannot start a transaction within a transaction"
+        bug seen on ``./niwa install`` after PR-18.
+
+        Migration 008 wraps its table swap in ``BEGIN TRANSACTION; ... COMMIT;``.
+        Python's sqlite3 driver opens an implicit transaction on DML, so when
+        the statements before it have already triggered that implicit BEGIN
+        (e.g. the installer's ``INSERT OR IGNORE`` seeds), the explicit BEGIN
+        inside the migration errors out. The helper must strip those
+        transaction-control statements and let the outer connection manage
+        the transaction.
+        """
+        conn = sqlite3.connect(":memory:")
+        conn.executescript("CREATE TABLE t (id INTEGER);")
+        # Trigger an implicit transaction like the installer does.
+        conn.execute("INSERT INTO t (id) VALUES (1)")
+        # This SQL is a miniature of migration 008: open BEGIN/COMMIT around
+        # DDL after an implicit transaction has already started.
+        sql = """
+        BEGIN TRANSACTION;
+        ALTER TABLE t ADD COLUMN foo TEXT;
+        COMMIT;
+        """
+        # Must not raise "cannot start a transaction within a transaction".
+        setup._apply_sql_idempotent(conn, sql)
+        conn.commit()
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(t)").fetchall()}
+        assert "foo" in cols
+
+    def test_strips_begin_commit_case_insensitive_and_variants(self):
+        """All documented variants of transaction-control statements are skipped."""
+        conn = sqlite3.connect(":memory:")
+        conn.executescript("CREATE TABLE t (id INTEGER);")
+        conn.execute("INSERT INTO t (id) VALUES (1)")
+        for variant in (
+            "BEGIN",
+            "begin",
+            "BEGIN TRANSACTION",
+            "BEGIN WORK",
+            "COMMIT",
+            "commit",
+            "COMMIT TRANSACTION",
+            "END",
+            "END TRANSACTION",
+            "ROLLBACK",
+        ):
+            # Should be treated as a no-op; never reaches sqlite as a BEGIN
+            # inside the already-open implicit transaction.
+            setup._apply_sql_idempotent(conn, variant + ";")
+
 
 class TestInstallerBootstrap:
     """End-to-end: schema.sql + every migration, via the installer path."""
@@ -166,6 +216,113 @@ class TestInstallerBootstrap:
             for mfile in sorted(glob.glob(str(MIGRATIONS_DIR / "*.sql"))):
                 setup._apply_sql_idempotent(conn, Path(mfile).read_text())
             conn.commit()
+        finally:
+            conn.close()
+
+    def test_bootstrap_applies_migration_008_check_constraint(self, tmp_path):
+        """Regression for "cannot start a transaction within a transaction".
+
+        Migration 008 wraps its table swap in ``BEGIN TRANSACTION; … COMMIT;``.
+        Before the fix the bootstrap raised here because the installer's
+        earlier ``INSERT OR IGNORE`` seeds had already opened an implicit
+        transaction. After the fix, the helper strips those inner
+        transaction-control statements and 008's CHECK constraint on
+        ``backend_runs.status`` lands correctly.
+        """
+        db = tmp_path / "niwa.sqlite3"
+        conn = sqlite3.connect(str(db))
+        conn.executescript(SCHEMA_SQL.read_text())
+        # Reproduce the installer's implicit-BEGIN-trigger exactly.
+        ts = "2025-01-01T00:00:00Z"
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, slug, name, area, "
+            "description, active, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("proj-default", "default", "Default", "proyecto",
+             "x", 1, ts, ts),
+        )
+        try:
+            for mfile in sorted(glob.glob(str(MIGRATIONS_DIR / "*.sql"))):
+                setup._apply_sql_idempotent(conn, Path(mfile).read_text())
+            conn.commit()
+            # The CHECK constraint introduced by migration 008 must be
+            # effective on the final backend_runs table.
+            ddl = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name='backend_runs'"
+            ).fetchone()[0]
+            assert "CHECK" in ddl and "queued" in ddl, (
+                f"migration 008 CHECK constraint missing: {ddl}"
+            )
+            # And the constraint actually rejects invalid status values.
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO backend_runs (id, task_id, status, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    ("r1", "t1", "bogus_status", ts, ts),
+                )
+        finally:
+            conn.close()
+
+    def test_pre_fix_helper_on_008_after_seed_fails(self, tmp_path):
+        """Negative control: the *pre-fix* helper (no BEGIN/COMMIT skip)
+        actually does fail on migration 008 after the implicit BEGIN has
+        opened, with the exact production error message. This proves the
+        fixture reproduces the bug and the fix is necessary.
+
+        If this ever stops failing (e.g. migration 008 is rewritten without
+        ``BEGIN TRANSACTION``) we want an explicit signal rather than silent
+        drift.
+        """
+        import re as _re
+
+        def _apply_sql_pre_fix(conn, sql):
+            """Exact copy of _apply_sql_idempotent **before** the PR-19
+            BEGIN/COMMIT skip was added. Used solely to reproduce the bug."""
+            lines = []
+            for line in sql.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("--") or not stripped:
+                    continue
+                if " --" in line:
+                    line = line[: line.index(" --")]
+                lines.append(line)
+            cleaned = "\n".join(lines)
+            for stmt in cleaned.split(";"):
+                stmt = stmt.strip()
+                if not stmt:
+                    continue
+                m = _re.match(
+                    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)",
+                    stmt, _re.IGNORECASE,
+                )
+                if m:
+                    table, column = m.group(1), m.group(2)
+                    existing = {r[1] for r in conn.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()}
+                    if column in existing:
+                        continue
+                conn.execute(stmt)
+
+        db = tmp_path / "niwa.sqlite3"
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.executescript(SCHEMA_SQL.read_text())
+            ts = "2025-01-01T00:00:00Z"
+            # Implicit-BEGIN trigger, exactly like the installer path.
+            conn.execute(
+                "INSERT OR IGNORE INTO projects (id, slug, name, area, "
+                "description, active, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("proj-default", "default", "Default", "proyecto",
+                 "x", 1, ts, ts),
+            )
+            mig008 = MIGRATIONS_DIR / "008_state_machine_checks.sql"
+            with pytest.raises(sqlite3.OperationalError) as exc:
+                _apply_sql_pre_fix(conn, mig008.read_text())
+            assert "cannot start a transaction within a transaction" in str(
+                exc.value
+            )
         finally:
             conn.close()
 
