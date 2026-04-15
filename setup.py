@@ -1766,6 +1766,147 @@ def _install_launchd_agent(cfg: WizardConfig, executor_path: Path) -> None:
         warn(f"Load manually: launchctl bootstrap gui/{uid} {plist_path}")
 
 
+def _wait_for_service_stable(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    wait_seconds: int = 15,
+    sleep=time.sleep,
+    runner=subprocess.run,
+):
+    """Block for ``wait_seconds`` after ``systemctl enable --now`` and
+    report whether the service settled into a healthy state.
+
+    Returns ``(healthy, is_active, nrestarts, journal_tail)``.
+
+    - ``healthy`` is True iff ``is-active == 'active'`` AND
+      ``NRestarts == 0`` after the wait window.
+    - ``journal_tail`` is populated only when ``healthy`` is False (last
+      20 lines of ``journalctl -u <unit>``); on the happy path it is the
+      empty string to keep output clean.
+
+    ``sleep`` and ``runner`` are injection points for tests — both
+    default to the real stdlib primitives in production.
+
+    Regression guard for Bug 18b (docs/BUGS-FOUND.md): ``setup.py``
+    reported "Enabled and started" immediately after ``systemctl enable
+    --now`` without checking whether the service actually stayed up,
+    which masked PR-23's crash-loop (executor.log root-owned) for hours.
+    """
+    scope_args = ["--user"] if user_scope else []
+    sleep(wait_seconds)
+
+    # is-active returns non-zero for non-active states. We want the
+    # string value regardless, so don't `check=True` and read stdout.
+    try:
+        is_active_res = runner(
+            ["systemctl", *scope_args, "is-active", unit_name],
+            capture_output=True, text=True, timeout=10,
+        )
+        is_active = (is_active_res.stdout or "").strip() or "unknown"
+    except Exception as exc:  # noqa: BLE001 — diagnostic path, don't mask
+        is_active = f"error: {exc}"
+
+    try:
+        show_res = runner(
+            ["systemctl", *scope_args, "show", unit_name,
+             "--property=NRestarts", "--value"],
+            capture_output=True, text=True, timeout=10,
+        )
+        raw = (show_res.stdout or "").strip()
+        nrestarts = int(raw) if raw.isdigit() else 0
+    except Exception:  # noqa: BLE001 — diagnostic path
+        nrestarts = 0
+
+    healthy = (is_active == "active") and (nrestarts == 0)
+
+    journal_tail = ""
+    if not healthy:
+        try:
+            j = runner(
+                ["journalctl", *scope_args, "-u", unit_name,
+                 "-n", "20", "--no-pager"],
+                capture_output=True, text=True, timeout=5,
+            )
+            journal_tail = (j.stdout or "").strip() or "(journal empty)"
+        except Exception:  # noqa: BLE001
+            journal_tail = "(journal unavailable)"
+
+    return healthy, is_active, nrestarts, journal_tail
+
+
+def _verify_service_or_abort(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    wait_seconds: int = 15,
+    sleep=time.sleep,
+    runner=subprocess.run,
+) -> None:
+    """Fail-loud wrapper around ``_wait_for_service_stable``.
+
+    On healthy → prints a success line and returns. On unhealthy →
+    dumps is-active, NRestarts, the journal tail, pointers to the
+    relevant bugs and a manual unblock command, then ``sys.exit(1)``.
+
+    This is the ``fail loud`` half of PR-25: any future regression of
+    the Bug 18 / 19 family (executor crash-looping immediately after
+    install) will now abort the install with a visible, actionable
+    error instead of a silent "Enabled and started" lie.
+    """
+    healthy, is_active, nrestarts, journal_tail = _wait_for_service_stable(
+        unit_name,
+        user_scope=user_scope,
+        wait_seconds=wait_seconds,
+        sleep=sleep,
+        runner=runner,
+    )
+    if healthy:
+        ok(f"Service {unit_name} is stable "
+           f"(is-active={is_active}, NRestarts={nrestarts})")
+        return
+
+    err(f"Service {unit_name} did not stabilise after {wait_seconds}s")
+    err(f"  is-active:  {is_active}")
+    err(f"  NRestarts:  {nrestarts}")
+    err(f"  journal tail (last 20 lines):")
+    for line in (journal_tail or "").splitlines():
+        err(f"    {line}")
+    err("")
+    err("  Known causes (see docs/BUGS-FOUND.md):")
+    err("    • Bug 18 — executor.log owned by root (fixed in PR-23).")
+    err("      Manual unblock on an already-broken install:")
+    err("        chown niwa:niwa /opt/<instance>/logs/executor.log")
+    err("        chown niwa:niwa /opt/<instance>/logs/hosting.log")
+    err("    • Bug 19 — executor passed prompt as path (fixed in PR-24).")
+    err("")
+    err("  Install aborted (fail-loud). Investigate, fix, then retry")
+    err("  ./niwa install.")
+    sys.exit(1)
+
+
+def _reset_failed_unit(
+    unit_name: str,
+    *,
+    user_scope: bool = False,
+    runner=subprocess.run,
+) -> None:
+    """Best-effort ``systemctl reset-failed`` before enabling.
+
+    On reinstall over a previously crash-looping unit, ``NRestarts`` is
+    cumulative across the unit's lifetime and would cause the health
+    check to false-positive even on a now-healthy service. Reset the
+    counter first; ignore errors (unit may not exist yet)."""
+    scope_args = ["--user"] if user_scope else []
+    try:
+        runner(
+            ["systemctl", *scope_args, "reset-failed", unit_name],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:  # noqa: BLE001 — best-effort, pre-enable cleanup
+        pass
+
+
 def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
     """Install systemd unit for the executor. If running as root, creates a
     dedicated 'niwa' user (--dangerously-skip-permissions fails as root)."""
@@ -1906,6 +2047,7 @@ WantedBy=multi-user.target
         unit_path.write_text(unit)
         ok(f"Wrote systemd unit: {unit_path} (runs as user niwa)")
         subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        _reset_failed_unit(unit_name, user_scope=False)
         result = subprocess.run(["systemctl", "enable", "--now", unit_name], capture_output=True, text=True)
     else:
         # User-level unit
@@ -1932,10 +2074,15 @@ WantedBy=default.target
         unit_path.write_text(unit)
         ok(f"Wrote systemd unit: {unit_path}")
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        _reset_failed_unit(unit_name, user_scope=True)
         result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name], capture_output=True, text=True)
 
     if result.returncode == 0:
         ok(f"Enabled and started {unit_name}")
+        # Fail loud: verify the service actually stayed up. PR-25 —
+        # Bug 18b in docs/BUGS-FOUND.md. A crash-loop here (see PR-23,
+        # PR-24) would otherwise masquerade as a successful install.
+        _verify_service_or_abort(unit_name, user_scope=not run_as_root)
     else:
         warn(f"systemctl enable failed: {result.stderr.strip()[:300]}")
         if run_as_root:
@@ -2076,6 +2223,7 @@ WantedBy=multi-user.target
             unit_path = unit_dir / unit_name
             unit_path.write_text(unit)
             subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+            _reset_failed_unit(unit_name, user_scope=False)
             result = subprocess.run(["systemctl", "enable", "--now", unit_name], capture_output=True, text=True)
         else:
             unit_dir = Path.home() / ".config" / "systemd" / "user"
@@ -2101,10 +2249,16 @@ WantedBy=default.target
             unit_path = unit_dir / unit_name
             unit_path.write_text(unit)
             subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+            _reset_failed_unit(unit_name, user_scope=True)
             result = subprocess.run(["systemctl", "--user", "enable", "--now", unit_name], capture_output=True, text=True)
 
         if result.returncode == 0:
             ok(f"Enabled and started {unit_name}")
+            # Fail loud: verify the hosting service stayed up. PR-25.
+            # Mirrors the executor check; closes the latent variant of
+            # Bug 18a (hosting has the same log-ownership pattern but
+            # doesn't currently open the file at Python level).
+            _verify_service_or_abort(unit_name, user_scope=not run_as_root)
         else:
             warn(f"Hosting server systemctl enable failed: {result.stderr.strip()[:300]}")
     else:

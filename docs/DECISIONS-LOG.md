@@ -1005,3 +1005,42 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** un renglón menos en la suite, ningún hueco de cobertura.
 
+## 2026-04-15 — PR-25
+
+### Decisión 1: criterio de "healthy" post-`systemctl enable --now` es estricto
+
+**Decisión:** el installer considera un servicio `healthy` si y sólo si, tras esperar **15 segundos**, `systemctl is-active` devuelve exactamente `"active"` Y `systemctl show --property=NRestarts` devuelve `0`. Cualquier otra combinación (`failed`, `activating`, `inactive`, o `NRestarts >= 1`) aborta el install con `sys.exit(1)` y dump de `journalctl -u <unit> -n 20`.
+
+**Motivo:** Bug 18b (`docs/BUGS-FOUND.md`) — PR-23 arregló el crash-loop del executor por ownership del log, pero el installer siguió reportando "Enabled and started" mientras el servicio llevaba 830+ restarts. La mentira duró horas en producción. El criterio estricto invierte el default: en vez de "silent pass", `fail loud`. Cualquier restart durante los 15s post-install en un entorno limpio es pathológico por definición — el happy path es `NRestarts == 0`, no "NRestarts subió poco".
+
+**Alternativas consideradas:**
+- (a) `NRestarts <= 1` como tolerancia — rechazado: enmascara exactamente la clase de fallo que Bug 18b estaba diseñado para detectar.
+- (b) Wait shorter (5s) — rechazado: el `RestartSec=10` del unit significa que un crash-loop puede no haber completado siquiera su primer restart a 5s; 15s cubre al menos un ciclo completo.
+- (c) Wait más largo (30-60s) — rechazado: 15s es tiempo suficiente para detectar crash loops y mantiene el coste del install bajo. Añadimos 30s en total al install (executor + hosting) — aceptable, una vez por install.
+
+**Impacto:** cada install paga +30s (15s × 2 servicios) vs. el flujo previo. Ningún usuario volverá a terminar un install con "éxito" y el executor en restart loop.
+
+### Decisión 2: `systemctl reset-failed` antes de cada `enable --now` (no baseline-delta)
+
+**Decisión:** justo antes de cada `systemctl enable --now`, el installer llama `systemctl [--user] reset-failed <unit>` (best-effort, errores tragados). El contador `NRestarts` usado en la comprobación post-install es el absoluto reportado por `systemctl show`, no un delta contra un baseline leído antes.
+
+**Motivo:** un reinstall sobre una unidad previamente crasheada (escenario real del VPS actual donde PR-23/24 se aplicaron encima de 830 restarts) tendría `NRestarts > 0` de historia antigua, disparando un falso positivo en el health check nuevo. `reset-failed` resetea el contador dentro de systemd de forma atómica y con semántica clara.
+
+**Alternativas consideradas:**
+- (a) Leer `NRestarts` baseline antes de `enable --now` y comparar delta tras 15s — rechazado: más código, más condiciones de borde (¿qué pasa si el unit file no existía todavía? ¿si `show` devuelve error?), mismo resultado funcional.
+- (b) No resetear y vivir con el falso positivo en reinstalls — rechazado: un reinstall que aborta correcto-pero-falso pone al usuario a debuggear problemas que ya no existen.
+
+**Impacto:** el `reset-failed` es best-effort — si la unidad no existe (fresh install, primer run), devuelve error silencioso y el flow sigue. Si existe y estaba failed, la limpieza ocurre. Uso trivial, una línea de riesgo cero.
+
+### Decisión 3: helpers en `setup.py` siguen siendo stdlib-only, inyectables en tests
+
+**Decisión:** los tres helpers nuevos (`_wait_for_service_stable`, `_verify_service_or_abort`, `_reset_failed_unit`) viven dentro de `setup.py` y exponen `sleep` y `runner` como parámetros kwargs con defaults `time.sleep` y `subprocess.run`. Tests los sobrescriben con `lambda _: None` y un fake runner que replaya respuestas canned.
+
+**Motivo:** el SPEC §8 obliga a stdlib-only en el backend — esa regla aplica al installer también, que se ejecuta antes de que el proyecto pueda instalar nada. Ningún `unittest.mock`, ningún `pytest-subprocess`, ningún decorator externo. La inyección explícita mantiene el coste del test en ~0.11s para las 18 pruebas.
+
+**Alternativas consideradas:**
+- (a) Extraer los helpers a `niwa-app/backend/` — rechazado: el installer corre antes de que el backend exista; además crearía una dependencia circular innecesaria entre setup y runtime.
+- (b) Tests integracionales con systemd real vía Docker — rechazado: fuera del scope de un fix quirúrgico; aumenta el coste de CI de forma desproporcionada al bug que estamos resolviendo.
+
+**Impacto:** los helpers son puros, el 15s real sólo corre en producción (o si alguien invoca el código sin inyectar `sleep`), y la suite entera de PR-25 corre en <0.2s.
+
