@@ -1083,4 +1083,74 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** +3 LOC, chown targeted, semántica clara.
 
+## 2026-04-15 — PR-27
+
+### Decisión 1: aceptar tres copias de `niwa-app/backend/` (repo + container + host runtime)
+
+**Decisión:** el installer copia el árbol `niwa-app/backend/` desde el repo a una ubicación niwa-readable (`/opt/<instance>/niwa-app/backend/` en root mode, `cfg.niwa_home/niwa-app/backend/` en user mode). El executor en el host importa de esa copia vía `NIWA_BACKEND_DIR` env var. Resultado: tres réplicas del mismo código en disco — repo source-of-truth, container Docker build (`COPY niwa-app/backend /app/niwa-app/backend`), host runtime (PR-27).
+
+**Motivo:** el executor corre en el host, fuera de Docker, y necesita los módulos `routing_service`, `runs_service`, `backend_adapters/*` para ejecutar la ruta v0.2. Las alternativas estructuralmente "más limpias" (un solo árbol compartido) requieren cambios significativos:
+
+- **Symlink `/opt/<instance>/niwa-app/backend → <repo>/niwa-app/backend`**: rechazado. El repo vive bajo `/root/.niwa/` (mode 0700) que niwa no puede atravesar. Cambiar permisos de `/root/` viola política estándar de distros y abre attack surface.
+- **Mover los módulos a un paquete separado importable** (`niwa-app/common/` o pip-installable): refactor mayor, fuera del scope quirúrgico. Cambiaría ~30 imports en ~15 archivos. Candidato para v0.3 si el coste de mantener tres copias se vuelve real.
+- **Que el executor delegue al container vía HTTP/socket**: cambia el modelo de ejecución completo, requiere endpoints nuevos en el container, latencia extra. Out of scope.
+
+**Coste real de las tres copias:** 686 KB en disco × 2 (container + host install). Sincronización: el installer recopia desde el repo en cada `niwa install`. Si alguien edita los módulos del backend post-install sin reinstalar, las copias divergen — pero ése es el caso de uso de "modificar código en prod sin redeploy" que ya está mal por otros motivos. Documentado.
+
+**Alternativas consideradas y rechazadas:**
+- (a) Container-only execution del routing v0.2 (executor delega al container) — out of scope.
+- (b) Refactor a paquete instalable pip — out of scope, requiere ~50% más LOC.
+- (c) Symlink al repo — bloqueado por permisos `/root/`.
+
+**Impacto:** PR-27 +50 LOC en setup.py, +20 LOC en task-executor.py, +200 LOC tests. Tres copias documentadas.
+
+### Decisión 2: env var (`NIWA_BACKEND_DIR`) sobre auto-discovery
+
+**Decisión:** el executor prefiere `os.environ["NIWA_BACKEND_DIR"]` sobre la resolución relativa al `__file__`. El installer setea esa env var explícitamente en el systemd unit.
+
+**Motivo:** la resolución relativa al `__file__` es **silenciosa cuando rompe** — `Path(...) / "niwa-app" / "backend"` siempre devuelve un path object, viva o no exista el directorio. `sys.path.insert(path_inexistente)` no falla. El error sólo aparece luego al `import routing_service`, semánticamente desconectado del problema real. Una env var explícita en el unit es:
+
+1. **Auditable:** `cat /etc/systemd/system/niwa-niwa-executor.service` muestra exactamente qué path se está usando.
+2. **Operacional:** un operador puede sobrescribir vía `systemctl edit niwa-niwa-executor.service` sin tocar código.
+3. **Forzable:** si el operador setea `NIWA_BACKEND_DIR=/foo/bar` y `/foo/bar` no existe, el executor sale loudly con exit 2 + mensaje claro (ver Decisión 3) en lugar de silencioso fallback.
+
+**Alternativas consideradas:**
+- (a) Auto-discovery walk: el executor sube por el filesystem buscando `niwa-app/backend/` — rechazado por implícito y frágil. Si hay dos checkouts de Niwa el orden de descubrimiento es ambiguo.
+- (b) Hardcode `/opt/<instance>/niwa-app/backend/` en el executor — rechazado por acoplar al installer y romper el dev mode (repo checkout).
+- (c) Solo env var sin fallback relativo — rechazado por romper el dev/CI mode.
+
+**Impacto:** dos líneas de cambio en `task-executor.py`. Cero cambio en el dev mode (relative path resolves correctly when running from a repo checkout).
+
+### Decisión 3: fail-loud (sys.exit(2)) si `_BACKEND_DIR` no existe — complementario al health check de PR-25
+
+**Decisión:** si `_BACKEND_DIR` no existe, el executor imprime un mensaje FATAL multiline a stderr (incluyendo guía dev y guía install) y `sys.exit(2)`. No hay fallback "ignora v0.2 y corre sólo legacy".
+
+**Motivo:** el bug 20 sobrevivió meses precisamente porque había un fallback silencioso. PR-25 introdujo "fail loud post-enable" en el installer; PR-27 extiende el principio al runtime del executor. Si el backend tree no se copió (bug en setup.py), el executor crashea, systemd `Restart=always` reintenta, `NRestarts > 0` tras 15s dispara el aborto del install con journal tail visible. La cadena PR-25 + PR-27 garantiza que CUALQUIER misconfiguración de `NIWA_BACKEND_DIR` sea visible en el momento del install, no escondida durante meses.
+
+**Alternativas consideradas:**
+- (a) Warning + fallback automático a tier-3 — rechazado: replica exactamente el patrón que ocultó Bug 20.
+- (b) Fail loud sólo si `routing_mode=v02` — rechazado: el executor no sabe el routing_mode hasta que lee la DB, que ocurre después del bloque de imports.
+- (c) Fail loud silencioso (sys.exit(2) sin mensaje) — rechazado: el operador necesita el mensaje para diagnosticar; el coste de imprimir 7 líneas a stderr es trivial.
+
+**Mensaje multiline incluye:**
+- Path concreto que falló (`{_BACKEND_DIR}`).
+- Guía dev: "keep bin/task-executor.py peer of niwa-app/backend/".
+- Guía operacional: "set NIWA_BACKEND_DIR in the unit's Environment= to /opt/<instance>/niwa-app/backend".
+
+**Impacto:** un escenario nuevo en el que el executor exitea (backend dir missing) que antes era silencioso. Cubierto por test directo + complementado por PR-25 desde el installer.
+
+### Decisión 4: aceptar el riesgo de la lluvia de follow-ups post-PR-27
+
+**Decisión:** PR-27 fixea el import. Una vez merged, la ruta v0.2 ejecutará por primera vez en producción. Asumimos que aflorarán bugs nuevos que estaban ocultos por el fallback a tier-3 (faltan profiles seed, transiciones de state machine no probadas, paths de artifacts no existentes, etc.). No los pre-arreglamos especulativamente — esperamos a que aparezcan en el smoke real del VPS y los atacamos uno a uno.
+
+**Motivo:** especular desde aquí qué va a romper es ineficiente — la ruta v0.2 tiene meses sin ejecutarse, no sabemos qué supuesto hace cada módulo sobre el contexto runtime. Mejor pagar el coste real del descubrimiento que el coste especulativo de pre-fixearlo.
+
+**Alternativas consideradas:**
+- (a) Pre-fix de "todos los problemas conocidos" antes de merge — rechazado: no sabemos cuáles son los problemas reales, sólo hipótesis. Pre-fixearlos genera código adivinatorio.
+- (b) PR-27 "shadow mode" donde v0.2 se ejecuta en paralelo a tier-3 sin afectar el outcome — tentador para reducir riesgo, pero +50% código y nunca llegamos a ejercer la ruta para detectar bugs reales. Rechazado.
+
+**Mitigación operacional:** después del merge, Claude-VPS ejecuta el smoke end-to-end y reporta CUALQUIER trace de error en los logs del executor. Cada bug nuevo se documenta en BUGS-FOUND con severidad y se ataca como PR aparte.
+
+**Impacto:** PR-27 abre una superficie que llevaba meses inactiva. Expectativa realista: 1-3 follow-up PRs durante 1-2 días post-merge para estabilización.
+
 

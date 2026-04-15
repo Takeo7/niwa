@@ -40,9 +40,47 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# ── v0.2 routing imports (PR-06) ────────────────────────────────────
+# ── v0.2 routing imports (PR-06, Bug 20 fix in PR-27) ───────────────
 # The executor must be able to import backend modules for v0.2 routing.
-_BACKEND_DIR = Path(__file__).resolve().parent.parent / "niwa-app" / "backend"
+#
+# Resolution order:
+#   1. ``NIWA_BACKEND_DIR`` env var (set by the installer in the
+#      systemd unit — points at a niwa-readable copy of the backend
+#      tree, typically ``/opt/<instance>/niwa-app/backend``).
+#   2. Fallback to ``<this file>/../niwa-app/backend``, which only
+#      resolves correctly when the executor runs from the repo
+#      checkout (dev / CI).
+#
+# Bug 20 history: the executor is copied by ``setup.py`` to
+# ``/home/niwa/.<instance>/bin/task-executor.py``, which makes the
+# relative ``__file__`` path resolve to
+# ``/home/niwa/.<instance>/niwa-app/backend`` — a directory that
+# ``setup.py`` never created. The ``sys.path.insert`` below then
+# silently pushed a non-existent path and ``import routing_service``
+# raised ``ModuleNotFoundError``. The tier-3 fallback hid it for
+# months. The env-var indirection makes the resolution explicit and
+# installer-controlled.
+_env_backend_dir = os.environ.get("NIWA_BACKEND_DIR")
+if _env_backend_dir:
+    _BACKEND_DIR = Path(_env_backend_dir)
+else:
+    _BACKEND_DIR = Path(__file__).resolve().parent.parent / "niwa-app" / "backend"
+
+if not _BACKEND_DIR.is_dir():
+    # Fail loud. PR-25's health check will turn a fail-loud exit
+    # here into a visible install abort within 15 s, so the operator
+    # sees a real error instead of a silent fallback to legacy.
+    print(
+        f"FATAL: niwa backend modules not found at {_BACKEND_DIR}.\n"
+        f"  - If running from a repo checkout, keep bin/task-executor.py\n"
+        f"    peer of niwa-app/backend/.\n"
+        f"  - If running from a systemd install, set NIWA_BACKEND_DIR\n"
+        f"    in the unit's Environment= to the installed backend tree\n"
+        f"    (typically /opt/<instance>/niwa-app/backend).",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
