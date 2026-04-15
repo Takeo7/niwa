@@ -4001,6 +4001,39 @@ class Handler(BaseHTTPRequestHandler):
                          'message': str(e)},
                         409,
                     )
+                # Bug 23 fix (PR-29): after approving, return the
+                # task to ``pendiente`` so the executor re-picks it
+                # up. The executor transitions the task from
+                # en_progreso → waiting_input when routing reports
+                # approval_required (see bin/task-executor.py
+                # ``_execute_task_v02``). Without this inverse
+                # transition the task is orphaned in waiting_input
+                # forever. Only fires on 'approve' (reject leaves
+                # the task in waiting_input — the operator can
+                # archive or retry manually).
+                if new_status == 'approved' and updated:
+                    task_id = updated.get('task_id')
+                    if task_id:
+                        import state_machines
+                        task_row = conn.execute(
+                            "SELECT status FROM tasks WHERE id = ?",
+                            (task_id,),
+                        ).fetchone()
+                        if task_row and task_row['status'] == 'waiting_input':
+                            # Validate the transition to catch any
+                            # future refactor that would weaken the
+                            # invariant.
+                            state_machines.assert_task_transition(
+                                'waiting_input', 'pendiente',
+                            )
+                            conn.execute(
+                                "UPDATE tasks SET status = 'pendiente', "
+                                "updated_at = ? WHERE id = ? "
+                                "AND status = 'waiting_input'",
+                                (datetime.now(timezone.utc).strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ"), task_id),
+                            )
+                            conn.commit()
                 enriched = approval_service.get_approval_enriched(
                     approval_id, conn,
                 ) or approval_service._approval_row_to_api(updated)

@@ -1180,3 +1180,43 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 **Impacto:** trivial. Documentado en docstring del helper y test explícito (`test_reserved_not_mutated`).
 
 
+
+## 2026-04-15 — PR-29
+
+### Decisión 1: usar `waiting_input` como destino de la transición, no permitir `en_progreso → pendiente` en la state machine
+
+**Decisión:** la tarea transita de `en_progreso` a `waiting_input` cuando el routing reporta `approval_required`, respetando la state machine canónica en `state_machines.TASK_TRANSITIONS`. NO se modifica la state machine para permitir `en_progreso → pendiente`.
+
+**Motivo:** `waiting_input` es el estado semánticamente correcto per SPEC-v0.2 §2 — "necesita acción humana antes de proceder". `pendiente` significa "esperando a un worker que la reclame", que es la semántica equivocada: mientras el approval está pending, la tarea NO debería ser reclamable por el executor; relajar la state machine a permitir `en_progreso → pendiente` reabría el bucle de procesamiento (executor reclama, vuelve a fallar, vuelve a pendiente, repeat).
+
+**Alternativas consideradas:**
+- (a) Añadir `'pendiente'` al set permitido desde `en_progreso` en `state_machines.py` — rechazado: relaja la invariante sin fix real del bucle.
+- (b) Hacer que el executor detecte tasks con approval pending y las skipee en `_claim_next_task` — rechazado: acopla el claimer al approval state, duplica lógica, y no ayuda a la UI (la tarea "pendiente" en la UI es misleading para un operador que espera aprobar).
+- (c) Usar `revision` en vez de `waiting_input` — rechazado: `revision` es para "revisión humana del output final", no pre-execution gate.
+
+**Impacto:** 5 líneas cambiadas en `bin/task-executor.py::_execute_task_v02`. Cero cambios en `state_machines.py`.
+
+### Decisión 2: la inversa (`waiting_input → pendiente`) se dispara en el handler de approval resolve, no en un scheduler ni en el executor
+
+**Decisión:** cuando `POST /api/approvals/:id/resolve` aprueba un approval, el handler en `app.py` transiciona sincronamente la tarea asociada de `waiting_input` a `pendiente`, validando con `state_machines.assert_task_transition`. El executor no observa approvals directamente; el scheduler no tiene knowledge de este flow.
+
+**Motivo:** el handler ya tiene la conexión DB abierta (`with db_conn() as conn`), ya conoce el task_id vía `updated["task_id"]`, ya es sincrono. Meter la lógica aquí mantiene la transición atómica con la aprobación del approval — si el UPDATE de tasks falla, la transacción rollbackea el resolve también (aunque en la implementación actual cada paso tiene su commit propio — candidato a endurecer en futuro). Alternativas:
+
+- (a) Scheduler/worker que haga poll de approvals recién aprobadas y re-dispache tasks — rechazado: latency artificial, complejidad innecesaria cuando el handler ya puede hacerlo sincronamente.
+- (b) Executor observa approvals via poll — rechazado: rompe el principio de "executor sólo ve tasks con status='pendiente'". Acopla executor al approval_service.
+- (c) Callback/webhook desde approval_service al task_service — rechazado: añade indirección sin beneficio. El handler HTTP es el punto natural de confluence entre "approval changed" y "task needs to move".
+
+**Reject** deliberadamente NO dispara la inversa — el operador que rechaza un approval puede querer archivar la tarea, retomarla más tarde, o moverla a otro backend manualmente. Forzar la transición automática cerraría esas opciones. Documentado.
+
+**Impacto:** ~20 LOC añadidas al handler de resolve. Cero impacto en otros call sites de `approval_service.resolve_approval`.
+
+### Decisión 3: fix en dos sitios requiere dos bloques de tests independientes
+
+**Decisión:** Bug 23 tiene dos mitades estructurales (executor side + approval handler side). Cada mitad tiene su archivo de tests — `tests/test_task_executor_approval_state.py` y `tests/test_approvals_resolve_transitions_task.py` — con invariantes estáticos (regex sobre source) + behaviour tests (sqlite real + HTTP handler mock donde aplica).
+
+**Motivo:** si alguien refactoriza una de las dos mitades sin entender que la otra depende de ella, queremos que los tests de la mitad afectada fallen loud y apunten a la otra. Los dos archivos referencian mutuamente en sus docstrings para que un lector que toca uno sepa que hay un contrato con el otro.
+
+**Alternativas consideradas:**
+- (a) Un solo archivo de tests que cubre ambas mitades — rechazado: confunde el scope de cada test (¿estoy probando el executor o el handler?) y hace difícil localizar el fallo cuando uno de los sides rompe.
+
+**Impacto:** +11 tests nuevos. 242/242 pasa la suite installer/executor/routing/approval.
