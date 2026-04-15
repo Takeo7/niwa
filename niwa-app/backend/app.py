@@ -775,6 +775,17 @@ def _apply_sql_idempotent(conn, sql):
         stmt = stmt.strip()
         if not stmt:
             continue
+        # Skip explicit transaction-control statements. The Python sqlite3
+        # driver opens an implicit transaction on DML, so a migration that
+        # starts with ``BEGIN TRANSACTION`` (e.g. 008_state_machine_checks.sql)
+        # errors out with "cannot start a transaction within a transaction"
+        # when applied statement-by-statement. Atomicity is still guaranteed
+        # by the caller's per-migration ``c.commit()`` in ``_run_migrations``.
+        if re.match(
+            r'(BEGIN|COMMIT|END|ROLLBACK)(\s+(TRANSACTION|WORK))?\s*$',
+            stmt, re.IGNORECASE,
+        ):
+            continue
         m = re.match(
             r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)',
             stmt, re.IGNORECASE,
