@@ -1999,13 +1999,45 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
         # file to ``niwa:niwa`` before systemd ever sees it, so the
         # service's ``append:`` just reuses the existing fd.
         (shared_dir / "logs" / "executor.log").touch(exist_ok=True)
+        # Bug 20 fix (PR-27): the executor must be able to import the
+        # v0.2 backend modules (routing_service, runs_service,
+        # backend_adapters/*) at runtime. The repo lives under /root
+        # which is mode 0700 and unreadable by the niwa user, so we
+        # copy the backend tree to a niwa-readable location under
+        # shared_dir. The systemd unit then exports
+        # ``NIWA_BACKEND_DIR`` so ``bin/task-executor.py`` resolves
+        # imports against this copy instead of the (non-existent)
+        # path it would compute relative to its own __file__ after
+        # being copied to /home/niwa/.<instance>/bin/.
+        backend_runtime_dir = shared_dir / "niwa-app" / "backend"
+        if backend_runtime_dir.exists():
+            shutil.rmtree(str(backend_runtime_dir))
+        shutil.copytree(
+            str(REPO_ROOT / "niwa-app" / "backend"),
+            str(backend_runtime_dir),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         subprocess.run(["chown", "-R", "niwa:niwa", str(niwa_home), str(shared_dir)], check=True)
         subprocess.run(["loginctl", "enable-linger", "niwa"], capture_output=True)
         executor_path = niwa_home / "bin" / "task-executor.py"
         niwa_home_env = str(niwa_home)
         log_path = shared_dir / "logs" / "executor.log"
+        backend_dir_env = str(backend_runtime_dir)
     else:
         niwa_home_env = str(cfg.niwa_home)
+        # Bug 20 fix (PR-27, user-scope branch): mirror the root-scope
+        # copy so v0.2 routing imports work from the user-level
+        # systemd unit too. Target lives under cfg.niwa_home so the
+        # invoking user owns it natively.
+        backend_runtime_dir = cfg.niwa_home / "niwa-app" / "backend"
+        if backend_runtime_dir.exists():
+            shutil.rmtree(str(backend_runtime_dir))
+        shutil.copytree(
+            str(REPO_ROOT / "niwa-app" / "backend"),
+            str(backend_runtime_dir),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        backend_dir_env = str(backend_runtime_dir)
 
     unit_name = f"niwa-{cfg.instance_name}-executor.service"
 
@@ -2033,6 +2065,7 @@ Type=simple
 User=niwa
 Group=niwa
 Environment="NIWA_HOME={niwa_home_env}"
+Environment="NIWA_BACKEND_DIR={backend_dir_env}"
 Environment="PATH={path_env}"
 ExecStart=/usr/bin/env python3 {executor_path}
 StandardOutput=append:{log_path}
@@ -2060,6 +2093,7 @@ After=network.target
 [Service]
 Type=simple
 Environment="NIWA_HOME={niwa_home_env}"
+Environment="NIWA_BACKEND_DIR={backend_dir_env}"
 Environment="PATH={path_env}"
 ExecStart=/usr/bin/env python3 {executor_path}
 StandardOutput=append:{log_path}

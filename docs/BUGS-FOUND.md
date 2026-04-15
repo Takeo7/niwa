@@ -245,7 +245,7 @@ Verificado empíricamente en VPS:
 **Severidad:** **crítica** (bloqueante; ninguna tarea se ejecuta correctamente).
 **Estado:** **ARREGLADO en PR-24.** El prompt se pasa vía stdin con `stdin=subprocess.PIPE` en el `Popen`, se escribe el prompt al fd de stdin y se cierra para enviar EOF. stdout/stderr siguen usando PTY (claude-code escribe progreso a `/dev/tty`, un pipe plano lo perdería). Se elimina la creación/cleanup del tempfile. Tests en `tests/test_task_executor_stdin.py` (5 casos): verifican que argv no contiene paths de tmp, `stdin=subprocess.PIPE`, prompt escrito al stdin del child, `close()` llamado para señalar EOF. Control negativo verificado durante desarrollo.
 
-### Bug 20: v0.2 routing pipeline falla en host por módulos Python no instalados — add ~5s de latencia por tarea
+### Bug 20: v0.2 routing pipeline silenciosamente caía a tier-3 legacy — `_BACKEND_DIR` se computaba relativo al `__file__` y no existía tras el install
 
 **Descripción:** Cuando el setting `routing_mode=v02` está activo (default en instalaciones con `--mode assistant`), el executor intenta despachar la tarea por el "v0.2 routing pipeline":
 
@@ -255,17 +255,40 @@ Verificado empíricamente en VPS:
                  ModuleNotFoundError: No module named 'routing_service'
 ```
 
-El executor corre en el host (como user `niwa`), fuera del contenedor Docker. Los módulos de v0.2 (`routing_service`, `runs_service`, `backend_adapters/*`, etc.) viven en `niwa-app/backend/` y sólo están en el `PYTHONPATH` cuando la app corre dentro del contenedor. El executor en el host no los encuentra, el import explota, la rama v02 falla, y el executor hace retry en el "tier-3 executor" (camino legacy con `claude -p` directo) que sí funciona.
+**Causa raíz** (corregida tras el reconocimiento de PR-27 — la descripción inicial de este bug era incorrecta): el `sys.path.insert` SÍ existía en `bin/task-executor.py:45-47`, pero la ruta que insertaba se computaba relativa al `__file__`:
 
-**Mitigación actual:** el retry automático funciona — las tareas se ejecutan por el camino legacy. El único coste visible es **~5s de latencia extra** por tarea + ruido de logs + trazas `ERROR` engañosas (el failure no es fatal pero lo parece).
+```python
+_BACKEND_DIR = Path(__file__).resolve().parent.parent / "niwa-app" / "backend"
+```
 
-**Ubicación:** `bin/task-executor.py:~987` (import de `routing_service` sin `sys.path` incluyendo `niwa-app/backend/`).
-**Severidad:** media (no bloquea, pero ensucia logs y añade latencia; además implica que la ruta v0.2 nunca se ejerce en producción, lo cual es preocupante — probablemente todas las instalaciones están operando en modo legacy sin enterarse).
-**PR futuro donde se arreglará:** pendiente de asignar. Dos caminos posibles:
-1. **Incluir `niwa-app/backend/` en el sys.path del executor** (add a `sys.path.insert(0, ...)` en task-executor.py pointing al backend dir). Simple, pero hay que verificar que los módulos v02 no tienen dependencias runtime en el contenedor (volúmenes, sockets, etc.).
-2. **Mover la lógica v02 a un módulo compartido** en `bin/` o `niwa-app/common/` importable desde ambos entornos.
+`setup.py::_install_systemd_unit` copia el executor a `/home/niwa/.<instance>/bin/task-executor.py`, así que en producción `_BACKEND_DIR` resolvía a `/home/niwa/.<instance>/niwa-app/backend/` — **un directorio que el installer nunca creó** (sólo copia `secrets/`, `bin/task-executor.py` y enlaces a `data/`, `logs/`). El `sys.path.insert(path_inexistente)` es un no-op silencioso; el `import routing_service` posterior fallaba con `ModuleNotFoundError`; el executor caía a "tier-3 legacy" (camino con `claude -p` directo) que sí funciona.
 
-Camino 1 es más rápido. Documentar la decisión en DECISIONS-LOG cuando se aborde.
+**Consecuencia estratégica:** la ruta v0.2 (`routing_decisions`, `backend_runs`, state machine nueva, capability profiles, approval gate, fallback chain auditable) **nunca había corrido en ningún install real**. Toda la funcionalidad v0.2 estaba silenciosamente en standby; las tareas seguían ejecutándose por el camino legacy de v0.1.
+
+**Mitigación temporal (pre-PR-27):** el fallback automático funcionaba — las tareas se ejecutaban por legacy. El único síntoma visible era **~5s de latencia extra** por tarea + ruido de logs + trazas `ERROR` engañosas. Por eso pasó desapercibido.
+
+**Ubicación:** `bin/task-executor.py:45-47` (resolución relativa al `__file__`) + `setup.py::_install_systemd_unit` (no copiaba el árbol de backend a un sitio niwa-readable).
+
+**Severidad:** **alta estratégica** (no bloquea install ni ejecución básica, pero invalida toda la verificación de PRs 01-12 en producción).
+
+**Estado:** **ARREGLADO en PR-27.** Dos cambios:
+
+1. **Installer (`setup.py::_install_systemd_unit`):** copia el árbol `niwa-app/backend/` a una ubicación niwa-readable mediante `shutil.copytree` (filtrando `__pycache__`). En rama root: `/opt/<instance>/niwa-app/backend/`. En rama user-scope: `cfg.niwa_home/niwa-app/backend/`. Idempotente en reinstall (rmtree antes de copiar). Inyecta `Environment="NIWA_BACKEND_DIR={path}"` en ambos templates de unit (root + user).
+2. **Executor (`bin/task-executor.py:45-67`):** prefiere `os.environ["NIWA_BACKEND_DIR"]` sobre el fallback relativo. Si `_BACKEND_DIR` no existe, **fail loud**: `print(FATAL...)` a stderr y `sys.exit(2)`. La fail-loud combina con PR-25: el systemd `Restart=always` reintenta, el counter `NRestarts > 0` tras 15s dispara el aborto del install con journal tail visible.
+
+Tests:
+- `tests/test_task_executor_backend_dir.py` (4 casos): env var precedence, fail-loud con exit 2 si dir falta, mensaje incluye guía dev + install, fallback relativo sigue funcionando para repo-checkout.
+- `tests/test_installer_backend_tree.py` (8 casos): repo backend tree existe, copytree con `ignore_patterns("__pycache__")`, idempotencia (rmtree o `dirs_exist_ok`), ambos unit templates exportan `NIWA_BACKEND_DIR`, executor prefiere env var sobre relativo (orden léxico).
+
+**Trade-off documentado:** ahora hay **tres copias** del árbol `niwa-app/backend/` (repo source, container Docker build, host runtime install). El SPEC §8 prohíbe duplicación gratuita pero acepta replicación operacional necesaria — ver `docs/DECISIONS-LOG.md` PR-27 Decisión 1 para la justificación. La alternativa (mover los módulos a `niwa-app/common/` importable desde ambos entornos) es un refactor mayor fuera del scope quirúrgico de PR-27.
+
+**Riesgos pendientes (follow-ups esperados tras merge):** una vez fixeado, la ruta v0.2 ejecutará por primera vez en producción. Plausible que aflore:
+- Faltan `backend_profiles` seed en install quick → routing_service sin profile activo.
+- `routing_decisions.contract_version` (PR-10a) recibe valores reales por primera vez.
+- State machine de `backend_runs` ejercita transiciones nunca antes ejecutadas en prod.
+- Path/permission de `artifact_root` puede no existir o no ser writable.
+
+Estos NO son regresiones de PR-27 — son estado preexistente que el bug 20 ocultaba. Documentar como bugs nuevos cuando aparezcan, atacar uno a uno.
 
 ## 2026-04-15 — encontrado durante la verificación de PR-25 en el VPS
 
