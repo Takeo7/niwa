@@ -17,7 +17,10 @@ import type { Task } from '../../../shared/types';
 interface Props {
   opened: boolean;
   onClose: () => void;
+  /** Full task → edit mode. ``null``/``undefined`` → create mode. */
   task?: Task | null;
+  /** Pre-select this status when creating (e.g. kanban column "+"). */
+  initialStatus?: string;
 }
 
 const STATUS_OPTIONS = [
@@ -43,7 +46,7 @@ const AREA_OPTIONS = [
   { value: 'sistema', label: 'Sistema' },
 ];
 
-export function TaskForm({ opened, onClose, task }: Props) {
+export function TaskForm({ opened, onClose, task, initialStatus }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState('pendiente');
@@ -58,14 +61,18 @@ export function TaskForm({ opened, onClose, task }: Props) {
   const updateTask = useUpdateTask();
   const { data: projects } = useProjects();
 
-  const isEditing = !!task;
+  // Only treat as editing when we have a real persisted task (has an id).
+  // Callers that want to pre-seed fields on create (e.g. the kanban "+"
+  // button pre-selecting a column's status) should use ``initialStatus``
+  // instead of synthesising a partial ``Task``.
+  const isEditing = !!task && !!task.id;
 
   useEffect(() => {
-    if (task) {
-      setTitle(task.title);
+    if (isEditing && task) {
+      setTitle(task.title || '');
       setDescription(task.description || '');
-      setStatus(task.status);
-      setPriority(task.priority);
+      setStatus(task.status || 'pendiente');
+      setPriority(task.priority || 'media');
       setProjectId(task.project_id);
       setDueDate(task.due_at ? new Date(task.due_at) : null);
       setStartDate(task.scheduled_for ? new Date(task.scheduled_for) : null);
@@ -74,7 +81,7 @@ export function TaskForm({ opened, onClose, task }: Props) {
     } else {
       setTitle('');
       setDescription('');
-      setStatus('pendiente');
+      setStatus(initialStatus || 'pendiente');
       setPriority('media');
       setProjectId(null);
       setDueDate(null);
@@ -82,7 +89,7 @@ export function TaskForm({ opened, onClose, task }: Props) {
       setArea(null);
       setUrgent(false);
     }
-  }, [task, opened]);
+  }, [task, opened, initialStatus, isEditing]);
 
   const projectOptions = (projects || []).map((p) => ({
     value: String(p.id),
@@ -194,7 +201,7 @@ export function TaskForm({ opened, onClose, task }: Props) {
           <Button
             onClick={handleSubmit}
             loading={createTask.isPending || updateTask.isPending}
-            disabled={!title.trim()}
+            disabled={!(title || '').trim()}
           >
             {isEditing ? 'Guardar' : 'Crear tarea'}
           </Button>

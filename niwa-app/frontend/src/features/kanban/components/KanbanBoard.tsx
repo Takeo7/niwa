@@ -155,7 +155,7 @@ export function KanbanBoard() {
       <TaskForm
         opened={!!addTaskStatus}
         onClose={() => setAddTaskStatus(null)}
-        task={addTaskStatus ? { status: addTaskStatus } as Task : null}
+        initialStatus={addTaskStatus || undefined}
       />
     </Box>
   );

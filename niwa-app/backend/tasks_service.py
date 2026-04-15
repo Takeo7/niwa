@@ -57,17 +57,28 @@ def fetch_tasks(area=None, status=None, today_only=False, include_done=False, pr
 def create_task(payload):
     task_id = str(uuid.uuid4())
     ts = _now_iso()
+    # Normalize fields that have a CHECK constraint in schema.sql.  The UI
+    # sends empty strings for unset selects (e.g. the area dropdown in
+    # TaskForm when the user doesn't pick one) which would otherwise
+    # violate the CHECK and blow up mid-INSERT — the ThreadingHTTPServer
+    # then closes the socket and the browser surfaces it as a cryptic
+    # "network lost" rather than a clean 4xx.  Coerce empty/None to the
+    # schema defaults so the INSERT always lands on a valid value.
+    area = (payload.get('area') or 'proyecto').strip() or 'proyecto'
+    status = (payload.get('status') or 'pendiente').strip() or 'pendiente'
+    priority = (payload.get('priority') or 'media').strip() or 'media'
+    title = (payload.get('title') or '').strip() or 'Nueva tarea'
     with _db_conn() as conn:
         conn.execute(
             'INSERT INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,assigned_to_yume,assigned_to_claude,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (
                 task_id,
-                payload.get('title', 'Nueva tarea').strip() or 'Nueva tarea',
+                title,
                 payload.get('description', ''),
-                payload.get('area', 'personal'),
+                area,
                 payload.get('project_id') or None,
-                payload.get('status', 'pendiente'),
-                payload.get('priority', 'media'),
+                status,
+                priority,
                 1 if payload.get('urgent') else 0,
                 payload.get('scheduled_for') or None,
                 payload.get('due_at') or None,
