@@ -1153,4 +1153,30 @@ La detección del modo actual la hace `detect_existing_quick_mode(niwa_home)` le
 
 **Impacto:** PR-27 abre una superficie que llevaba meses inactiva. Expectativa realista: 1-3 follow-up PRs durante 1-2 días post-merge para estabilización.
 
+## 2026-04-15 — PR-28
+
+### Decisión 1: `_quick_free_port` recibe un set de reservas explícito en vez de tener estado global
+
+**Decisión:** `_quick_free_port` añade un parámetro opcional `reserved: Optional[set]`. El wizard (`build_quick_config`) crea un `_reserved_ports: set = set()` local, lo pasa a cada llamada y lo amplía tras cada retorno. La función no mantiene estado a nivel de módulo.
+
+**Motivo:** la causa raíz de Bug 22 era que el helper sólo consultaba el SO (`detect_port_free`) y el SO no sabe que un port "ya asignado" por una llamada previa de la misma sesión está esperando bind. Un set externo que el wizard threadea es la solución más simple y mantiene el helper sin estado global. Estado global → tests con setup/teardown frágiles + bugs cuando hay múltiples wizards paralelos (que no es nuestro caso pero marca la dirección correcta).
+
+**Alternativas consideradas:**
+- (a) Variable global `_RESERVED_PORTS = set()` en `setup.py` — rechazado: pollución del namespace, tests requieren reset entre runs, no resuelve el caso de wizards paralelos.
+- (b) Que `_quick_free_port` haga `socket.bind()` real con `SO_REUSEADDR` y mantenga el socket abierto hasta el final del wizard — rechazado: complica el lifecycle, requiere cleanup explícito de los sockets, y rompe en sistemas donde el bind temporal interfiera con el real (Docker network namespaces).
+- (c) Aumentar la step entre defaults (18810, 18820, 18830, 18840) — rechazado: parche cosmético, no resuelve el problema de fondo (cualquier secuencia con dos defaults adyacentes seguiría rota).
+
+**Impacto:** +12 LOC en `setup.py`, parámetro retrocompatible (`reserved=None` mantiene el comportamiento anterior). +180 LOC tests con `monkeypatch` sobre `detect_port_free` (cero sockets reales en CI). El wizard refactor en `build_quick_config` es 4 líneas extra (`_reserved_ports.add(...)`).
+
+### Decisión 2: el helper NO se auto-añade al `reserved` set — el caller es dueño de su lifecycle
+
+**Decisión:** `_quick_free_port` lee `reserved` pero no lo muta. Es el caller quien debe hacer `reserved.add(got)` después de cada llamada exitosa.
+
+**Motivo:** mantener la simetría "función pura, caller decide qué hacer con el resultado". Si el helper se auto-añadiera, el caller que olvide añadir manualmente seguiría sufriendo Bug 22 hasta que alguien diagnostique por qué; con la responsabilidad del caller, olvidar el `add()` rompe en el siguiente test que ejerza la combinación. Tests pinean "reserved no es mutado" para evitar regresión accidental hacia el otro estilo.
+
+**Alternativas consideradas:**
+- (a) Auto-añadir al reserved — rechazado por las razones anteriores. También complica casos donde el caller quiere `_quick_free_port` puramente como "consulta sin reserva" (advanced-mode prompts).
+
+**Impacto:** trivial. Documentado en docstring del helper y test explícito (`test_reserved_not_mutated`).
+
 
