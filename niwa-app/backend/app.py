@@ -1946,18 +1946,49 @@ def _get_service_status(service_id):
     svc_def = next((s for s in SERVICES_REGISTRY if s['id'] == service_id), None)
     if not svc_def:
         return {"status": "unknown", "message": "Servicio no encontrado"}
-    # Special case: llm_anthropic with Setup Token doesn't need API key
+    # Special case: llm_anthropic
+    #
+    # This service card drives *two* disjoint surfaces in Niwa:
+    #
+    #   - CLI task execution (``claude -p``), used by the claude_code
+    #     backend_profile. This path authenticates via the Setup Token
+    #     that the user already ran ``claude setup-token`` for.
+    #   - Conversational chat (``assistant_turn``), which calls
+    #     ``https://api.anthropic.com/v1/messages`` directly and REQUIRES
+    #     a pay-per-use API key. The Setup Token does NOT work here
+    #     (different auth systems — subscription billing vs API billing).
+    #
+    # Reporting "configured ✓" when only the Setup Token is set is a
+    # "fail silently" lie that costs the user real debugging time: they
+    # see green, open the chat, hit ``llm_not_configured`` and don't
+    # understand why. Be honest: mark the state as ``warning`` with a
+    # message that spells out the gap.
     if service_id == "llm_anthropic":
-        auth_method = settings.get("svc.llm.anthropic.auth_method", "") or settings.get("int.llm_auth_method", "api_key")
-        if auth_method == "setup_token":
-            token = settings.get("svc.llm.anthropic.setup_token", "") or settings.get("int.llm_setup_token", "")
-            if token:
-                return {"status": "configured", "message": "Setup Token configurado ✓"}
-            return {"status": "not_configured", "message": "Falta el Setup Token"}
-        # Also check if legacy setup token exists even without explicit auth_method
-        legacy_token = settings.get("int.llm_setup_token", "")
-        if legacy_token and settings.get("int.llm_provider", "") in ("claude", "anthropic", ""):
-            return {"status": "configured", "message": "Setup Token configurado ✓ (legacy)"}
+        auth_method = (
+            settings.get("svc.llm.anthropic.auth_method", "")
+            or settings.get("int.llm_auth_method", "api_key")
+        )
+        api_key = settings.get("svc.llm.anthropic.api_key", "")
+        setup_token = (
+            settings.get("svc.llm.anthropic.setup_token", "")
+            or settings.get("int.llm_setup_token", "")
+        )
+        if api_key:
+            return {"status": "configured", "message": "API key configurada ✓ (chat y CLI)"}
+        if setup_token:
+            # Covers the case where auth_method is explicitly setup_token
+            # AND the legacy case where a token exists without the
+            # explicit auth_method flag (e.g. installs pre-PR-10 that
+            # wrote only ``int.llm_setup_token``).
+            _ = auth_method  # retained for future branching if needed
+            return {
+                "status": "warning",
+                "message": (
+                    "Setup Token OK para tareas (CLI). "
+                    "Falta API key para el chat conversacional."
+                ),
+            }
+        return {"status": "not_configured", "message": "Sin API key ni Setup Token"}
     # Special case: llm_openai with OAuth doesn't need API key
     if service_id == "llm_openai":
         auth_method = settings.get("svc.llm.openai.auth_method", "api_key")
