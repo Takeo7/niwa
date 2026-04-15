@@ -204,7 +204,9 @@ Verificado en producción (VPS real) tras el install del 2026-04-15: el executor
 
 **Follow-ups documentados para PRs posteriores:**
 
-- **Sub-bug 18a (severidad media, pendiente):** `niwa-<instance>-hosting.service` tiene el mismo patrón (`StandardOutput=append:/opt/<instance>/logs/hosting.log` + `User=niwa`) pero no crashea porque `bin/hosting-server.py` no hace Python-level `open()` del fichero — usa `print()` y hereda el fd de systemd. Bug latente: cualquier futuro intento de logging Python-level en hosting reproducirá Bug 18.
+- **Sub-bug 18a (severidad media):** `niwa-<instance>-hosting.service` tiene el mismo patrón (`StandardOutput=append:/opt/<instance>/logs/hosting.log` + `User=niwa`) pero no crashea porque `bin/hosting-server.py` no hace Python-level `open()` del fichero — usa `print()` y hereda el fd de systemd. Bug latente: cualquier futuro intento de logging Python-level en hosting reproducirá Bug 18.
+
+  **Estado:** **ARREGLADO (defense-in-depth) en PR-26.** `install_hosting_server` ahora hace `hosting_log.touch(exist_ok=True)` + `chown niwa:niwa hosting_log` antes del `systemctl enable --now`, replicando el patrón que PR-23 aplicó al executor. Cualquier logger Python-level que se añada en el futuro a `hosting-server.py` encontrará el fichero ya creado con ownership correcto y no reproducirá Bug 18. Test en `tests/test_installer_hosting_path.py::TestHostingLogPreCreated` cubre el touch, el chown y el orden relativo. Además, PR-25 ya cubre la detección: si el crash-loop volviera a ocurrir (por cualquier causa), el health check de los 15s post-enable abortaría el install loudly.
 - **Sub-bug 18b (severidad media):** `setup.py` reporta "✓ Enabled and started" tras `systemctl enable --now` sin verificar que el servicio esté _stable_ (i.e. no en restart loop). Propuesta: esperar 15s y confirmar que `systemctl is-active == active` y el contador de restarts no está creciendo. Si no, abortar el install con mensaje claro. Esto matches el principio "fail loud" del proyecto.
 
   **Estado:** **ARREGLADO en PR-25.** `setup.py` incorpora tres helpers puros stdlib (`_wait_for_service_stable`, `_verify_service_or_abort`, `_reset_failed_unit`). Tras cada `systemctl enable --now` satisfactorio (executor y hosting, tanto system-scope root como user-scope non-root), el installer espera 15s y comprueba que `systemctl is-active == "active"` y `NRestarts == 0`. Si no cumple, `sys.exit(1)` con dump del journal (últimas 20 líneas), referencias a Bug 18/19 y el comando `chown niwa:niwa /opt/<instance>/logs/{executor,hosting}.log` para desbloquear manualmente una instalación ya rota. Antes de cada `enable --now` se llama `systemctl reset-failed` (best-effort) para que un reinstall sobre una unidad previamente crasheada no intoxique el contador `NRestarts` y dispare un falso positivo. Tests en `tests/test_installer_service_health.py` (18 casos) cubren todos los caminos con `sleep` y `runner` inyectados para coste cero en CI. Efecto de borde útil: el check aplica también al hosting, cerrando de paso el patrón latente de Bug 18a (el hosting hoy no crashea porque no hace Python-level `open()` de su log, pero cualquier regresión futura quedaría detectada inmediatamente por el mismo helper).
@@ -264,3 +266,51 @@ El executor corre en el host (como user `niwa`), fuera del contenedor Docker. Lo
 2. **Mover la lógica v02 a un módulo compartido** en `bin/` o `niwa-app/common/` importable desde ambos entornos.
 
 Camino 1 es más rápido. Documentar la decisión en DECISIONS-LOG cuando se aborde.
+
+## 2026-04-15 — encontrado durante la verificación de PR-25 en el VPS
+
+### Bug 21: hosting-server.service apunta a /root/ y crashea con Permission denied bajo User=niwa
+
+**Descripción:** En un fresh install `./niwa install --quick --mode assistant --yes` con `sudo`, el servicio `niwa-<instance>-hosting.service` entra en crash-loop inmediato con:
+
+```
+/usr/bin/python3: can't open file '/root/.niwa/bin/hosting-server.py': [Errno 13] Permission denied
+```
+
+**Cadena causal:**
+
+1. `install_hosting_server` copia `bin/hosting-server.py` a `cfg.niwa_home / "bin" / "hosting-server.py"`. Cuando el installer corre con `sudo`, `cfg.niwa_home = /root/.<instance>` (HOME del invoker root).
+2. `/root/` tiene permisos `drwx------ (0700)` por política estándar de distro — sólo `root` puede recorrerlo.
+3. El systemd unit que se escribe contiene `ExecStart=/usr/bin/env python3 {dest}` donde `dest` apunta a la copia bajo `/root/...`, pero `User=niwa`.
+4. systemd hace `setuid(niwa)` antes de lanzar `python3`. El python no puede `stat()` el path porque el directorio padre es inaccesible para el uid del proceso → exit code 2.
+5. `Restart=always`, `RestartSec=10` → crash-loop eterno.
+
+Paralelismo con Bug 18: el executor YA sufrió un bug estructuralmente análogo (directorio root-only bloquea a niwa) y lo resolvió en `_install_systemd_unit` copiando el binary a `/home/niwa/.<instance>/bin/task-executor.py`. `install_hosting_server` nunca replicó ese patrón — es un Chesterton's fence al revés.
+
+**Detección:** gracias a PR-25, el install abortó loudly con journal tail en vez de quedarse en crash-loop silencioso. Sin PR-25 este bug habría pasado desapercibido igual que Bug 18 durante horas.
+
+**Ubicación:** `setup.py::install_hosting_server`, rama `run_as_root` (líneas ~2198-2227 pre-fix). El template del unit usa `{dest}` = `cfg.niwa_home / "bin" / "hosting-server.py"` sin el path swap a `/home/niwa/`.
+
+**Severidad:** **alta** (bloqueante; el hosting server no arranca en ningún fresh install con `sudo`).
+
+**Estado:** **ARREGLADO en PR-26.** `install_hosting_server` ahora, en la rama root:
+
+1. Calcula `niwa_home = /home/niwa/.<instance>`.
+2. Copia el binary a `niwa_home/bin/hosting-server.py`, hace `chmod 0755` y `chown niwa:niwa`.
+3. Reasigna `dest = niwa_hosting_dest` antes de construir el template del unit, así `ExecStart=... {dest}` baked-in apunta al path niwa-readable.
+4. Pre-crea `hosting.log` con `touch(exist_ok=True)` + `chown niwa:niwa` (defense-in-depth contra sub-bug 18a).
+5. `chown -R niwa:niwa` sobre `hosting_projects_dir` para que el servidor pueda escribir bundles de proyectos.
+
+Test en `tests/test_installer_hosting_path.py` (7 casos): regex estático sobre `setup.py` que pin-ean el copy, el chown, el `dest = niwa_hosting_dest` antes del template, la ausencia de `/root/` en el unit body, el touch+chown del log, y la persistencia del `_verify_service_or_abort` de PR-25.
+
+### Bug 22: _quick_free_port no trackea asignaciones intra-sesión → gateway y caddy pueden pelearse por el mismo puerto
+
+**Descripción:** Durante un install con el puerto default de gateway (`18810`) ocupado, `_quick_free_port` encuentra `18811` como siguiente libre y lo asigna al gateway. Cuando la misma sesión pide puerto para caddy, `_quick_free_port` vuelve a consultar el SO y — como el gateway aún no ha hecho bind — también devuelve `18811`. Ambos servicios intentan usar el mismo puerto y uno de los dos falla al arrancar.
+
+**Repro observada en VPS:** dos intentos consecutivos de `./niwa install --quick --mode assistant --yes` en un VPS con un install previo colgado. Workaround: limpiar containers (`docker rm -f $(docker ps -aq)`) antes de reinstalar.
+
+**Ubicación:** `setup.py::_quick_free_port` (implementación actual no mantiene un set de puertos ya reservados durante la sesión del wizard).
+
+**Severidad:** media (no corrupt data, no bloquea fresh installs sin ocupación previa; sí rompe reinstalls o installs en hosts compartidos). Encontrado por Claude-VPS durante la verificación de PR-25.
+
+**PR futuro donde se arreglará:** pendiente de asignar. Fix propuesto: que `_quick_free_port` acepte un set `reserved: set[int]` (inicializado vacío al empezar el wizard y al que se añaden los puertos ya asignados) y lo consulte antes de devolver un candidato. ~15 LOC + test unitario con sockets falseados.
