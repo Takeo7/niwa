@@ -1847,6 +1847,17 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             if target.exists() or target.is_symlink():
                 target.unlink() if target.is_symlink() else shutil.rmtree(str(target))
             target.symlink_to(shared_dir / d)
+        # Pre-create the executor log file so systemd doesn't create it
+        # with root ownership on first start.  Systemd's
+        # ``StandardOutput=append:<path>`` below opens the file with the
+        # service manager's euid (root), creating a root-owned file in
+        # a niwa-owned directory — and the Python executor (running as
+        # ``User=niwa``) then crash-loops in
+        # ``RotatingFileHandler(LOG_PATH)`` with ``PermissionError``.
+        # Touching it here means the subsequent ``chown -R`` pins the
+        # file to ``niwa:niwa`` before systemd ever sees it, so the
+        # service's ``append:`` just reuses the existing fd.
+        (shared_dir / "logs" / "executor.log").touch(exist_ok=True)
         subprocess.run(["chown", "-R", "niwa:niwa", str(niwa_home), str(shared_dir)], check=True)
         subprocess.run(["loginctl", "enable-linger", "niwa"], capture_output=True)
         executor_path = niwa_home / "bin" / "task-executor.py"

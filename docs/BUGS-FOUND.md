@@ -169,3 +169,40 @@ Scope estimado: ~200-400 LOC (router + adapters + tests).
 **Ubicación:** `niwa-app/backend/app.py::_get_service_status` caso `service_id == "llm_anthropic"` (líneas ~1949-1960 pre-fix).
 **Severidad:** baja (confunde pero no corrompe datos ni rompe nada que ya funcionaba).
 **Estado:** **ARREGLADO en PR-22.** El status ahora devuelve `warning` cuando sólo hay Setup Token, con mensaje explícito: "Setup Token OK para tareas (CLI). Falta API key para el chat conversacional." `configured` sólo si la API key está presente. Test matrix en `tests/test_service_status_llm_anthropic.py` cubre las 4 celdas (api_key × setup_token). Relacionado con el gap de Bug 16 — ese gap persiste y justifica el `warning`; cuando Bug 16 se resuelva (runtime CLI para chat), el Setup Token solo podría volver a ser "configured" honestamente.
+
+## 2026-04-15 — encontrado durante PR-23
+
+### Bug 18: Executor systemd crash-loop silencioso desde fresh install — log file creado con ownership root
+
+**Descripción:** Tras un `./niwa install --quick --mode assistant --yes` con `sudo`, el servicio `niwa-<instance>-executor.service` entra en crash-loop inmediato con:
+
+```
+PermissionError: [Errno 13] Permission denied: '/home/niwa/.niwa/logs/executor.log'
+```
+
+**Cadena causal:**
+
+1. `setup.py::_install_systemd_unit` crea `/opt/<instance>/logs/` vacío vía `shutil.copytree`, hace `chown -R niwa:niwa /opt/<instance>` y `systemctl enable --now`.
+2. El unit incluye `StandardOutput=append:/opt/<instance>/logs/executor.log` y `StandardError=append:...`.
+3. systemd abre ese fichero para append con su euid (root) ANTES de dropear privilegios a `User=niwa`. Si el fichero no existe, lo crea como `root:root 0644` dentro de un directorio `niwa:niwa`.
+4. El executor Python (ya corriendo como niwa) intenta abrir el mismo fichero vía `RotatingFileHandler(LOG_PATH)` en `bin/task-executor.py:185` y falla con `PermissionError`.
+5. `Restart=always`, `RestartSec=10` → restart loop eterno.
+
+Verificado en producción (VPS real) tras el install del 2026-04-15: el executor llevaba 830+ restarts acumulados desde el install original. Nadie se enteró porque:
+
+- `systemctl is-active` reporta "activating" brevemente entre reinicios.
+- El install de `setup.py` imprime "✓ Enabled and started niwa-niwa-executor.service" ANTES del primer restart failure — no hay verificación post-install de que el servicio esté efectivamente estable.
+- La UI de Niwa no muestra el estado del executor en ningún panel visible.
+
+**Impacto:** El executor, componente crítico que ejecuta tareas vía `claude -p`, está **totalmente caído desde la instalación** en cualquier fresh install con `sudo` (que es el camino principal). Ningún task se procesa hasta que el usuario chowne manualmente el fichero. Fail-silent clase A.
+
+**Ubicación:** `setup.py::_install_systemd_unit` (rama `run_as_root`, líneas ~1824-1900 pre-fix). El unit template contiene `StandardOutput=append:{log_path}` pero no se pre-crea el fichero con ownership correcto antes de `systemctl enable`.
+
+**Severidad:** **alta** (bloqueante; el executor no funciona en ningún fresh install).
+
+**Estado:** **ARREGLADO en PR-23.** `setup.py` ahora hace `(shared_dir / "logs" / "executor.log").touch(exist_ok=True)` antes del `chown -R niwa:niwa shared_dir`, de modo que el fichero existe con ownership correcto (niwa:niwa) cuando systemd lo abre para append — systemd reutiliza el fd en vez de crearlo como root. Test en `tests/test_installer_executor_log.py` incluye regresión estática (el touch debe aparecer antes del chown en source order) + simulación de la cadena de permisos. Verificado en VPS real: `chown niwa:niwa /opt/<instance>/logs/{executor,hosting}.log` unblockea el crash-loop ya instalado; para instalaciones futuras el fix preventivo de setup.py resuelve el bug desde el origen.
+
+**Follow-ups documentados para PRs posteriores:**
+
+- **Sub-bug 18a (severidad media, pendiente):** `niwa-<instance>-hosting.service` tiene el mismo patrón (`StandardOutput=append:/opt/<instance>/logs/hosting.log` + `User=niwa`) pero no crashea porque `bin/hosting-server.py` no hace Python-level `open()` del fichero — usa `print()` y hereda el fd de systemd. Bug latente: cualquier futuro intento de logging Python-level en hosting reproducirá Bug 18.
+- **Sub-bug 18b (severidad media, pendiente):** `setup.py` reporta "✓ Enabled and started" tras `systemctl enable --now` sin verificar que el servicio esté _stable_ (i.e. no en restart loop). Propuesta: esperar 15s y confirmar que `systemctl is-active == active` y el contador de restarts no está creciendo. Si no, abortar el install con mensaje claro. Esto matches el principio "fail loud" del proyecto.
