@@ -744,6 +744,51 @@ from tasks_service import (
 
 # ── Chat CRUD ──
 
+def _apply_sql_idempotent(conn, sql):
+    """Apply a SQL script idempotently, emulating ADD COLUMN IF NOT EXISTS.
+
+    SQLite does not support ``ALTER TABLE ADD COLUMN IF NOT EXISTS``, so on a
+    fresh install (where schema.sql already defines the v0.2 columns in
+    ``tasks``) applying migration 007 via ``executescript`` fails with
+    ``duplicate column name``. This helper splits the script into individual
+    statements and, for each ``ALTER TABLE ADD COLUMN``, checks
+    ``PRAGMA table_info`` first and skips the statement if the column already
+    exists. All other statements are executed directly.
+
+    Keep this behaviourally equivalent to the ``_apply_sql_idempotent`` helper
+    used in tests/test_pr01_schema.py so production init_db and the test
+    harness agree on migration semantics.
+    """
+    # Strip full-line comments and trailing " -- ..." comments so the split
+    # on ';' isn't thrown off by text inside comments.
+    lines = []
+    for line in sql.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('--') or not stripped:
+            continue
+        if ' --' in line:
+            line = line[:line.index(' --')]
+        lines.append(line)
+    cleaned = '\n'.join(lines)
+
+    for stmt in cleaned.split(';'):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        m = re.match(
+            r'ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)',
+            stmt, re.IGNORECASE,
+        )
+        if m:
+            table, column = m.group(1), m.group(2)
+            existing = {r[1] for r in conn.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()}
+            if column in existing:
+                continue
+        conn.execute(stmt)
+
+
 def _run_migrations():
     """Apply pending SQL migrations from db/migrations/."""
     import glob
@@ -781,7 +826,10 @@ def _run_migrations():
         logger.info("Applying migration %s", filename)
         sql = Path(f).read_text()
         try:
-            c.executescript(sql)
+            # Use the same idempotent apply strategy as tests so that a fresh
+            # install (schema.sql already contains the v0.2 columns) doesn't
+            # blow up on ALTER TABLE ADD COLUMN in migration 007.
+            _apply_sql_idempotent(c, sql)
             c.execute("INSERT INTO schema_version (version, filename) VALUES (?, ?)", (version, filename))
             c.commit()
             logger.info("Migration %s applied", filename)
