@@ -57,6 +57,33 @@ _COOKIE_DOMAIN_ATTR = f'Domain={NIWA_APP_COOKIE_DOMAIN}; ' if NIWA_APP_COOKIE_DO
 LOGIN_RATE_LIMIT_ATTEMPTS = int(os.environ.get('NIWA_APP_LOGIN_ATTEMPTS', '5'))
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('NIWA_APP_LOGIN_WINDOW_SECONDS', '900'))
 NIWA_APP_PUBLIC_BASE_URL = os.environ.get('NIWA_APP_PUBLIC_BASE_URL', f'http://127.0.0.1:{PORT}')
+# PR-40 / Bug 29: mark the session cookie ``Secure`` whenever the
+# request is known to be over TLS. Three signals, in priority
+# order (first match wins):
+#   1. ``NIWA_APP_COOKIE_SECURE=1`` explicit override.
+#   2. ``NIWA_APP_PUBLIC_BASE_URL`` starts with ``https://``.
+#   3. ``X-Forwarded-Proto: https`` from a trusted proxy (same
+#      rule as ``client_ip`` — the proxy must be in
+#      ``NIWA_TRUSTED_PROXIES``, otherwise a rogue client could
+#      forge the header and trick us into emitting Secure on a
+#      plain http connection).
+# Caddy / cloudflared / external nginx all set
+# ``X-Forwarded-Proto``, so an operator who just docker-composed
+# with a TLS frontal gets the flag automatically even if
+# ``NIWA_APP_PUBLIC_BASE_URL`` is the localhost default from the
+# quick-install.
+_COOKIE_FORCE_SECURE = os.environ.get('NIWA_APP_COOKIE_SECURE', '').strip() == '1'
+_COOKIE_BASE_URL_IS_HTTPS = NIWA_APP_PUBLIC_BASE_URL.lower().startswith('https://')
+
+
+def _cookie_secure_attr(handler) -> str:
+    """Return ``'Secure; '`` or ``''`` for the current request."""
+    if _COOKIE_FORCE_SECURE or _COOKIE_BASE_URL_IS_HTTPS:
+        return 'Secure; '
+    proto = handler.headers.get('X-Forwarded-Proto', '').strip().lower()
+    if proto == 'https' and _is_trusted_proxy(handler.client_address[0]):
+        return 'Secure; '
+    return ''
 # ── Service-to-service auth (PR-09) ──
 # MCP server authenticates via Bearer token in Authorization header.
 # Priority: env var > settings table.  Empty = disabled (all s2s calls rejected).
@@ -3174,7 +3201,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(react_index.read_text())
             return self._html(render_login_page())
         if path == '/logout':
-            return self._redirect('/login', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age=0'})
+            return self._redirect('/login', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}=; Path=/; {_COOKIE_DOMAIN_ATTR}{_cookie_secure_attr(self)}HttpOnly; SameSite=Lax; Max-Age=0'})
         if path.startswith('/static/'):
             rel = path[len('/static/'):]
             return self._serve_static(rel)
@@ -3862,7 +3889,7 @@ class Handler(BaseHTTPRequestHandler):
             if hmac.compare_digest(username, NIWA_APP_USERNAME) and hmac.compare_digest(password, NIWA_APP_PASSWORD):
                 register_login_attempt(key, True)
                 token = build_session_token(username)
-                return self._redirect('/', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}={token}; Path=/; {_COOKIE_DOMAIN_ATTR}HttpOnly; SameSite=Lax; Max-Age={NIWA_APP_SESSION_TTL_HOURS * 3600}'})
+                return self._redirect('/', headers={'Set-Cookie': f'{NIWA_APP_SESSION_COOKIE}={token}; Path=/; {_COOKIE_DOMAIN_ATTR}{_cookie_secure_attr(self)}HttpOnly; SameSite=Lax; Max-Age={NIWA_APP_SESSION_TTL_HOURS * 3600}'})
             register_login_attempt(key, False)
             return self._html(render_login_page('Usuario o contraseña incorrectos.'), 401)
         if path.startswith('/api/') and self._require_auth():
