@@ -2116,6 +2116,34 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         backend_dir_env = str(backend_runtime_dir)
+        # PR-33: scoped Claude Code permissions for user-scope
+        # installs (mirrors the root-scope block above). In user
+        # mode the invoking user IS the executor user, so
+        # settings.json goes into their own ~/.claude/.
+        claude_settings_dir = Path.home() / ".claude"
+        claude_settings_dir.mkdir(parents=True, exist_ok=True)
+        claude_settings = claude_settings_dir / "settings.json"
+        existing_usr = {}
+        if claude_settings.exists():
+            try:
+                existing_usr = json.loads(claude_settings.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        data_dir = str(cfg.niwa_home / "data")
+        existing_usr["permissions"] = {
+            "allow": [
+                "Bash(command:*)",
+                "Read(file_path:*)",
+                f"Write(file_path:{data_dir}/*)",
+                f"Edit(file_path:{data_dir}/*)",
+                f"Write(file_path:{cfg.niwa_home}/*)",
+                f"Edit(file_path:{cfg.niwa_home}/*)",
+                "Write(file_path:/tmp/*)",
+                "Edit(file_path:/tmp/*)",
+            ],
+        }
+        claude_settings.write_text(json.dumps(existing_usr, indent=2) + "\n")
+        ok("Created scoped Claude Code permissions for executor")
 
     unit_name = f"niwa-{cfg.instance_name}-executor.service"
 
