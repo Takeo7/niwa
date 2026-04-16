@@ -1181,12 +1181,26 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
     # project row (files were written) or rmdirs the empty dir.
     auto_project_ctx = _auto_project_prepare(task_dict)
 
+    # PR-41 / Bug 25: tmpdirs created by ``_prepare_backend_env`` for
+    # the codex adapter (CODEX_HOME) must be cleaned up even if the
+    # adapter crashes. Mutated by the body; read by the ``finally``.
+    codex_tmpdirs: list[str] = []
+
     try:
         return _execute_task_v02_body(
             task_dict, task_id,
             routing_service, runs_service, get_execution_registry,
+            codex_tmpdirs=codex_tmpdirs,
         )
     finally:
+        for tmpdir in codex_tmpdirs:
+            try:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                log.exception(
+                    "codex tmpdir cleanup failed for task %s: %s",
+                    task_id, tmpdir,
+                )
         if auto_project_ctx is not None:
             try:
                 _auto_project_finalize(auto_project_ctx, task_id)
@@ -1202,7 +1216,11 @@ def _execute_task_v02_body(
     routing_service,
     runs_service,
     get_execution_registry,
+    *,
+    codex_tmpdirs: list[str] | None = None,
 ) -> tuple[bool, str]:
+    if codex_tmpdirs is None:
+        codex_tmpdirs = []
     # Step 1: Route
     with _conn() as c:
         decision = routing_service.decide(task_dict, c)
@@ -1311,6 +1329,13 @@ def _execute_task_v02_body(
 
         # Step 3: Prepare credentials for this backend
         extra_env = _prepare_backend_env(profile)
+        # PR-41 / Bug 25: track the codex tmpdir for cleanup in the
+        # wrapper's finally. _prepare_backend_env creates
+        # /tmp/niwa-codex-v02-* on demand and the adapter only uses
+        # it for the duration of one run. Leaking is slow accumulation
+        # under /tmp on repeated codex tasks.
+        if extra_env and "CODEX_HOME" in extra_env:
+            codex_tmpdirs.append(extra_env["CODEX_HOME"])
         if extra_env is None:
             # No credentials available — fail this run, do NOT escalate.
             # queued → failed directly (run never started).

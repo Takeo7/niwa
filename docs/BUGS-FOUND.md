@@ -431,7 +431,7 @@ Si `artifact_root` apunta a un path sin permisos para el user `niwa` (p.ej., den
 
 **Detectado por:** Explore agent (audit pre-mortem).
 
-**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: envolver `mkdir` en try/except específico, transicionar el run a `failed` con `error_code='artifact_root_mkdir_failed'` antes de re-lanzar.
+**Estado:** **ARREGLADO en PR-41.** Extraído `_ensure_artifact_root(run)` en el adapter: try/except alrededor del mkdir. En fallo llama `_finish_run_failed(run_id, error_code='artifact_root_mkdir_failed', exit_code=1, event_message)` (record_event + finish_run via `self._db_conn_factory`) y retorna dict `{status: 'failed', outcome: 'failure', error_code: 'artifact_root_mkdir_failed', reason: ...}`. El caller (`_execute_task_v02_body`) trata el resultado como no-transient → NO escalar a fallback (el siguiente backend usaría el mismo path y fallaría igual). El PR-39 banner surfacea el código específico al operador. Tests en `tests/test_bug24_bug25_cleanup.py` (4 casos Bug 24): retorno failed dict, run transitioned (no linger en starting), noop sin artifact_root, noop con dir existente.
 
 ### Bug 25: Codex tmpdir (`CODEX_HOME`) leak si `adapter.start()` falla en v0.2 path
 
@@ -450,7 +450,7 @@ El path queda únicamente en el dict `extra_env` que se pasa al adapter. El path
 
 **Detectado por:** Explore agent (audit pre-mortem).
 
-**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: guardar `codex_home` en una variable de scope `_execute_task_v02` y limpiarlo en un finally al final de la función. Alternativa más limpia: pasar un cleanup callback al adapter.
+**Estado:** **ARREGLADO en PR-41.** Wrapper `_execute_task_v02` declara `codex_tmpdirs: list[str] = []` en su scope, lo pasa al body (`_execute_task_v02_body`), y en el `finally` hace `shutil.rmtree(tmpdir, ignore_errors=True)` para cada entry. El body, tras `_prepare_backend_env`, si `extra_env` contiene `CODEX_HOME`, lo appendea al tracker. El cleanup corre incluso si el adapter crashea o el body retorna early. Orden en finally: codex tmpdirs ANTES de `_auto_project_finalize` (FS cheap primero, DB work después). Tests en `tests/test_bug24_bug25_cleanup.py` (5 casos Bug 25): guards estáticos del source (declaración de lista, append, rmtree, orden), más contract test de que `_prepare_backend_env({slug: 'codex'})` expone `CODEX_HOME` (invariante sobre el que el tracker depende).
 
 ---
 
