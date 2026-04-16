@@ -462,3 +462,55 @@ El path queda únicamente en el dict `extra_env` que se pasa al adapter. El path
 - **"Heartbeat thread daemon=True"** — comportamiento intencional, no bug.
 - **"UTF-8 encoding edge case"** — especulación.
 - **"State machine `queued → failed` unused"** — observación de diseño, no bug funcional.
+
+## 2026-04-16 — encontrado durante review externa (GPT 5.4 Pro sobre v0.2, verificado contra código)
+
+La humana compartió una lectura de un modelo externo (GPT 5.4 Pro, modo investigador) sobre v0.2. Verificamos cada claim contra el código real. De los 8 hallazgos, 2 eran accionables quirúrgicamente (arreglados en PR-30), 3 son bugs reales pero fuera de scope (documentados abajo), y 3 eran observaciones pre-existentes ya conocidas o by-design.
+
+### Bug 26: `run_niwa_update()` hacía `git pull origin main` hardcodeado — mezcla código de otra rama
+
+**Descripción:** `niwa-app/backend/app.py::run_niwa_update()` contenía `["git", "pull", "origin", "main"]` hardcodeado (línea ~2369 pre-fix). En installs corriendo la rama `v0.2`, el botón "Actualizar" de la UI tiraba de `main` encima de `v0.2`, mezclando código de release lines distintas. Bug claro de release management.
+
+**Ubicación:** `niwa-app/backend/app.py:2369` (pre-fix).
+**Severidad:** **alta** (corrompe silenciosamente la release).
+**Estado:** **ARREGLADO en PR-30.** Ahora detecta la rama actual con `git rev-parse --abbrev-ref HEAD` antes del pull. Fallback a `main` si git falla. Test estático en `tests/test_update_and_migrations.py` pinea que no haya hardcode de `"main"` y que se use `current_branch` variable.
+
+### Bug 27: `_run_migrations()` no abortaba en fallo — servicio arrancaba con schema parcialmente migrado
+
+**Descripción:** `niwa-app/backend/app.py::_run_migrations()` (líneas 847-849 pre-fix) capturaba excepciones de migraciones con `logger.error` + `break`. El servicio seguía arrancando sobre un schema que no coincidía con lo que el código esperaba → errores runtime sutiles horas después, casi imposibles de diagnosticar.
+
+**Ubicación:** `niwa-app/backend/app.py:847-849` (pre-fix).
+**Severidad:** **alta** (misma clase de "fail silent" que PR-25 cerró para systemd).
+**Estado:** **ARREGLADO en PR-30.** Ahora `raise SystemExit(f"FATAL: migration {filename} failed: {e}. ...")`. El servicio para con mensaje claro. Test estático en `tests/test_update_and_migrations.py` pinea que la excepción del except block sea `SystemExit` y no un bare `break`.
+
+### Bug 28: OAuth tokens persisted en SQLite en claro + endpoint `/api/auth/oauth/import` los acepta por HTTP
+
+**Descripción:** `_save_oauth_tokens` (`app.py:1857`) persiste `access_token`, `refresh_token`, `id_token` directamente en SQLite sin cifrar. El endpoint `POST /api/auth/oauth/import` (`app.py:3844`) acepta un JSON con tokens y los guarda. Cualquiera con acceso al fichero de la DB (backup mal protegido, compromiso del host) se lleva credenciales reutilizables.
+
+**Ubicación:** `app.py:1857` (`_save_oauth_tokens`) y `app.py:3844` (endpoint import).
+**Severidad:** **media-alta** (scope: Niwa es single-user single-host, la DB tiene ownership `niwa:niwa` en `/opt/<instance>/data/`, y el endpoint está detrás de auth. El riesgo real es backup sin cifrar copiado a un lugar público, o acceso root comprometido donde el atacante ya tiene acceso a todo).
+**PR futuro donde se arreglará:** pendiente de asignar. Scope estimado: ~200+ LOC (cifrado at-rest con key derivada de password o KDF + columna cifrada + decrypt on read). Requiere decisión de producto sobre key management.
+
+### Bug 29: Cookie de sesión sin flag `Secure` — expuesta en tránsito si no hay TLS externo
+
+**Descripción:** `app.py:3833` setea la cookie de sesión con `HttpOnly; SameSite=Lax` pero sin `Secure`. Si el operador expone Niwa sin TLS externo (p.ej., sin cloudflared o reverse proxy), la cookie viaja en claro y puede ser capturada por MITM. El Caddyfile tiene `auto_https off` (caddy es reverse proxy interno, no TLS terminator).
+
+**Ubicación:** `app.py:3833` (Set-Cookie header).
+**Severidad:** **media** (el modelo operacional de Niwa asume TLS del reverse proxy externo, pero no valida que esté configurado; un operador que se equivoque queda expuesto sin warning).
+**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: añadir `Secure` condicionalmente cuando `cfg.public_domain` está set (indica acceso externo, implica que debería haber TLS). ~5 LOC.
+
+### Bug 30: CI (`mcp-smoke.yml`) no prueba la integración MCP end-to-end
+
+**Descripción:** `mcp-smoke.yml` declara explícitamente que no levanta el MCP gateway completo y usa un compose mínimo "app only". La integración más peligrosa (MCP gateway → app → executor → LLM) no tiene CI real.
+
+**Ubicación:** `.github/workflows/mcp-smoke.yml`.
+**Severidad:** **media** (no causa bugs pero tampoco los detecta — cualquier regresión en el flow MCP end-to-end pasa desapercibida hasta el VPS).
+**PR futuro donde se arreglará:** pendiente de asignar. Scope: compose con gateway+app mínimos, seed de task, smoke vía MCP tool call, timeout 60s.
+
+---
+
+**Hallazgos de la review externa que NO documenté como bugs nuevos:**
+
+- **Terminal privileged** — pre-existente, ya mitigado: está en `docker-compose.advanced.yml` (no en el base), fuera del `--quick` install. Test `test_approval_gate_integration.py:10-11` pinea que el compose principal NO tiene privileged.
+- **Fragilidad estructural (scheduler INSERT, globals en tasks_helpers, NIWA_VERSION=0.1.0)** — deuda técnica pre-existente, no bugs funcionales. Documentada en la section de limpieza v0.3.
+- **Hosting module smells (paths, http://, pkill)** — pre-existente, no bloquea. Limpieza v0.3.
