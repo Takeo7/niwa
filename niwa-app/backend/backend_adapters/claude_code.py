@@ -490,7 +490,7 @@ class ClaudeCodeAdapter(BackendAdapter):
         if profile and profile.get("command_template"):
             cli_parts = shlex.split(profile["command_template"])
 
-        cmd = cli_parts + ["-p", "--output-format", "stream-json"]
+        cmd = cli_parts + ["-p", "--output-format", "stream-json", "--verbose"]
         if model:
             cmd.extend(["--model", model])
         if resume_session_id:
