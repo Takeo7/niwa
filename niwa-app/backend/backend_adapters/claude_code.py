@@ -495,6 +495,12 @@ class ClaudeCodeAdapter(BackendAdapter):
             cmd.extend(["--model", model])
         if resume_session_id:
             cmd.extend(["--resume", resume_session_id])
+        # PR-33: the ``executor.dangerous_mode`` DB setting allows
+        # the operator to opt into unrestricted mode via the UI.
+        # Default is scoped permissions via Claude Code's native
+        # settings.json (created by setup.py during install).
+        if profile and profile.get("_dangerous_mode"):
+            cmd.append("--dangerously-skip-permissions")
         return cmd
 
     @staticmethod
@@ -805,9 +811,52 @@ class ClaudeCodeAdapter(BackendAdapter):
 
             usage_json = json.dumps(usage)
 
-            # Determine outcome from exit code
+            # Determine outcome from exit code + stream-json result.
+            #
+            # PR-33: exit code 0 does NOT guarantee the task actually
+            # succeeded. Claude CLI exits 0 even when every write was
+            # blocked by permission denials. We inspect the final
+            # ``result`` event in the stream for ``is_error`` and
+            # ``permission_denials`` to catch "false succeeded" cases.
+            # The operator then sees the task as FAILED with a clear
+            # reason instead of a misleading "hecha" with no output.
+            error_code = None
             if exit_code == 0:
                 outcome = "success"
+                # Check stream-json result event for is_error or
+                # permission denials — override to failure if found.
+                for rl in reversed(raw_lines):
+                    try:
+                        m = json.loads(rl)
+                        if m.get("type") != "result":
+                            continue
+                        perm_denials = m.get("permission_denials") or []
+                        if perm_denials:
+                            outcome = "failure"
+                            error_code = "permission_denied"
+                            if conn:
+                                runs_service.record_event(
+                                    run_id, "error", conn,
+                                    message=(
+                                        f"Task failed: {len(perm_denials)} "
+                                        f"permission denial(s). Claude Code "
+                                        f"could not write files. Configure "
+                                        f"permissions in System → Agents or "
+                                        f"enable dangerous mode."
+                                    ),
+                                )
+                        elif m.get("is_error"):
+                            outcome = "failure"
+                            error_code = "execution_error"
+                            result_text = m.get("result", "")
+                            if conn and result_text:
+                                runs_service.record_event(
+                                    run_id, "error", conn,
+                                    message=str(result_text)[:2000],
+                                )
+                        break
+                    except (json.JSONDecodeError, ValueError):
+                        continue
             else:
                 outcome = "failure"
                 if conn and stderr_output:
@@ -821,6 +870,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                 runs_service.finish_run(
                     run_id, outcome, conn,
                     exit_code=exit_code,
+                    error_code=error_code,
                     observed_usage_signals_json=usage_json,
                 )
 
@@ -828,6 +878,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                 "status": "succeeded" if outcome == "success" else "failed",
                 "outcome": outcome,
                 "exit_code": exit_code,
+                "error_code": error_code,
                 "session_handle": session_handle,
                 "usage": usage,
             }

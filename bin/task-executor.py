@@ -1183,6 +1183,22 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         # Inject extra_env into profile for the adapter to pick up
         profile["_extra_env"] = extra_env
 
+        # PR-33: check if the operator enabled dangerous mode (all
+        # permissions bypassed). Read from the DB setting
+        # ``executor.dangerous_mode``. The adapter uses this to
+        # conditionally add ``--dangerously-skip-permissions``.
+        dangerous_mode = False
+        try:
+            with _conn() as c:
+                row = c.execute(
+                    "SELECT value FROM settings WHERE key = 'executor.dangerous_mode'"
+                ).fetchone()
+                if row and row[0] in ("1", "true", "yes"):
+                    dangerous_mode = True
+        except Exception:
+            pass
+        profile["_dangerous_mode"] = dangerous_mode
+
         # Step 4: Execute via adapter
         try:
             registry = get_execution_registry(_conn)

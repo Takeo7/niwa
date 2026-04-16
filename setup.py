@@ -2024,6 +2024,48 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             if target.exists() or target.is_symlink():
                 target.unlink() if target.is_symlink() else shutil.rmtree(str(target))
             target.symlink_to(shared_dir / d)
+        # PR-33: Create scoped Claude Code permissions for the niwa
+        # user. Without this, ``claude -p`` in non-interactive mode
+        # blocks ALL filesystem writes (no human to click "approve")
+        # and tasks complete with status=succeeded but nothing done.
+        #
+        # Uses Claude Code's native ``settings.json`` mechanism —
+        # NOT ``--dangerously-skip-permissions``. Scoped to:
+        #   - Bash: allowed (most tasks need shell commands).
+        #   - Read: all paths (inspect files).
+        #   - Write/Edit: project dirs + /tmp + shared_dir.
+        #
+        # The operator can opt into full unrestricted mode via the
+        # ``executor.dangerous_mode`` DB setting (UI toggle).
+        claude_settings_dir = Path("/home/niwa") / ".claude"
+        claude_settings_dir.mkdir(parents=True, exist_ok=True)
+        claude_settings = claude_settings_dir / "settings.json"
+        # Merge with existing settings if present (credentials
+        # may have been configured there).
+        existing = {}
+        if claude_settings.exists():
+            try:
+                existing = json.loads(claude_settings.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        existing["permissions"] = {
+            "allow": [
+                "Bash(command:*)",
+                "Read(file_path:*)",
+                f"Write(file_path:{shared_dir}/*)",
+                f"Edit(file_path:{shared_dir}/*)",
+                "Write(file_path:/home/niwa/*)",
+                "Edit(file_path:/home/niwa/*)",
+                "Write(file_path:/tmp/*)",
+                "Edit(file_path:/tmp/*)",
+            ],
+        }
+        claude_settings.write_text(json.dumps(existing, indent=2) + "\n")
+        subprocess.run(
+            ["chown", "-R", "niwa:niwa", str(claude_settings_dir)],
+            capture_output=True,
+        )
+        ok("Created scoped Claude Code permissions for niwa user")
         # Pre-create the executor log file so systemd doesn't create it
         # with root ownership on first start.  Systemd's
         # ``StandardOutput=append:<path>`` below opens the file with the
