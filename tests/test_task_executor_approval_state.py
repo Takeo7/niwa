@@ -66,8 +66,10 @@ class TestStaticSourceInvariants:
 
     def test_execute_task_v02_transitions_to_waiting_input_not_pendiente(self):
         src = EXECUTOR_PATH.read_text()
-        # Find the approval_required branch inside _execute_task_v02.
-        start = src.index("def _execute_task_v02(")
+        # Find the approval_required branch. PR-38 moved the body to
+        # ``_execute_task_v02_body`` (the outer wrapper adds an
+        # auto-project try/finally). Check wherever the body lives.
+        start = src.index("def _execute_task_v02_body(")
         tail = src[start:]
         # End at next top-level def.
         import re
@@ -95,14 +97,15 @@ class TestStaticSourceInvariants:
         an invalid prior state fails loud instead of silently
         writing bad state."""
         src = EXECUTOR_PATH.read_text()
-        start = src.index("def _execute_task_v02(")
+        # PR-38: body extracted to ``_execute_task_v02_body``.
+        start = src.index("def _execute_task_v02_body(")
         tail = src[start:]
         import re
         end = re.search(r"\ndef [a-zA-Z_]", tail)
         body = tail[: end.start()] if end else tail
 
         assert "_assert_task_transition(" in body, (
-            "_execute_task_v02 must call _assert_task_transition "
+            "_execute_task_v02_body must call _assert_task_transition "
             "before updating task status, so state machine "
             "violations surface at write-time instead of silently "
             "corrupting the DB."

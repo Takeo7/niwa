@@ -523,7 +523,7 @@ La humana compartió una lectura de un modelo externo (GPT 5.4 Pro, modo investi
 
 **Ubicación:** `niwa-app/frontend/src/features/tasks/components/TaskDetailsTab.tsx` — la sección Resultado usa `<Text>` plano.
 **Severidad:** **media** (UX: el resultado es legible pero feo; las tablas y formato se pierden).
-**PR futuro donde se arreglará:** pendiente de asignar. Fix: añadir `react-markdown` (o similar) como dep del frontend y renderizar `executor_output` como markdown. ~30 LOC + 1 dep nueva (requiere OK del SPEC §8 que pide stdlib-only para backend, pero frontend ya tiene deps npm).
+**Estado:** **ARREGLADO en PR-37.** La sección Resultado ahora renderiza el `executor_output` vía `<ReactMarkdown remarkPlugins={[remarkGfm]}>` con override de `<a>` para abrir links externos en pestaña nueva (`rel=noopener noreferrer`). Sin nuevas deps: `react-markdown@9.1.0` y `remark-gfm@4.0.1` ya estaban en `package.json` (NoteEditor las usa desde antes). Se eliminó el wrapper `<Text>` para evitar HTML inválido (`<p>` dentro de `<p>`). Tests en `niwa-app/frontend/src/features/tasks/components/TaskDetailsTab.test.tsx` (5 casos): bold → `<strong>`, tablas GFM → `<table>`, links externos `target=_blank`, no render si vacío, HTML raw (`<script>`) queda escapado (react-markdown 9.x sin rehype-raw = no vector XSS).
 
 ### Bug 32: Tareas que Claude "completa" con exit 0 pero sin haber hecho nada (false-succeeded genérico)
 
@@ -539,7 +539,17 @@ La humana compartió una lectura de un modelo externo (GPT 5.4 Pro, modo investi
 
 **Ubicación:** gap entre `bin/task-executor.py` (ejecuta Claude) y `niwa-app/backend/app.py` (gestiona proyectos).
 **Severidad:** **alta UX** (el usuario espera ver su proyecto creado; dice "hecha" pero no hay proyecto visible).
-**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) Post-hook en el executor que detecte ficheros nuevos y registre un proyecto vía la API interna. (b) Dar al executor acceso al MCP server de Niwa para que Claude pueda llamar `project_create`. (c) Prompt engineering: incluir en el prompt del task que Claude use una convención de directorio que el executor pueda detectar.
+**Estado:** **ARREGLADO en PR-38** (híbrido de las opciones (b) + (c) del menú original).
+
+Dos capas complementarias:
+
+1. **Pre-hook (`_auto_project_prepare`)** en `bin/task-executor.py`: cuando la tarea no tiene `project_id`, el executor genera `<slug>-<uuid6>`, hace `mkdir -p <NIWA_HOME>/data/projects/<slug>-<uuid6>/`, e inyecta el path en `task_dict["project_directory"]`. El adapter Claude Code ya lo lee como `cwd`. `_sanitize_slug` cierra path traversal (regex `[^a-z0-9-]+` → `-`, strip, cap a 40, fallback `task`).
+
+2. **Prompt injection** en `ClaudeCodeAdapter._build_prompt`: cuando `project_directory` está set y `project_id` es null, el prompt incluye los args exactos para invocar el MCP tool `project_create` (que ya existía en `servers/tasks-mcp/server.py:689`). Si es una tarea conversacional, Claude puede saltárselo.
+
+3. **Post-hook safety net (`_auto_project_finalize`)** dentro de `try/finally` del wrapper `_execute_task_v02`: tras `adapter.start()`, si el directorio tiene ≥1 fichero regular y no existe fila `projects` con ese `directory`, inserta una automáticamente. En cualquier caso (fila nueva o existente), `UPDATE tasks SET project_id=? WHERE id=? AND project_id IS NULL` (nunca roba tareas con proyecto explícito). Si no hay ficheros (conversacional), `rmtree` del directorio vacío.
+
+Container/host path mismatch evitado: todo el mkdir vive en el host (executor), el MCP container no necesita crear directorios. Tests en `tests/test_auto_project.py` (16 casos): slug sanitization incluyendo path traversal, prepare no-op con project_id, unique slug por call, finalize empty cleanup, finalize inserts + associates, finalize reuses existing row (Claude llamó tool), finalize never steals explicit project_id, adapter prompt injection condicional.
 
 ### Feature 2: Toggle "modo sin restricciones" en UI (Sistema → Agentes)
 

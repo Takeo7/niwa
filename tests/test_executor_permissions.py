@@ -191,7 +191,11 @@ class TestFailedAdapterDoesNotMarkTaskDone:
     def test_executor_returns_false_on_adapter_failure(self):
         import re
         src = (REPO_ROOT / "bin" / "task-executor.py").read_text()
-        start = src.index("def _execute_task_v02(")
+        # PR-38 moved the actual body to ``_execute_task_v02_body``
+        # (the outer wrapper wraps it in a try/finally for the
+        # auto-project hook). The assertion still holds — look for
+        # the body.
+        start = src.index("def _execute_task_v02_body(")
         tail = src[start:]
         end = re.search(r"\ndef [a-zA-Z_]", tail)
         body = tail[: end.start()] if end else tail
