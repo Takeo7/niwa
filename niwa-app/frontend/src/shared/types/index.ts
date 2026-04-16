@@ -22,6 +22,24 @@ export interface Task {
   agent_id?: string;
   agent_name?: string;
   agent_status?: string;
+  // PR-36: populated by GET /api/tasks/:id only (not in list queries),
+  // holds the stdout of the latest executor comment event after ANSI
+  // stripping. Rendered as markdown in TaskDetailsTab (PR-37).
+  executor_output?: string;
+  // PR-39: latest run summary so the UI can show an error banner
+  // without a second fetch. Populated by GET /api/tasks/:id only.
+  last_run?: TaskLastRun | null;
+}
+
+export interface TaskLastRun {
+  id: string;
+  status: string;
+  outcome: string | null;
+  error_code: string | null;
+  finished_at: string | null;
+  relation_type: string | null;
+  backend_profile_slug: string | null;
+  backend_profile_display_name: string | null;
 }
 
 // ── Project ──

@@ -11,6 +11,7 @@ import {
   TextInput,
   ActionIcon,
   Paper,
+  Alert,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
 import {
@@ -21,6 +22,7 @@ import {
   IconX,
   IconPlus,
   IconPlayerStop,
+  IconAlertTriangle,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -122,15 +124,62 @@ export function TaskDetailsTab() {
     deleteAttachment.mutate({ taskId: task.id, filename });
   };
 
+  // PR-39: show a red banner when the latest run failed, except on
+  // terminal states — 'hecha' means a fallback rescued it, 'archivada'
+  // means the user moved past it. Alarming on those is misleading or
+  // noisy. Blocked/waiting tasks DO benefit from the banner (the
+  // failure is often exactly why they're blocked).
+  const lastRun = task.last_run ?? null;
+  const terminalStatuses = new Set(['hecha', 'archivada']);
+  const showFailureBanner =
+    lastRun !== null
+    && (lastRun.outcome === 'failure' || Boolean(lastRun.error_code))
+    && !terminalStatuses.has(task.status);
+
+  const navigateToRuns = () => navigate(`/tasks/${task.id}/runs`);
+
   return (
     <Stack gap="md">
+      {showFailureBanner && lastRun && (
+        <Alert
+          variant="light"
+          color="red"
+          icon={<IconAlertTriangle size={18} />}
+          title="La última ejecución falló"
+        >
+          <Stack gap={4}>
+            <Text size="sm">
+              {lastRun.backend_profile_display_name
+                ? `${lastRun.backend_profile_display_name} falló con`
+                : 'Falló con'}
+              {' '}
+              <Text span fw={600} c="red">
+                {lastRun.error_code ?? lastRun.outcome ?? 'error desconocido'}
+              </Text>
+              {lastRun.relation_type === 'fallback' && ' (intento de fallback)'}
+              .
+            </Text>
+            <Group gap="xs">
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                onClick={navigateToRuns}
+              >
+                Ver runs
+              </Button>
+            </Group>
+          </Stack>
+        </Alert>
+      )}
+
       {task.description && (
         <Text size="sm" c="dimmed" style={{ whiteSpace: 'pre-wrap' }}>
           {task.description}
         </Text>
       )}
 
-      {(task as any).executor_output && (
+      {task.executor_output && (
         <>
           <Divider />
           <Text size="sm" fw={500}>Resultado</Text>
@@ -144,7 +193,7 @@ export function TaskDetailsTab() {
                   ),
                 }}
               >
-                {(task as any).executor_output}
+                {task.executor_output}
               </ReactMarkdown>
             </div>
           </Paper>
