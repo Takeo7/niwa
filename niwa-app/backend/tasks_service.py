@@ -28,7 +28,34 @@ def _make_deps(db_conn, now_iso, uploads_dir):
 def get_task(task_id):
     with _db_conn() as conn:
         row = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        # PR-36: include the latest executor output so the UI can
+        # show what Claude actually did. The output is stored in
+        # task_events (type='comment', author='executor') by
+        # _finish_task in bin/task-executor.py.
+        event = conn.execute(
+            "SELECT payload_json FROM task_events "
+            "WHERE task_id=? AND type='comment' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if event and event['payload_json']:
+            try:
+                payload = json.loads(event['payload_json'])
+                output = payload.get('output', '')
+                if output:
+                    import re as _re
+                    output = _re.sub(
+                        r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07'
+                        r'|\x1b\[\??[0-9;]*[a-zA-Z]|\x1b[<>][\w]',
+                        '', output,
+                    ).strip()
+                    result['executor_output'] = output
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return result
 
 
 def fetch_tasks(area=None, status=None, today_only=False, include_done=False, project_id=None):
