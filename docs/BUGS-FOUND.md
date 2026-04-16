@@ -514,3 +514,53 @@ La humana compartió una lectura de un modelo externo (GPT 5.4 Pro, modo investi
 - **Terminal privileged** — pre-existente, ya mitigado: está en `docker-compose.advanced.yml` (no en el base), fuera del `--quick` install. Test `test_approval_gate_integration.py:10-11` pinea que el compose principal NO tiene privileged.
 - **Fragilidad estructural (scheduler INSERT, globals en tasks_helpers, NIWA_VERSION=0.1.0)** — deuda técnica pre-existente, no bugs funcionales. Documentada en la section de limpieza v0.3.
 - **Hosting module smells (paths, http://, pkill)** — pre-existente, no bloquea. Limpieza v0.3.
+
+## 2026-04-16 — encontrados durante verificación del happy path en VPS (post PRs 25-36)
+
+### Bug 31: Resultado de Claude no se renderiza como markdown en la UI
+
+**Descripción:** PR-36 añadió la sección "Resultado" en el detalle de tarea, pero el texto se muestra como pre-formateado (`whiteSpace: pre-wrap`). Claude genera markdown (tablas, negritas, headers, bloques de código) que debería renderizarse como HTML para ser legible. Actualmente `**bold**` se muestra literal.
+
+**Ubicación:** `niwa-app/frontend/src/features/tasks/components/TaskDetailsTab.tsx` — la sección Resultado usa `<Text>` plano.
+**Severidad:** **media** (UX: el resultado es legible pero feo; las tablas y formato se pierden).
+**PR futuro donde se arreglará:** pendiente de asignar. Fix: añadir `react-markdown` (o similar) como dep del frontend y renderizar `executor_output` como markdown. ~30 LOC + 1 dep nueva (requiere OK del SPEC §8 que pide stdlib-only para backend, pero frontend ya tiene deps npm).
+
+### Bug 32: Tareas que Claude "completa" con exit 0 pero sin haber hecho nada (false-succeeded genérico)
+
+**Descripción:** PR-33/34 detectan `permission_denials` del stream-json y marcan el run como `failed`. Pero si Claude sale con exit 0 sin permission denials pero su output dice "no pude hacerlo" (p.ej., por rate limit, por no entender la tarea, por error de otro tipo), el run se marca `succeeded` y la tarea como `hecha` — falso positivo. El usuario ve "completada" sin trabajo real.
+
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:826-870` — la lógica de outcome solo chequea exit code + permission_denials + is_error.
+**Severidad:** **media** (no siempre dispara, pero cuando lo hace es confuso para el usuario).
+**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) heurística sobre el result text (buscar patrones "no pude", "error", etc. — frágil). (b) Chequear que al menos una tool_use con Write/Edit/Bash fue exitosa (más robusto). (c) Dejar que el usuario rechace la tarea manualmente y documente el caso — lo menos invasivo.
+
+### Feature 1: Auto-registro de proyectos post-tarea
+
+**Descripción:** Cuando Claude crea ficheros (p.ej., un index.html para un proyecto web), los ficheros existen en el filesystem pero NO aparecen en la sección "Proyectos" de la UI. Niwa no sabe que es un "proyecto" porque Claude no tiene acceso a los MCP tools de Niwa para registrarlo.
+
+**Ubicación:** gap entre `bin/task-executor.py` (ejecuta Claude) y `niwa-app/backend/app.py` (gestiona proyectos).
+**Severidad:** **alta UX** (el usuario espera ver su proyecto creado; dice "hecha" pero no hay proyecto visible).
+**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) Post-hook en el executor que detecte ficheros nuevos y registre un proyecto vía la API interna. (b) Dar al executor acceso al MCP server de Niwa para que Claude pueda llamar `project_create`. (c) Prompt engineering: incluir en el prompt del task que Claude use una convención de directorio que el executor pueda detectar.
+
+### Feature 2: Toggle "modo sin restricciones" en UI (Sistema → Agentes)
+
+**Descripción:** PR-34 puso `--dangerously-skip-permissions` siempre ON. El plan original (PR-33) era un toggle en la UI que el operador pudiera activar/desactivar. El backend lee `executor.dangerous_mode` de la tabla settings (código presente en PR-33, removido en PR-34 porque el flag se hizo default). Para restaurar el toggle: re-añadir la lectura del setting en el executor y crear el componente React.
+
+**Ubicación:** frontend pendiente. Backend: `bin/task-executor.py` + `niwa-app/backend/backend_adapters/claude_code.py`.
+**Severidad:** **baja** (el flag siempre ON es funcional; el toggle es control operacional).
+**PR futuro donde se arreglará:** pendiente de asignar. ~30 LOC frontend + re-wire del setting en el executor.
+
+### Feature 3: Configuración de DNS/dominios/subdominios desde la UI
+
+**Descripción:** Actualmente los dominios, subdominios y DNS se configuran solo durante el install CLI (`--public-url`) y editando Caddyfile/cloudflared manualmente post-install. No hay panel en la UI para gestionar esto.
+
+**Ubicación:** gap en el frontend. Backend parcial en `setup.py::configure_cloudflared` y `niwa-app/backend/hosting.py`.
+**Severidad:** **media** (operadores avanzados lo hacen manual; operadores nuevos no saben cómo).
+**PR futuro donde se arreglará:** pendiente de asignar. Scope mayor: endpoint CRUD de dominios + panel React + integración con Caddy admin API o rewrite del Caddyfile.
+
+### Feature 4: Notificaciones/feedback visible de errores en la UI
+
+**Descripción:** Cuando una tarea falla (permissions, auth, timeout), el usuario solo ve "hecha" o "en_progreso" sin explicación. Los errores están en los logs del executor o en backend_run_events, pero la UI no los surfacea de forma proactiva (toast, banner, badge).
+
+**Ubicación:** gap en frontend. Backend: los errores ya están en `backend_run_events` con `event_type='error'`.
+**Severidad:** **media UX** (el usuario no se entera de problemas hasta que mira los logs o los runs manualmente).
+**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) Badge de error en la tarea si el último run falló. (b) Toast notification vía WebSocket cuando un run falla. (c) Sección "Errores" en el detalle de tarea.
