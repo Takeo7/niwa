@@ -824,15 +824,23 @@ class ClaudeCodeAdapter(BackendAdapter):
             # The operator then sees the task as FAILED with a clear
             # reason instead of a misleading "hecha" with no output.
             error_code = None
+            result_text = ""  # Human-readable output from Claude
             if exit_code == 0:
                 outcome = "success"
                 # Check stream-json result event for is_error or
                 # permission denials — override to failure if found.
+                # Also extract result_text for the task output.
                 for rl in reversed(raw_lines):
                     try:
                         m = json.loads(rl)
                         if m.get("type") != "result":
                             continue
+                        # PR-35: extract the human-readable result
+                        # text so the executor can store it as the
+                        # task output (visible in the UI). Without
+                        # this the task shows "[v02] Backend
+                        # claude_code completed: {...}" — useless.
+                        result_text = m.get("result", "") or ""
                         perm_denials = m.get("permission_denials") or []
                         if perm_denials:
                             outcome = "failure"
@@ -884,6 +892,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                 "error_code": error_code,
                 "session_handle": session_handle,
                 "usage": usage,
+                "result_text": result_text,
             }
 
         except Exception as exc:
