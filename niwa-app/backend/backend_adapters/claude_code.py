@@ -142,8 +142,9 @@ class ClaudeCodeAdapter(BackendAdapter):
             )
 
         artifact_root = run.get("artifact_root")
-        if artifact_root:
-            Path(artifact_root).mkdir(parents=True, exist_ok=True)
+        mkdir_err = self._ensure_artifact_root(run)
+        if mkdir_err is not None:
+            return mkdir_err
 
         prompt = self._build_prompt(task)
         model = profile.get("default_model") or "claude-sonnet-4-6"
@@ -177,8 +178,9 @@ class ClaudeCodeAdapter(BackendAdapter):
             }
 
         artifact_root = new_run.get("artifact_root")
-        if artifact_root:
-            Path(artifact_root).mkdir(parents=True, exist_ok=True)
+        mkdir_err = self._ensure_artifact_root(new_run)
+        if mkdir_err is not None:
+            return mkdir_err
 
         prompt = self._build_prompt(task)
         model = profile.get("default_model") or "claude-sonnet-4-6"
@@ -461,6 +463,81 @@ class ClaudeCodeAdapter(BackendAdapter):
                 pass
 
     # ── Private helpers ────────────────────────────────────────────
+
+    def _ensure_artifact_root(self, run: dict) -> dict | None:
+        """Create ``run['artifact_root']`` on disk if set.
+
+        Bug 24 (docs/BUGS-FOUND.md): a raw ``Path.mkdir(...)`` here
+        could raise ``PermissionError`` / ``OSError`` (e.g. the dir
+        lives under a project owned by another user). The executor's
+        generic ``except Exception`` catches it and marks the run
+        ``failed`` with ``error_code='adapter_exception'`` — technically
+        correct, but the operator gets no hint it was specifically a
+        filesystem/permissions issue.
+
+        This helper transitions the run explicitly with
+        ``error_code='artifact_root_mkdir_failed'`` and returns a
+        failed-status dict so the caller gets the same shape as other
+        pre-execution denials (non-transient — no point escalating to
+        a fallback that would hit the same path).
+
+        Returns ``None`` on success; the dict to return on failure.
+        """
+        artifact_root = run.get("artifact_root")
+        if not artifact_root:
+            return None
+        try:
+            Path(artifact_root).mkdir(parents=True, exist_ok=True)
+            return None
+        except OSError as e:
+            self._finish_run_failed(
+                run_id=run["id"],
+                error_code="artifact_root_mkdir_failed",
+                exit_code=1,
+                event_message=(
+                    f"Could not create artifact_root "
+                    f"{artifact_root!r}: {e}. Check that the path "
+                    "is writable by the niwa user."
+                ),
+            )
+            return {
+                "status": "failed",
+                "outcome": "failure",
+                "error_code": "artifact_root_mkdir_failed",
+                "reason": (
+                    f"Could not create artifact_root "
+                    f"{artifact_root!r}: {e}."
+                ),
+            }
+
+    def _finish_run_failed(
+        self, *, run_id: str, error_code: str,
+        exit_code: int, event_message: str,
+    ) -> None:
+        """Transition a run to failed state from inside the adapter,
+        best-effort. Used by ``_ensure_artifact_root`` and any other
+        early-abort path that needs to leave the run in a terminal
+        state (not ``starting``) before returning to the caller."""
+        if not self._db_conn_factory:
+            return
+        import runs_service
+        conn = self._db_conn_factory()
+        try:
+            try:
+                runs_service.record_event(
+                    run_id, "error", conn, message=event_message,
+                )
+            except Exception:
+                pass
+            try:
+                runs_service.finish_run(
+                    run_id, "failure", conn,
+                    error_code=error_code, exit_code=exit_code,
+                )
+            except Exception:
+                pass
+        finally:
+            conn.close()
 
     @staticmethod
     def _build_prompt(task: dict) -> str:
