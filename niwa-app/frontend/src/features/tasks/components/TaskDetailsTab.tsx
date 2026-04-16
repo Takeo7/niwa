@@ -128,6 +128,18 @@ export function TaskDetailsTab() {
         </Text>
       )}
 
+      {(task as any).executor_output && (
+        <>
+          <Divider />
+          <Text size="sm" fw={500}>Resultado</Text>
+          <Paper p="sm" radius="sm" withBorder>
+            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+              {(task as any).executor_output}
+            </Text>
+          </Paper>
+        </>
+      )}
+
       <Group grow>
         <Select
           label="Estado"
