@@ -2000,6 +2000,24 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
                 content = content.replace(old_data_dir, str(shared_dir / "data"))
                 compose_path.write_text(content)
                 info(f"Updated compose to mount {shared_dir / 'data'}")
+                # Bug 31 fix (PR-32): the Docker stack was already
+                # started in step 14c with the OLD volume mount
+                # (cfg.niwa_home / "data"). Now that we've updated
+                # the compose to point at shared_dir / "data", we
+                # must recreate the affected container so it picks
+                # up the new mount. ``docker compose up -d`` is
+                # idempotent — it detects the config change and
+                # recreates only the app container (whose volume
+                # changed), leaving the gateways/caddy untouched.
+                # Without this the app writes to one DB while the
+                # executor reads from another — tasks created in
+                # the UI never reach the executor.
+                subprocess.run(
+                    ["docker", "compose", "-f", str(compose_path),
+                     "up", "-d", "--no-deps", "app"],
+                    capture_output=True, text=True,
+                )
+                ok("Restarted app container with updated data mount")
         # Symlinks from niwa home
         for d in ("data", "logs"):
             target = niwa_home / d
