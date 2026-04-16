@@ -2389,6 +2389,10 @@ def run_niwa_update():
             capture_output=True, text=True, timeout=10,
         )
         current_branch = (branch_result.stdout or "").strip() or "main"
+        # Detached HEAD returns the literal string "HEAD" — pulling
+        # "origin HEAD" would fail. Fall back to main.
+        if current_branch == "HEAD":
+            current_branch = "main"
     except Exception:
         current_branch = "main"  # safe fallback if git fails
 
@@ -2401,7 +2405,7 @@ def run_niwa_update():
         if pull.returncode != 0:
             return {"ok": False, "message": f"Git pull falló (branch {current_branch}): {pull.stderr[:200]}"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "message": "Timeout ejecutando git pull"}
+        return {"ok": False, "message": f"Timeout ejecutando git pull origin {current_branch}"}
     except FileNotFoundError:
         return {"ok": False, "message": "git no encontrado en el sistema"}
 
