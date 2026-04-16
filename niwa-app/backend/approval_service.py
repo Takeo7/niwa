@@ -154,6 +154,57 @@ def resolve_approval(approval_id: str, status: str, resolved_by: str,
         "resolved_by = ?, resolution_note = ? WHERE id = ?",
         (status, now, resolved_by, resolution_note, approval_id),
     )
+
+    # Bug 23 fix (PR-29): on approval granted, return the task to
+    # ``pendiente`` so the executor's poll loop re-claims it.
+    #
+    # The executor transitions the task to ``waiting_input`` when
+    # routing reports ``approval_required`` (see
+    # ``bin/task-executor.py::_execute_task_v02``). Without the
+    # inverse transition the task is orphaned in ``waiting_input``
+    # forever — the executor only claims ``pendiente`` tasks, and
+    # nothing else in the backend re-dispatches from
+    # ``waiting_input``.
+    #
+    # Lives inside ``resolve_approval`` (not in the HTTP handler in
+    # ``app.py``) so EVERY caller benefits — HTTP endpoint,
+    # ``assistant_service.tool_approval_respond``, MCP proxy, tests,
+    # future integrations. Prior implementation kept this in the
+    # handler only, which review uncovered as an incomplete fix:
+    # the assistant tool path bypassed it.
+    #
+    # ``reject`` deliberately does NOT trigger the transition: the
+    # operator that rejected may want to archive the task, retry
+    # with a different backend, or manually re-queue.
+    #
+    # Known limitation (documented in docs/DECISIONS-LOG.md PR-29):
+    # ``waiting_input`` can be set by other flows (e.g.
+    # ``task_request_input`` MCP tool). If a task is simultaneously
+    # in ``waiting_input`` because of a ``task_request_input``
+    # event AND has a pending approval, approving the approval
+    # flips the task to ``pendiente`` even though the
+    # ``task_request_input`` question is still unanswered. Narrow
+    # race, accepted trade-off for the simple gating.
+    if status == "approved":
+        task_id = existing["task_id"]
+        if task_id:
+            task_row = conn.execute(
+                "SELECT status FROM tasks WHERE id = ?", (task_id,),
+            ).fetchone()
+            if task_row and task_row["status"] == "waiting_input":
+                # Validate so a relaxation of the state machine
+                # (someone adding ``pendiente`` to
+                # ``waiting_input``'s outgoing set) surfaces here
+                # explicitly.
+                from state_machines import assert_task_transition
+                assert_task_transition("waiting_input", "pendiente")
+                conn.execute(
+                    "UPDATE tasks SET status = 'pendiente', "
+                    "updated_at = ? WHERE id = ? "
+                    "AND status = 'waiting_input'",
+                    (now, task_id),
+                )
+
     conn.commit()
 
     logger.info(

@@ -3984,6 +3984,17 @@ class Handler(BaseHTTPRequestHandler):
                 resolution_note = None
             with db_conn() as conn:
                 try:
+                    # Bug 23 fix (PR-29): when approved, the task
+                    # is transitioned from ``waiting_input`` back
+                    # to ``pendiente`` inside ``resolve_approval``
+                    # so every caller (this handler,
+                    # ``assistant_service.tool_approval_respond``,
+                    # MCP proxy, tests) gets it. See
+                    # ``approval_service.resolve_approval`` for
+                    # the implementation and
+                    # ``docs/DECISIONS-LOG.md`` PR-29 Decisión 2
+                    # for why the logic lives there rather than
+                    # here.
                     updated = approval_service.resolve_approval(
                         approval_id, new_status, NIWA_APP_USERNAME,
                         conn, resolution_note=resolution_note,

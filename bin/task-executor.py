@@ -1051,12 +1051,31 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         if decision.get("approval_required"):
             log.info(
                 "task %s: approval required (decision=%s, approval=%s). "
-                "Leaving in pendiente.",
+                "Transitioning to waiting_input.",
                 task_id, decision["routing_decision_id"],
                 decision.get("approval_id"),
             )
+            # Bug 23 fix (PR-29): prior implementation UPDATEd status
+            # to 'pendiente' here, which violates the task state
+            # machine (en_progreso → pendiente is not allowed per
+            # state_machines.TASK_TRANSITIONS). That caused a
+            # processing loop: the executor would re-claim the
+            # pendiente task on its next poll, the approval gate
+            # would still be unresolved, status would flip back to
+            # pendiente — forever, until the operator approved.
+            #
+            # The canonical state for "task needs human action
+            # before proceeding" is ``waiting_input`` (SPEC-v0.2
+            # §2). The operator's approval resolution transitions
+            # the task back to pendiente so the executor picks it
+            # up normally.
+            current = c.execute(
+                "SELECT status FROM tasks WHERE id = ?", (task_id,),
+            ).fetchone()
+            if current:
+                _assert_task_transition(current["status"], "waiting_input")
             c.execute(
-                "UPDATE tasks SET status = 'pendiente', updated_at = ? "
+                "UPDATE tasks SET status = 'waiting_input', updated_at = ? "
                 "WHERE id = ?",
                 (_now_iso(), task_id),
             )
