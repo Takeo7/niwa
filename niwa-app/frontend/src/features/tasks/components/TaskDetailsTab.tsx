@@ -22,6 +22,8 @@ import {
   IconPlus,
   IconPlayerStop,
 } from '@tabler/icons-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   useUpdateTask,
   useDeleteTask,
@@ -133,9 +135,18 @@ export function TaskDetailsTab() {
           <Divider />
           <Text size="sm" fw={500}>Resultado</Text>
           <Paper p="sm" radius="sm" withBorder>
-            <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-              {(task as any).executor_output}
-            </Text>
+            <div style={{ fontSize: 'var(--mantine-font-size-sm)' }}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ node: _node, ...props }) => (
+                    <a {...props} target="_blank" rel="noopener noreferrer" />
+                  ),
+                }}
+              >
+                {(task as any).executor_output}
+              </ReactMarkdown>
+            </div>
           </Paper>
         </>
       )}
