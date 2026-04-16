@@ -493,11 +493,19 @@ La humana compartió una lectura de un modelo externo (GPT 5.4 Pro, modo investi
 
 ### Bug 29: Cookie de sesión sin flag `Secure` — expuesta en tránsito si no hay TLS externo
 
-**Descripción:** `app.py:3833` setea la cookie de sesión con `HttpOnly; SameSite=Lax` pero sin `Secure`. Si el operador expone Niwa sin TLS externo (p.ej., sin cloudflared o reverse proxy), la cookie viaja en claro y puede ser capturada por MITM. El Caddyfile tiene `auto_https off` (caddy es reverse proxy interno, no TLS terminator).
+**Descripción:** `app.py` seteaba la cookie de sesión con `HttpOnly; SameSite=Lax` pero sin `Secure`. Si el operador expone Niwa sin TLS externo (p.ej., sin cloudflared o reverse proxy), la cookie viaja en claro y puede ser capturada por MITM. El Caddyfile tiene `auto_https off` (caddy es reverse proxy interno, no TLS terminator).
 
-**Ubicación:** `app.py:3833` (Set-Cookie header).
+**Ubicación:** `app.py` Set-Cookie headers (login + logout).
 **Severidad:** **media** (el modelo operacional de Niwa asume TLS del reverse proxy externo, pero no valida que esté configurado; un operador que se equivoque queda expuesto sin warning).
-**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: añadir `Secure` condicionalmente cuando `cfg.public_domain` está set (indica acceso externo, implica que debería haber TLS). ~5 LOC.
+**Estado:** **ARREGLADO en PR-40.** Helper `_cookie_secure_attr(handler)` decide per-request con tres señales (prioridad descendente):
+
+1. `NIWA_APP_COOKIE_SECURE=1` explicit override.
+2. `NIWA_APP_PUBLIC_BASE_URL` empieza por `https://`.
+3. `X-Forwarded-Proto: https` desde un proxy en `NIWA_TRUSTED_PROXIES` (mismo trust rule que `client_ip()`: el header solo se honra si el TCP peer es trusted, evitando que un cliente rogue lo forje).
+
+La señal per-request es necesaria porque el installer quick deja `NIWA_APP_PUBLIC_BASE_URL=http://127.0.0.1:PORT` por defecto (INSTALL.md recuerda al operador editarlo manualmente). Un deployment detrás de cloudflared/nginx sin tocar la env var ahora emite `Secure` automáticamente via X-Forwarded-Proto.
+
+Tests en `tests/test_cookie_secure.py` (9 casos): las 3 señales, override '0' no fuerza, proxy untrusted con XFP=https no honrado (guard de forge), XFP=http no flippea, y guards estáticos de que los dos Set-Cookie del source invocan el helper.
 
 ### Bug 30: CI (`mcp-smoke.yml`) no prueba la integración MCP end-to-end
 
