@@ -332,8 +332,107 @@ Test en `tests/test_installer_hosting_path.py` (7 casos): regex estático sobre 
 
 **Repro observada en VPS:** dos intentos consecutivos de `./niwa install --quick --mode assistant --yes` en un VPS con un install previo colgado. Workaround: limpiar containers (`docker rm -f $(docker ps -aq)`) antes de reinstalar.
 
-**Ubicación:** `setup.py::_quick_free_port` (implementación actual no mantiene un set de puertos ya reservados durante la sesión del wizard).
+**Ubicación:** dos paths del wizard, ambos con la misma vulnerabilidad estructural:
+- `setup.py::_quick_free_port` (helper usado por el path `--quick`).
+- `setup.py::step_ports` (path interactivo legacy, tiene su propia copia inline del auto-bump loop sin reutilizar `_quick_free_port`).
 
-**Severidad:** media (no corrupt data, no bloquea fresh installs sin ocupación previa; sí rompe reinstalls o installs en hosts compartidos). Encontrado por Claude-VPS durante la verificación de PR-25.
+**Severidad:** media (no corrupt data, no bloquea fresh installs sin ocupación previa; sí rompe reinstalls o installs en hosts compartidos). Encontrado por Claude-VPS durante la verificación de PR-25; segundo path (`step_ports`) detectado durante la review independiente de PR-28.
 
-**PR futuro donde se arreglará:** pendiente de asignar. Fix propuesto: que `_quick_free_port` acepte un set `reserved: set[int]` (inicializado vacío al empezar el wizard y al que se añaden los puertos ya asignados) y lo consulte antes de devolver un candidato. ~15 LOC + test unitario con sockets falseados.
+**Estado:** **ARREGLADO en PR-28** (en ambos paths del wizard).
+
+1. **`--quick` (no-interactivo):** `_quick_free_port` ahora acepta `reserved: Optional[set]`. `build_quick_config` inicializa un `_reserved_ports = set()` local y le añade cada puerto asignado tras cada llamada. La función skipea cualquier port en `reserved` antes de consultar `detect_port_free`, evitando que dos servicios cuyos defaults sean consecutivos (gateway 18810 / caddy 18811) acaben en el mismo offset cuando el primero está ocupado a nivel SO. Default `reserved=None` preserva backwards-compat.
+
+2. **`step_ports` (interactivo, legacy):** mismo patrón aplicado en su auto-bump loop inline. `_reserved_ports = set()` local al inicio del step. En el auto-bump, candidates ya reservados se saltan (`continue`). Tras `setattr(cfg, attr, n)`, `_reserved_ports.add(n)`. Además, el path interactivo añade un check sobre el input del usuario: si el usuario teclea manualmente un port ya asignado a otro servicio en este install, se rechaza con mensaje explícito (cierra el agujero adicional de "el usuario se equivoca y el wizard lo acepta").
+
+Tests: `tests/test_installer_port_reservation.py` (14 casos):
+- 8 unit del helper con `monkeypatch` sobre `detect_port_free` (cero sockets reales).
+- 1 repro literal del escenario VPS (4 ports con 18810 ocupado → todos distintos, gateway != caddy).
+- 1 guard estático sobre `build_quick_config` (cada `_quick_free_port` pasa el set reservado).
+- 4 guard estáticos sobre `step_ports` (init del set, skip en auto-bump, add tras assign, rechazo de input colisivo).
+
+
+## 2026-04-15 — encontrado durante audit pre-mortem v0.2 (post PR-27, pre primera ejecución en VPS)
+
+Tras PR-27 desbloquear la ejecución real de la ruta v0.2 en producción, lancé un audit pre-mortem (Explore agent) sobre `routing_service`, `runs_service`, `backend_adapters/*`, `state_machines`, `capability_service`. Reportó 9 bugs candidatos. Verifiqué cada uno leyendo el código directamente. **De los 9, sólo 3 resistieron la verificación** — los demás eran especulación sin evidencia o false positives (p.ej., el agente preocupó por `seed_backend_profiles` no insertar nada, pero `_SEED_PROFILES` en `backend_registry.py:75-90` sí incluye `claude_code` con `enabled=1, priority=10`; el flow funciona).
+
+Los 3 verificados:
+
+### Bug 23: `_execute_task_v02` viola la state machine — UPDATE de `en_progreso` a `pendiente` cuando approval_required
+
+**Descripción:** `_claim_next_task()` en `bin/task-executor.py:264` transiciona la tarea atómicamente de `pendiente` a `en_progreso` antes de invocar `_execute_task_v02()`. Dentro de `_execute_task_v02()`, si el routing decide que se requiere approval (línea 1058-1062), el código hace:
+
+```python
+c.execute(
+    "UPDATE tasks SET status = 'pendiente', updated_at = ? "
+    "WHERE id = ?",
+    (_now_iso(), task_id),
+)
+```
+
+Esto es una transición `en_progreso → pendiente`. Pero según `niwa-app/backend/state_machines.py:26` (y la copia en `bin/task-executor.py:90-99`):
+
+```python
+'en_progreso': frozenset({'waiting_input', 'revision', 'bloqueada', 'hecha', 'archivada'}),
+```
+
+`pendiente` NO está permitido como destino desde `en_progreso`. La state machine canónica indicaría `waiting_input` para "necesita acción humana antes de proceder".
+
+El UPDATE es directo en SQL — no pasa por `_assert_task_transition()` (que sólo se llama en el path legacy, línea 666, no en v0.2). Es una violación silenciosa: la BD lo acepta, la UI ve la tarea de vuelta en `pendiente`, el siguiente poll del executor la reclama de nuevo, vuelve a fallar el check de approval, vuelve a la pendiente — bucle.
+
+**Ubicación:** `bin/task-executor.py:1058-1062` (UPDATE directo). State machine canónica en `niwa-app/backend/state_machines.py:24-34` y `bin/task-executor.py:90-99`.
+
+**Severidad:** **alta** — provoca bucle de procesamiento si una tarea queda con approval pendiente sin que el operador apruebe rápido. La tarea no progresa pero el executor la machaca.
+
+**Detectado por:** Explore agent (audit pre-mortem); verificado leyendo código directamente.
+
+**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: usar `waiting_input` en vez de `pendiente`. Requiere también revisar que `_pipeline_status()` (PR-02) cuente `waiting_input` correctamente y que el approval workflow (cuando el operador aprueba) sepa volver de `waiting_input` a `pendiente` para que el executor lo reclame de nuevo.
+
+### Bug 24: `artifact_root.mkdir()` puede lanzar `OSError`/`PermissionError` no capturado en `ClaudeCodeAdapter.start()`
+
+**Descripción:** `niwa-app/backend/backend_adapters/claude_code.py:144-146`:
+
+```python
+artifact_root = run.get("artifact_root")
+if artifact_root:
+    Path(artifact_root).mkdir(parents=True, exist_ok=True)
+```
+
+Si `artifact_root` apunta a un path sin permisos para el user `niwa` (p.ej., dentro de un proyecto con ownership distinto), `mkdir` lanza `PermissionError`. El except más cercano está en `bin/task-executor.py:_execute_task_v02()` línea ~1210, que captura `Exception as e` genérico. Pero entre el `mkdir()` y el `except`, el `backend_run` ya se creó en estado `starting`. La excepción rompe antes del `runs_service.transition_run(..., "running", ...)` que habría dejado el run en estado terminal correcto. El run queda en `starting` indefinidamente hasta que un operador haga cleanup manual.
+
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:144-146`.
+
+**Severidad:** **media** — sólo dispara si los permisos del filesystem están raros (project_dir owned por otro user). En un install normal con un solo proyecto creado vía UI, no debería pasar. Pero los runs zombie en `starting` ensucian la DB y confunden al operador.
+
+**Detectado por:** Explore agent (audit pre-mortem).
+
+**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: envolver `mkdir` en try/except específico, transicionar el run a `failed` con `error_code='artifact_root_mkdir_failed'` antes de re-lanzar.
+
+### Bug 25: Codex tmpdir (`CODEX_HOME`) leak si `adapter.start()` falla en v0.2 path
+
+**Descripción:** `bin/task-executor.py::_prepare_backend_env()` línea ~986, para profiles con `slug='codex'`:
+
+```python
+codex_home = _tmpfile.mkdtemp(prefix="niwa-codex-v02-")
+extra_env["CODEX_HOME"] = codex_home
+```
+
+El path queda únicamente en el dict `extra_env` que se pasa al adapter. El path legacy (`_run_llm()` línea 807-813) sí limpia `codex_home` en su finally. La rama v0.2 no lo hace — si `adapter.start()` lanza después de `mkdtemp`, el directorio queda huérfano en `/tmp/niwa-codex-v02-*`.
+
+**Ubicación:** `bin/task-executor.py::_prepare_backend_env` (mkdtemp) y `_execute_task_v02` (no cleanup en finally).
+
+**Severidad:** **baja** — sólo afecta a installs que usan `codex` como backend (no `claude_code`, que es el default). Acumulación lenta pero real bajo tasks repetidas con codex.
+
+**Detectado por:** Explore agent (audit pre-mortem).
+
+**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: guardar `codex_home` en una variable de scope `_execute_task_v02` y limpiarlo en un finally al final de la función. Alternativa más limpia: pasar un cleanup callback al adapter.
+
+---
+
+**Bugs candidatos del audit que NO documenté tras verificación:**
+
+- **"Seed de routing rules vacío sin fallback"** — falso positivo. `seed_backend_profiles` (`backend_registry.py:113`) inserta `claude_code` con `enabled=1` en `init_db()` (`app.py:272-273`). El default fallback de `routing_service.decide()` (línea 391-405) sí encuentra el profile.
+- **"DB connection thread safety"** — especulación sin evidencia concreta de race observada. Si el audit tiene razón, lo veremos en producción y entonces sí lo documentamos.
+- **"capability_service silent fallback"** — UX concern, no bug funcional.
+- **"Heartbeat thread daemon=True"** — comportamiento intencional, no bug.
+- **"UTF-8 encoding edge case"** — especulación.
+- **"State machine `queued → failed` unused"** — observación de diseño, no bug funcional.

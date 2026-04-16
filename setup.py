@@ -844,22 +844,39 @@ def step_ports(cfg: WizardConfig) -> None:
         ("Niwa app web UI", "app_port", 8080),
         ("Web terminal", "terminal_port", 7681),
     ]
+    # Bug 22 (docs/BUGS-FOUND.md, PR-28): the interactive wizard
+    # iterates port defaults the same way the --quick path does, so
+    # without an intra-session reservation set two consecutive ports
+    # whose defaults are adjacent (e.g. gateway 18810 → 18811 / caddy
+    # 18811) can both land on the same offset when the OS reports
+    # the auto-bumped port "free" (the first service hasn't bound
+    # yet). The set is shared with the auto-suggestion logic AND
+    # with the user-typed validation below.
+    _reserved_ports: set = set()
     for label, attr, default in defaults:
-        # Auto-find a free port if default is in use
+        # Auto-find a free port if default is in use OR already
+        # reserved by an earlier iteration in this same wizard.
         actual_default = default
-        if not detect_port_free(default):
-            # Try incrementing until we find a free one
+        if default in _reserved_ports or not detect_port_free(default):
             for offset in range(1, 100):
                 candidate = default + offset
+                if candidate in _reserved_ports:
+                    continue
                 if detect_port_free(candidate):
                     actual_default = candidate
                     info(f"Puerto {default} en uso — usando {candidate} automáticamente")
                     break
-        in_use = not detect_port_free(actual_default)
+        in_use = (
+            actual_default in _reserved_ports
+            or not detect_port_free(actual_default)
+        )
         suffix = f" {YELLOW}(in use!){RESET}" if in_use else ""
         while True:
             answer = prompt(f"{label} port{suffix}", default=str(actual_default), validator=valid_port)
             n = int(answer)
+            if n in _reserved_ports:
+                warn(f"  Port {n} ya asignado a otro servicio en este install. Pick another.")
+                continue
             if not detect_port_free(n):
                 if n == actual_default and not prompt_bool(
                     f"  Port {n} appears to be in use. Continue anyway?", default=False
@@ -869,6 +886,7 @@ def step_ports(cfg: WizardConfig) -> None:
                     warn(f"  Port {n} appears to be in use. Pick another.")
                     continue
             setattr(cfg, attr, n)
+            _reserved_ports.add(n)
             break
 
 
@@ -3126,17 +3144,32 @@ def resolve_quick_workspace(arg_workspace: Optional[str], niwa_home: Path) -> Pa
     return (niwa_home / "data").resolve()
 
 
-def _quick_free_port(default: int) -> int:
+def _quick_free_port(default: int, reserved: Optional[set] = None) -> int:
     """Return ``default`` if free, else first free offset in [1, 100).
+
+    ``reserved`` is an optional set of ports already allocated earlier
+    in the same install-wizard session. ``_quick_free_port`` skips
+    any port in that set even if ``detect_port_free`` says it's
+    available at the OS level, because the OS check only knows about
+    already-bound sockets — a port we assigned to an earlier service
+    in this same wizard run has not been bound yet and would look
+    free to a naive re-check. Without this the wizard happily hands
+    out the same port twice when its first choice is occupied
+    (Bug 22, docs/BUGS-FOUND.md): e.g. if 18810 is taken, gateway
+    gets 18811, and then caddy's own call (also 18811) also returns
+    18811 because no-one has bound it yet.
 
     Keeps quick install non-interactive even on machines that already
     have another niwa install running — the operator can still pin with
     explicit flags if they want deterministic ports.
     """
-    if detect_port_free(default):
+    reserved = reserved if reserved is not None else set()
+    if default not in reserved and detect_port_free(default):
         return default
     for offset in range(1, 100):
         candidate = default + offset
+        if candidate in reserved:
+            continue
         if detect_port_free(candidate):
             return candidate
     return default  # give up — user will see collision warning downstream
@@ -3208,10 +3241,19 @@ def build_quick_config(args) -> WizardConfig:
         cfg.mode = "local-only"
 
     # --- Ports with auto-increment on collision ---
-    cfg.gateway_streaming_port = _quick_free_port(18810)
-    cfg.gateway_sse_port = _quick_free_port(18812)
-    cfg.caddy_port = _quick_free_port(18811)
-    cfg.app_port = _quick_free_port(8080)
+    # Thread a shared ``reserved`` set through every call so two
+    # services can't both land on the same offset when their
+    # defaults are consecutive (e.g. 18810 busy → gateway picks
+    # 18811 → caddy would also pick 18811 without the guard).
+    _reserved_ports: set = set()
+    cfg.gateway_streaming_port = _quick_free_port(18810, _reserved_ports)
+    _reserved_ports.add(cfg.gateway_streaming_port)
+    cfg.gateway_sse_port = _quick_free_port(18812, _reserved_ports)
+    _reserved_ports.add(cfg.gateway_sse_port)
+    cfg.caddy_port = _quick_free_port(18811, _reserved_ports)
+    _reserved_ports.add(cfg.caddy_port)
+    cfg.app_port = _quick_free_port(8080, _reserved_ports)
+    _reserved_ports.add(cfg.app_port)
     cfg.terminal_port = 7681  # unused in quick install (advanced overlay only)
 
     # --- Restart whitelist: empty by default, operator edits post-install ---
