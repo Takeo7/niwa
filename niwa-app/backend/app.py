@@ -846,7 +846,19 @@ def _run_migrations():
             logger.info("Migration %s applied", filename)
         except Exception as e:
             logger.error("Migration %s failed: %s", filename, e)
-            break
+            # Fail loud (PR-30, same principle as PR-25): a partially
+            # migrated DB is worse than a stopped service. The operator
+            # sees the error in the journal / container logs and can
+            # fix the migration before restarting. Prior behaviour
+            # (``break`` and continue booting) left the app running
+            # on a schema that didn't match what the code expected —
+            # subtle runtime errors hours later, nearly impossible to
+            # diagnose.
+            raise SystemExit(
+                f"FATAL: migration {filename} failed: {e}. "
+                f"The database is partially migrated. Fix the "
+                f"migration and restart the service."
+            )
 
     # One-time migration: import settings.json into SQLite settings table
     _migrate_settings_json_to_sqlite(c)
@@ -2363,17 +2375,37 @@ def run_niwa_update():
             ],
         }
 
-    # 1. Git pull
+    # 1. Git pull — on whichever branch the repo is currently on.
+    #
+    # Bug fix (PR-30, reported by external review): the prior code
+    # hardcoded ``git pull origin main``. On installs running the
+    # ``v0.2`` branch, this would pull ``main`` on top of ``v0.2``
+    # and silently mix code from different release lines. Now we
+    # detect the current branch dynamically.
+    try:
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(repo_dir),
+            capture_output=True, text=True, timeout=10,
+        )
+        current_branch = (branch_result.stdout or "").strip() or "main"
+        # Detached HEAD returns the literal string "HEAD" — pulling
+        # "origin HEAD" would fail. Fall back to main.
+        if current_branch == "HEAD":
+            current_branch = "main"
+    except Exception:
+        current_branch = "main"  # safe fallback if git fails
+
     try:
         pull = subprocess.run(
-            ["git", "pull", "origin", "main"],
+            ["git", "pull", "origin", current_branch],
             cwd=str(repo_dir),
             capture_output=True, text=True, timeout=30,
         )
         if pull.returncode != 0:
-            return {"ok": False, "message": f"Git pull falló: {pull.stderr[:200]}"}
+            return {"ok": False, "message": f"Git pull falló (branch {current_branch}): {pull.stderr[:200]}"}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "message": "Timeout ejecutando git pull"}
+        return {"ok": False, "message": f"Timeout ejecutando git pull origin {current_branch}"}
     except FileNotFoundError:
         return {"ok": False, "message": "git no encontrado en el sistema"}
 
