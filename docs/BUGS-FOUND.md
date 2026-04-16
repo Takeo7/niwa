@@ -573,4 +573,14 @@ Container/host path mismatch evitado: todo el mkdir vive en el host (executor), 
 
 **Ubicación:** gap en frontend. Backend: los errores ya están en `backend_run_events` con `event_type='error'`.
 **Severidad:** **media UX** (el usuario no se entera de problemas hasta que mira los logs o los runs manualmente).
-**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) Badge de error en la tarea si el último run falló. (b) Toast notification vía WebSocket cuando un run falla. (c) Sección "Errores" en el detalle de tarea.
+**Estado:** **ARREGLADO en PR-39 (parcial — solo detalle de tarea).**
+
+Cambios:
+
+1. Backend `tasks_service.get_task()` ahora expone `last_run` con shape `{id, status, outcome, error_code, finished_at, relation_type, backend_profile_slug, backend_profile_display_name}` vía LEFT JOIN con `backend_profiles`. Whitelist de columnas — los snapshots JSON (capability/budget/usage) nunca salen.
+
+2. Frontend `TaskDetailsTab.tsx`: Alert rojo arriba del detalle cuando `last_run.outcome === 'failure'` (o hay `error_code`) AND `task.status !== 'hecha'`. La supresión en `'hecha'` es deliberada: si la tarea completó, un fallback triunfó y alarmar sería engañoso. El banner muestra `<backend_display_name> terminó con <error_code>` + botón "Ver runs" que navega a `/tasks/:id/runs`. Si el run es `relation_type='fallback'`, añade "(intento de fallback)".
+
+Tests: 6 backend (`test_tasks_service_last_run.py`) incluyendo guard de leak de snapshots JSON y JOIN con backend_profiles; 4 frontend nuevos en `TaskDetailsTab.test.tsx` (banner visible, suprimido en hecha, suprimido sin last_run, suprimido con success).
+
+**Follow-up pendiente (documentado explícitamente):** badge de error en listas/kanban. Sin ello, un usuario que no abre la tarea no se entera del fallo. Alternativa barata: añadir `has_failed_run: bool` al enriquecimiento `enrich_tasks_with_agent_info` (query agregada con `task_id IN (...)`), no JOIN en `fetch_tasks`. Candidato para PR-40+ si el usuario lo pide.

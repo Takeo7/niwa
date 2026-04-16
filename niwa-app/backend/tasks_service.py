@@ -55,6 +55,46 @@ def get_task(task_id):
                     result['executor_output'] = output
             except (json.JSONDecodeError, KeyError):
                 pass
+        # PR-39: surface the latest run so the UI can warn when it
+        # failed (Feature 4 in docs/BUGS-FOUND.md). Minimal shape for
+        # the banner — full run object at /api/tasks/<id>/runs.
+        #
+        # Snapshots (capability_snapshot_json, budget_snapshot_json,
+        # observed_usage_signals_json) are deliberately EXCLUDED —
+        # they can carry host paths, env vars, account budget limits
+        # or prompt snippets that have no place in the task endpoint.
+        # The SELECT below whitelists columns, not ``SELECT *``, so
+        # a schema addition can't silently leak.
+        #
+        # backend_profile_slug comes via LEFT JOIN so the banner can
+        # say "Claude Sonnet failed with auth_required" instead of
+        # just the opaque error_code.
+        run_row = conn.execute(
+            "SELECT br.id, br.status, br.outcome, br.error_code, "
+            "       br.finished_at, br.relation_type, "
+            "       bp.slug AS backend_profile_slug, "
+            "       bp.display_name AS backend_profile_display_name "
+            "FROM backend_runs br "
+            "LEFT JOIN backend_profiles bp "
+            "       ON bp.id = br.backend_profile_id "
+            "WHERE br.task_id=? "
+            "ORDER BY br.created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if run_row:
+            result['last_run'] = {
+                'id': run_row['id'],
+                'status': run_row['status'],
+                'outcome': run_row['outcome'],
+                'error_code': run_row['error_code'],
+                'finished_at': run_row['finished_at'],
+                'relation_type': run_row['relation_type'],
+                'backend_profile_slug': run_row['backend_profile_slug'],
+                'backend_profile_display_name':
+                    run_row['backend_profile_display_name'],
+            }
+        else:
+            result['last_run'] = None
         return result
 
 
