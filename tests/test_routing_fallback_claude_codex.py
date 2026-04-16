@@ -526,7 +526,8 @@ class TestCredentialInjection(TestCase):
         """When _prepare_backend_env returns None, the executor must
         fail with codex_no_token — NOT escalate to fallback."""
         source = self._executor_source()
-        start = source.find("def _execute_task_v02(")
+        # PR-38: body moved to ``_execute_task_v02_body``.
+        start = source.find("def _execute_task_v02_body(")
         func = source[start:source.find("\ndef ", start + 1)]
         self.assertIn("codex_no_token", func)
         self.assertIn("no OpenAI token", func)
@@ -534,7 +535,8 @@ class TestCredentialInjection(TestCase):
     def test_extra_env_passed_to_adapter(self):
         """The executor injects _extra_env into profile dict."""
         source = self._executor_source()
-        start = source.find("def _execute_task_v02(")
+        # PR-38: body moved to ``_execute_task_v02_body``.
+        start = source.find("def _execute_task_v02_body(")
         func = source[start:source.find("\ndef ", start + 1)]
         self.assertIn("_extra_env", func)
 

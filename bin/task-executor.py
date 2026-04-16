@@ -24,7 +24,9 @@ import base64
 import json
 import logging
 import os
+import re
 import shlex
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -294,6 +296,134 @@ def _claim_next_openclaw_task() -> Optional[sqlite3.Row]:
             return None
         c.commit()
         return c.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone()
+
+
+# ─────────────── PR-38: auto-registro de proyecto ───────────────
+
+# Root directory where auto-created project folders live on the host.
+# Matches the convention already used for hosted sites (see setup.py:2281).
+_AUTO_PROJECTS_ROOT = INSTALL_DIR / "data" / "projects"
+
+_SLUG_ALLOWED = re.compile(r"[^a-z0-9-]+")
+
+
+def _sanitize_slug(raw: str, fallback: str = "task") -> str:
+    """Produce a filesystem-safe slug from a task title.
+
+    Lowercases, replaces runs of non-[a-z0-9-] with '-', trims '-' from
+    both ends, caps length at 40. Returns ``fallback`` if the result is
+    empty (e.g. the title was all whitespace or all punctuation).
+    """
+    s = _SLUG_ALLOWED.sub("-", (raw or "").lower()).strip("-")
+    s = s[:40].strip("-")
+    return s or fallback
+
+
+def _auto_project_prepare(task_dict: dict) -> Optional[dict]:
+    """Pre-create a project directory for tasks without a project_id.
+
+    Mutates ``task_dict`` by setting ``project_directory`` (so the
+    backend adapter picks it up as cwd) and returns a context dict for
+    the post-hook. If the task already has a ``project_id`` (user
+    attached it explicitly), returns ``None`` — no auto-creation.
+
+    Idempotency: the directory is created with ``exist_ok=True`` but
+    the slug includes a random suffix, so the same task being retried
+    won't pile up empty dirs — ``_auto_project_finalize`` cleans up
+    empties.
+    """
+    if task_dict.get("project_id"):
+        return None
+
+    title = task_dict.get("title") or ""
+    base = _sanitize_slug(title, fallback="task")
+    slug = f"{base}-{uuid.uuid4().hex[:6]}"
+    project_dir = _AUTO_PROJECTS_ROOT / slug
+
+    try:
+        project_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning(
+            "auto-project: could not create %s: %s — skipping auto-registration",
+            project_dir, e,
+        )
+        return None
+
+    task_dict["project_directory"] = str(project_dir)
+    return {
+        "slug": slug,
+        "directory": str(project_dir),
+        "name": title or slug,
+    }
+
+
+def _auto_project_has_files(project_dir: Path) -> bool:
+    """True iff ``project_dir`` contains at least one regular file
+    (recursive, ignoring dotfiles at the top level)."""
+    if not project_dir.is_dir():
+        return False
+    for p in project_dir.rglob("*"):
+        if p.is_file() and not p.name.startswith("."):
+            return True
+    return False
+
+
+def _auto_project_finalize(ctx: dict, task_id: str) -> None:
+    """Run after adapter.start() to commit or discard the auto-project.
+
+    - If the directory has no files: rmdir it (Claude either did
+      nothing useful, called something else, or failed).
+    - If it has files and there is no ``projects`` row pointing at
+      ``directory``: insert one (Claude wrote artifacts but did not
+      call the ``project_create`` MCP tool).
+    - In either "has files" branch: associate ``tasks.project_id`` to
+      the row pointing at the directory, so the task shows up under
+      its project in the UI.
+    """
+    project_dir = Path(ctx["directory"])
+    if not _auto_project_has_files(project_dir):
+        try:
+            if project_dir.is_dir():
+                shutil.rmtree(project_dir)
+        except OSError:
+            log.warning("auto-project: could not cleanup empty %s", project_dir)
+        return
+
+    now = _now_iso()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id FROM projects WHERE directory=?",
+            (ctx["directory"],),
+        ).fetchone()
+        if row:
+            proj_id = row["id"]
+        else:
+            proj_id = f"proj-{uuid.uuid4().hex[:12]}"
+            # Slug already carries a random suffix, so UNIQUE should
+            # hold. On the off chance of collision (pre-existing row
+            # with that slug but a different directory), degrade to a
+            # longer suffix rather than crashing the executor.
+            slug = ctx["slug"]
+            existing_slug = c.execute(
+                "SELECT id FROM projects WHERE slug=?", (slug,),
+            ).fetchone()
+            if existing_slug:
+                slug = f"{slug}-{uuid.uuid4().hex[:4]}"
+            c.execute(
+                "INSERT INTO projects "
+                "(id, slug, name, area, description, active, "
+                " created_at, updated_at, directory, url) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (proj_id, slug, ctx["name"], "proyecto", "", 1,
+                 now, now, ctx["directory"], ""),
+            )
+
+        c.execute(
+            "UPDATE tasks SET project_id=?, updated_at=? "
+            "WHERE id=? AND project_id IS NULL",
+            (proj_id, now, task_id),
+        )
+        c.commit()
 
 
 def _resolve_project_dir(project_id: Optional[str]) -> Optional[Path]:
@@ -1044,6 +1174,35 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
     task_dict = dict(task)
     task_id = task_dict["id"]
 
+    # PR-38: auto-create a project directory for tasks without an
+    # explicit project_id, so the adapter can set cwd there and so
+    # files Claude writes show up under Proyectos in the UI. The
+    # finalize in the ``finally`` block below either commits the
+    # project row (files were written) or rmdirs the empty dir.
+    auto_project_ctx = _auto_project_prepare(task_dict)
+
+    try:
+        return _execute_task_v02_body(
+            task_dict, task_id,
+            routing_service, runs_service, get_execution_registry,
+        )
+    finally:
+        if auto_project_ctx is not None:
+            try:
+                _auto_project_finalize(auto_project_ctx, task_id)
+            except Exception:
+                log.exception(
+                    "auto-project finalize failed for task %s", task_id,
+                )
+
+
+def _execute_task_v02_body(
+    task_dict: dict,
+    task_id: str,
+    routing_service,
+    runs_service,
+    get_execution_registry,
+) -> tuple[bool, str]:
     # Step 1: Route
     with _conn() as c:
         decision = routing_service.decide(task_dict, c)

@@ -322,11 +322,19 @@ class TestStartFailurePath:
 
 class TestCommandSafety:
 
-    def test_build_command_never_has_dangerous_flag(self):
+    def test_build_command_includes_dangerous_flag(self):
+        # PR-34: ``--dangerously-skip-permissions`` is always on now.
+        # The niwa user is a dedicated service account (OS-level
+        # sandbox); Claude Code's scoped settings.json proved
+        # unreliable under ``claude -p`` (permissions blocked even
+        # for allowed paths). See claude_code.py::_build_command for
+        # the full rationale. When/if the CLI supports reliable
+        # scoped permissions in -p mode, flip this back behind a
+        # toggle (Feature 2 in docs/BUGS-FOUND.md).
         cmd = ClaudeCodeAdapter._build_command(
             model="claude-sonnet-4-6", profile={},
         )
-        assert "--dangerously-skip-permissions" not in cmd
+        assert "--dangerously-skip-permissions" in cmd
 
     def test_build_command_with_resume(self):
         cmd = ClaudeCodeAdapter._build_command(

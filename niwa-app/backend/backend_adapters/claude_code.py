@@ -475,6 +475,32 @@ class ClaudeCodeAdapter(BackendAdapter):
         notes = task.get("notes", "")
         if notes:
             parts.append(f"\n## Notes\n{notes}")
+
+        # PR-38: if the executor pre-created a project directory for
+        # this task (no project_id yet), tell Claude to use it and to
+        # register the project via the MCP tool. The executor also
+        # has a safety-net post-hook that registers the project
+        # automatically if Claude writes files without calling the
+        # tool — but calling it explicitly lets Claude pick a better
+        # name/description than the fallback.
+        pdir = task.get("project_directory")
+        if pdir and not task.get("project_id"):
+            parts.append(
+                "\n## Working directory\n"
+                f"A fresh directory has been prepared for this task:\n"
+                f"    {pdir}\n\n"
+                "If this task involves creating persistent artifacts "
+                "(web, app, scripts, configs, datasets, etc.):\n"
+                "1. Call the `project_create` MCP tool FIRST with:\n"
+                f"   - name: {title or 'Untitled'!r}\n"
+                "   - area: 'proyecto'\n"
+                f"   - directory: {pdir!r}\n"
+                "   - description: a one-line summary of what you're building.\n"
+                "2. Write all files inside that directory using absolute paths.\n"
+                "If the task is conversational (a question, a review, a "
+                "summary), you can skip `project_create` and answer directly."
+            )
+
         return "\n\n".join(parts) if parts else "Complete the assigned task."
 
     @staticmethod
