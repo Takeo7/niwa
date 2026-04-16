@@ -1244,6 +1244,13 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
                     f"{str(result)[:300]}"
                 )
 
+            # PR-35: pass the human-readable result text as output
+            # so _finish_task stores it in task_events and the UI
+            # can show what Claude actually did. Before this, the
+            # output was a technical dict repr — useless for the user.
+            result_text = result.get("result_text", "")
+            if result_text:
+                return True, result_text
             return True, (
                 f"[v02] Backend {profile['slug']} completed: "
                 f"{str(result)[:500]}"
