@@ -1183,21 +1183,10 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
         # Inject extra_env into profile for the adapter to pick up
         profile["_extra_env"] = extra_env
 
-        # PR-33: check if the operator enabled dangerous mode (all
-        # permissions bypassed). Read from the DB setting
-        # ``executor.dangerous_mode``. The adapter uses this to
-        # conditionally add ``--dangerously-skip-permissions``.
-        dangerous_mode = False
-        try:
-            with _conn() as c:
-                row = c.execute(
-                    "SELECT value FROM settings WHERE key = 'executor.dangerous_mode'"
-                ).fetchone()
-                if row and row[0] in ("1", "true", "yes"):
-                    dangerous_mode = True
-        except Exception:
-            pass
-        profile["_dangerous_mode"] = dangerous_mode
+        # PR-34: --dangerously-skip-permissions is always on (the
+        # niwa user is the OS-level sandbox). The _dangerous_mode
+        # toggle from PR-33 is removed — scoped settings.json
+        # proved unreliable in claude -p non-interactive mode.
 
         # Step 4: Execute via adapter
         try:
@@ -1236,6 +1225,24 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
                     f"{profile['slug']} transient: {error_code}"
                 )
                 continue
+
+            # PR-34: check adapter outcome. If the run failed
+            # (permission denied, execution error, etc.) the TASK
+            # must NOT be marked as hecha. Return False so the
+            # caller leaves the task in a non-terminal state.
+            adapter_status = result.get("status", "")
+            if adapter_status == "failed":
+                error_code = result.get("error_code", "unknown")
+                log.warning(
+                    "task %s: adapter %s returned failed "
+                    "(error_code=%s)",
+                    task_id, profile["slug"], error_code,
+                )
+                return False, (
+                    f"[v02] Backend {profile['slug']} failed: "
+                    f"error_code={error_code}. "
+                    f"{str(result)[:300]}"
+                )
 
             return True, (
                 f"[v02] Backend {profile['slug']} completed: "

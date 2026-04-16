@@ -56,12 +56,14 @@ class TestBuildCommandIncludesVerbose:
             "non-interactive execution."
         )
 
-    def test_no_dangerously_skip_permissions(self):
-        """SPEC §8: never include --dangerously-skip-permissions."""
+    def test_dangerously_skip_permissions_always_present(self):
+        """PR-34: flag is always on. The niwa user is the OS
+        sandbox; Claude Code's scoped settings.json was unreliable
+        in non-interactive -p mode."""
         from backend_adapters.claude_code import ClaudeCodeAdapter
 
         cmd = ClaudeCodeAdapter._build_command(model="claude-sonnet-4-6")
-        assert "--dangerously-skip-permissions" not in cmd
+        assert "--dangerously-skip-permissions" in cmd
 
     def test_model_included_when_specified(self):
         from backend_adapters.claude_code import ClaudeCodeAdapter
