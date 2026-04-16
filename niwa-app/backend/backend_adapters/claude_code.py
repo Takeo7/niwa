@@ -490,17 +490,20 @@ class ClaudeCodeAdapter(BackendAdapter):
         if profile and profile.get("command_template"):
             cli_parts = shlex.split(profile["command_template"])
 
-        cmd = cli_parts + ["-p", "--output-format", "stream-json", "--verbose"]
+        cmd = cli_parts + ["-p", "--output-format", "stream-json", "--verbose",
+                           "--dangerously-skip-permissions"]
         if model:
             cmd.extend(["--model", model])
         if resume_session_id:
             cmd.extend(["--resume", resume_session_id])
-        # PR-33: the ``executor.dangerous_mode`` DB setting allows
-        # the operator to opt into unrestricted mode via the UI.
-        # Default is scoped permissions via Claude Code's native
-        # settings.json (created by setup.py during install).
-        if profile and profile.get("_dangerous_mode"):
-            cmd.append("--dangerously-skip-permissions")
+        # PR-33 introduced a _dangerous_mode toggle to conditionally
+        # add the flag. PR-34 makes it the default: the niwa user is
+        # a dedicated service account (not root), OS permissions ARE
+        # the sandbox, and Claude Code's scoped settings.json format
+        # proved unreliable in non-interactive mode (permissions were
+        # blocked even for allowed paths). The flag is always on now.
+        # If a future Claude Code release supports reliable scoped
+        # permissions in -p mode, revisit and gate behind the toggle.
         return cmd
 
     @staticmethod

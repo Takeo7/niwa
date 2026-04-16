@@ -84,73 +84,49 @@ class TestSetupCreatesClaudeSettings:
             "executor can read it"
         )
 
-    def test_no_dangerously_skip_permissions_in_install_code(self):
-        """The install must NOT add --dangerously-skip-permissions
-        in generated commands or unit files. Mentions in docstrings
-        or comments are OK (they document why it's avoided)."""
+    def test_install_does_not_hardcode_flag_in_unit_template(self):
+        """The systemd unit template must NOT bake the
+        --dangerously-skip-permissions flag into ExecStart.
+        The flag is added by the adapter at runtime (PR-34),
+        not by the installer."""
         body = self._systemd_unit_body()
-        # Strip comments and docstrings, then check executable code.
-        code_lines = [
-            ln for ln in body.splitlines()
-            if ln.strip()
-            and not ln.strip().startswith("#")
-            and not ln.strip().startswith('"""')
-            and not ln.strip().startswith("'''")
-            and "dedicated 'niwa' user" not in ln  # docstring ref
-        ]
-        code_only = "\n".join(code_lines)
-        assert "--dangerously-skip-permissions" not in code_only, (
-            "install must not add --dangerously-skip-permissions "
-            "by default. Use scoped settings.json instead. "
-            "Dangerous mode is an opt-in via DB setting."
+        # Check unit templates (the f-string blocks).
+        import re
+        unit_blocks = re.findall(
+            r'unit\s*=\s*f"""\[Unit\].*?"""', body, flags=re.DOTALL,
         )
+        for block in unit_blocks:
+            assert "--dangerously-skip-permissions" not in block, (
+                "unit template must not hardcode the flag — "
+                "the adapter adds it at runtime"
+            )
 
 
-# ── Fix 2: dangerous mode toggle ────────────────────────────────
+# ── Fix 2: --dangerously-skip-permissions always on (PR-34) ──────
 
-class TestDangerousModeToggle:
-    """Pin that the adapter conditionally adds the flag and that
-    the executor reads the DB setting."""
+class TestDangerousPermissionsAlwaysOn:
+    """PR-34: the flag is always present. The niwa user is the
+    OS-level sandbox. Claude Code's scoped settings.json proved
+    unreliable in non-interactive -p mode."""
 
-    def test_adapter_checks_dangerous_mode_flag(self):
-        src = (BACKEND_DIR / "backend_adapters" / "claude_code.py").read_text()
-        assert "_dangerous_mode" in src, (
-            "ClaudeCodeAdapter._build_command must check "
-            "profile['_dangerous_mode'] to conditionally add "
-            "--dangerously-skip-permissions"
-        )
-        assert "--dangerously-skip-permissions" in src, (
-            "The flag must appear in the adapter source (added "
-            "conditionally, not always)"
-        )
-
-    def test_executor_reads_dangerous_mode_from_db(self):
-        src = (REPO_ROOT / "bin" / "task-executor.py").read_text()
-        assert "executor.dangerous_mode" in src, (
-            "executor must read 'executor.dangerous_mode' from "
-            "the settings table to pass to the adapter"
-        )
-
-    def test_adapter_does_not_add_flag_by_default(self):
-        """When _dangerous_mode is not set or False, the flag
-        must NOT appear in the command."""
+    def test_flag_always_in_command(self):
         from backend_adapters.claude_code import ClaudeCodeAdapter
 
         cmd = ClaudeCodeAdapter._build_command(model="claude-sonnet-4-6")
-        assert "--dangerously-skip-permissions" not in cmd, (
-            "without _dangerous_mode=True, the flag must not appear"
+        assert "--dangerously-skip-permissions" in cmd, (
+            "_build_command must always include "
+            "--dangerously-skip-permissions (PR-34). The niwa user "
+            "is the OS sandbox; Claude Code's scoped settings.json "
+            "was unreliable in non-interactive mode."
         )
 
-    def test_adapter_adds_flag_when_dangerous_mode_set(self):
+    def test_flag_present_even_without_profile(self):
         from backend_adapters.claude_code import ClaudeCodeAdapter
 
         cmd = ClaudeCodeAdapter._build_command(
-            model="claude-sonnet-4-6",
-            profile={"_dangerous_mode": True},
+            model="claude-sonnet-4-6", profile=None,
         )
-        assert "--dangerously-skip-permissions" in cmd, (
-            "with _dangerous_mode=True, the flag must appear"
-        )
+        assert "--dangerously-skip-permissions" in cmd
 
 
 # ── Fix 3: permission denial detection ──────────────────────────
@@ -192,4 +168,44 @@ class TestPermissionDenialDetection:
         assert "error_code=error_code" in src, (
             "finish_run must receive error_code so the DB "
             "records why the run failed"
+        )
+
+
+# ── Fix 4 (PR-34): failed adapter → task NOT hecha ──────────────
+
+class TestFailedAdapterDoesNotMarkTaskDone:
+    """PR-34 fix: if the adapter returns status=failed, the
+    executor must return False (not True) so the task is NOT
+    marked as hecha. Before PR-34, _execute_task_v02 returned
+    True unconditionally after the adapter finished, regardless
+    of the adapter's outcome — so tasks with permission denials
+    ended as 'hecha' with no real work done."""
+
+    def test_executor_checks_adapter_status_failed(self):
+        src = (REPO_ROOT / "bin" / "task-executor.py").read_text()
+        assert 'adapter_status == "failed"' in src, (
+            "_execute_task_v02 must check adapter result status. "
+            "If failed, return False so the task is not marked hecha."
+        )
+
+    def test_executor_returns_false_on_adapter_failure(self):
+        import re
+        src = (REPO_ROOT / "bin" / "task-executor.py").read_text()
+        start = src.index("def _execute_task_v02(")
+        tail = src[start:]
+        end = re.search(r"\ndef [a-zA-Z_]", tail)
+        body = tail[: end.start()] if end else tail
+
+        # After checking adapter_status == "failed", the function
+        # must return False (not True).
+        failed_block = body[body.index('adapter_status == "failed"'):]
+        # Find the next return statement
+        return_match = re.search(r"return (True|False)", failed_block)
+        assert return_match, (
+            "no return statement found after adapter_status check"
+        )
+        assert return_match.group(1) == "False", (
+            "executor must return False when adapter reports failed, "
+            "not True. Returning True marks the task as hecha even "
+            "though the backend failed (the bug this fixes)."
         )
