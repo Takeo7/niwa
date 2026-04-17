@@ -4380,8 +4380,22 @@ class Handler(BaseHTTPRequestHandler):
                 if not proj:
                     return self._json({'error': 'not_found'}, 404)
                 allowed = {'name', 'description', 'area', 'active', 'directory', 'url'}
+                # PR-55: if the client explicitly passes an empty
+                # ``directory`` string on edit, honor the "déjalo vacío
+                # para autogenerar" UI contract by synthesising
+                # ``<projects_root>/<slug>`` — same rule as POST since
+                # PR-51. Before this, the PATCH silently dropped the
+                # empty value and the DeployCard's "Configurar
+                # directorio" button was a no-op.
+                working_payload = dict(payload)
+                if 'directory' in working_payload:
+                    dir_val = (working_payload.get('directory') or '').strip()
+                    if not dir_val:
+                        working_payload['directory'] = str(
+                            _default_projects_root() / proj['slug']
+                        )
                 sets, params = [], []
-                for k, v in payload.items():
+                for k, v in working_payload.items():
                     if k in allowed:
                         sets.append(f'{k}=?')
                         params.append(v)

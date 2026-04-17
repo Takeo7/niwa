@@ -63,7 +63,36 @@ export function useTask(id: string | null) {
     queryKey: ['task', id],
     queryFn: () => api<Task>(`tasks/${id}`),
     enabled: !!id,
+    // PR-55: poll while the task is running. The executor auto-
+    // registers the project asynchronously (``project_slug`` gets
+    // populated mid-run), and the run itself transitions statuses.
+    // Without polling, the user only sees the up-to-date state
+    // after a manual reload. 4s is enough granularity for a detail
+    // view without hammering the DB.
+    refetchInterval: (query) => {
+      const task = query.state.data as Task | undefined;
+      if (!task) return false;
+      const active = new Set([
+        'pendiente',
+        'en_progreso',
+        'waiting_input',
+        'bloqueada',
+      ]);
+      return active.has(task.status) ? 4000 : false;
+    },
   });
+}
+
+// PR-55: task mutations must also invalidate project queries because
+// ProjectDetail and ProjectList render aggregates (open_tasks,
+// done_tasks, total_tasks, progress bar) that come from ``['project']``
+// and ``['projects']``. Without this the counters mentían tras crear,
+// editar, retry o borrar una tarea hasta un reload manual.
+function _invalidateProjectAggregates(
+  qc: ReturnType<typeof useQueryClient>,
+) {
+  qc.invalidateQueries({ queryKey: ['projects'] });
+  qc.invalidateQueries({ queryKey: ['project'] });
 }
 
 export function useCreateTask() {
@@ -73,6 +102,7 @@ export function useCreateTask() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['kanban'] });
+      _invalidateProjectAggregates(qc);
     },
   });
 }
@@ -86,6 +116,7 @@ export function useUpdateTask() {
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['task'] });
       qc.invalidateQueries({ queryKey: ['kanban'] });
+      _invalidateProjectAggregates(qc);
     },
   });
 }
@@ -98,6 +129,7 @@ export function useRetryTask() {
     onSuccess: (_data, id) => {
       qc.invalidateQueries({ queryKey: ['task', id] });
       qc.invalidateQueries({ queryKey: ['tasks'] });
+      _invalidateProjectAggregates(qc);
     },
   });
 }
@@ -109,6 +141,7 @@ export function useDeleteTask() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['kanban'] });
+      _invalidateProjectAggregates(qc);
     },
   });
 }

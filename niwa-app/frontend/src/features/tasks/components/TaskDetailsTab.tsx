@@ -39,8 +39,8 @@ import {
   useRemoveTaskLabel,
 } from '../hooks/useTasks';
 import { notifications } from '@mantine/notifications';
-import type { Task } from '../../../shared/types';
 import { TaskForm } from './TaskForm';
+import type { Task } from '../../../shared/types';
 
 const STATUS_OPTIONS = [
   { value: 'pendiente', label: 'Pendiente' },
