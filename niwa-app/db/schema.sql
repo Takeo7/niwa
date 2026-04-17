@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   assigned_to_yume INTEGER NOT NULL DEFAULT 0,   -- DEPRECATED v0.2: use backend_profiles/routing_decisions
   assigned_to_claude INTEGER NOT NULL DEFAULT 0, -- DEPRECATED v0.2: use backend_profiles/routing_decisions
   attachments TEXT,
+  parent_task_id TEXT,  -- PR-55: follow-up tasks link back to their parent (waiting_input reply, etc.)
   -- v0.2 execution columns (migration 007)
   requested_backend_profile_id TEXT REFERENCES backend_profiles(id) ON DELETE SET NULL,
   selected_backend_profile_id TEXT REFERENCES backend_profiles(id) ON DELETE SET NULL,
@@ -186,6 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);

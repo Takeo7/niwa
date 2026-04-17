@@ -3993,6 +3993,26 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.exception('github set_pat failed')
                 return self._json({'error': str(e)}, 500)
+        _m_task_retry = re.match(r'^/api/tasks/([^/]+)/retry$', path)
+        if _m_task_retry:
+            task_id = _m_task_retry.group(1)
+            ts = now_iso()
+            with db_conn() as conn:
+                task = conn.execute(
+                    "SELECT id, status FROM tasks WHERE id=?", (task_id,),
+                ).fetchone()
+                if not task:
+                    return self._json({'error': 'not_found'}, 404)
+                # Flip status back to ``pendiente`` so the executor's
+                # poll loop picks it up. ``completed_at`` is reset so
+                # the Dashboard "hechas hoy" counter doesn't double-count.
+                conn.execute(
+                    "UPDATE tasks SET status='pendiente', completed_at=NULL, "
+                    "updated_at=? WHERE id=?",
+                    (ts, task_id),
+                )
+                conn.commit()
+            return self._json({'ok': True, 'status': 'pendiente'})
         _m_proj_deploy = re.match(r'^/api/projects/([^/]+)/deploy$', path)
         if _m_proj_deploy:
             key = _m_proj_deploy.group(1)

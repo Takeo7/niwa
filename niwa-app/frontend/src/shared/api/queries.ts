@@ -90,6 +90,18 @@ export function useUpdateTask() {
   });
 }
 
+export function useRetryTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiPost<{ ok: boolean; status: string }>(`tasks/${id}/retry`, {}),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['task', id] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+}
+
 export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({
