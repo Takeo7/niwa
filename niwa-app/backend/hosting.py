@@ -13,11 +13,11 @@ PROJECTS_DIR = Path(os.environ.get("NIWA_PROJECTS_DIR", "/opt/niwatest/data/proj
 HOSTING_PORT = int(os.environ.get("NIWA_HOSTING_PORT", "8880"))
 HOSTING_DOMAIN = os.environ.get("NIWA_HOSTING_DOMAIN", "")
 CADDYFILE_PATH = Path(os.environ.get("NIWA_HOSTING_CADDYFILE", "/tmp/niwa-hosting-Caddyfile"))
-DB_PATH = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
 
 
 def _db():
-    c = sqlite3.connect(DB_PATH, timeout=10)
+    db_path = os.environ.get("NIWA_DB_PATH", "/data/niwa.sqlite3")
+    c = sqlite3.connect(db_path, timeout=10)
     c.row_factory = sqlite3.Row
     c.execute('PRAGMA journal_mode=WAL')
     c.execute('PRAGMA busy_timeout=5000')

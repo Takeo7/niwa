@@ -6,6 +6,7 @@ import {
   IconClock,
   IconFileText,
   IconPalette,
+  IconCloudUpload,
 } from '@tabler/icons-react';
 import { ServicesPanel } from './ServicesPanel';
 import { AgentsPanel } from './AgentsPanel';
@@ -13,6 +14,7 @@ import { ConfigPanel } from './ConfigPanel';
 import { RoutinesPanel } from './RoutinesPanel';
 import { LogsPanel } from './LogsPanel';
 import { StylesPanel } from './StylesPanel';
+import { DeploymentsPanel } from './DeploymentsPanel';
 
 export function SystemView() {
   return (
@@ -54,6 +56,12 @@ export function SystemView() {
           >
             Estilos
           </Tabs.Tab>
+          <Tabs.Tab
+            value="hosting"
+            leftSection={<IconCloudUpload size={16} />}
+          >
+            Hosting
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="services" pt="md">
@@ -73,6 +81,9 @@ export function SystemView() {
         </Tabs.Panel>
         <Tabs.Panel value="styles" pt="md">
           <StylesPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="hosting" pt="md">
+          <DeploymentsPanel />
         </Tabs.Panel>
       </Tabs>
     </Stack>

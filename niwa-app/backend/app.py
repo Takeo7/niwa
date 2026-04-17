@@ -28,6 +28,7 @@ import health_service
 import scheduler
 import notifier
 import image_service
+import hosting
 import oauth
 import state_machines
 import time as _time
@@ -3440,6 +3441,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == '/api/projects':
             return self._json(fetch_projects())
+        if path == '/api/deployments':
+            try:
+                return self._json({'deployments': hosting.list_deployments()})
+            except Exception as e:
+                logger.exception('list_deployments failed')
+                return self._json({'error': str(e)}, 500)
         if path == '/api/kanban-columns':
             include_terminal = qs.get('include_terminal', ['1'])[0] == '1'
             return self._json(fetch_kanban_columns(include_terminal=include_terminal))
@@ -3934,6 +3941,44 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'JSON inválido'}, 400)
             except Exception as e:
                 return self._json({'error': f'Error importando tokens: {e}'}, 500)
+        _m_proj_deploy = re.match(r'^/api/projects/([^/]+)/deploy$', path)
+        if _m_proj_deploy:
+            key = _m_proj_deploy.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (key,)).fetchone()
+                if not proj:
+                    proj = conn.execute('SELECT * FROM projects WHERE id=?', (key,)).fetchone()
+            if not proj:
+                return self._json({'error': 'not_found'}, 404)
+            if not proj['directory']:
+                return self._json({'error': 'project_has_no_directory'}, 400)
+            # Deliberately ignore payload slug/directory: the project's own
+            # slug + directory are the only values we trust. Accepting them
+            # from the request would let any authenticated admin publish
+            # arbitrary host paths (e.g. /etc, /root) as static sites.
+            try:
+                result = hosting.deploy_project(proj['id'])
+                return self._json({'ok': True, **result})
+            except ValueError as e:
+                return self._json({'error': str(e)}, 400)
+            except Exception as e:
+                logger.exception('deploy_project failed')
+                return self._json({'error': str(e)}, 500)
+        _m_proj_undeploy = re.match(r'^/api/projects/([^/]+)/undeploy$', path)
+        if _m_proj_undeploy:
+            key = _m_proj_undeploy.group(1)
+            with db_conn() as conn:
+                proj = conn.execute('SELECT * FROM projects WHERE slug=?', (key,)).fetchone()
+                if not proj:
+                    proj = conn.execute('SELECT * FROM projects WHERE id=?', (key,)).fetchone()
+            if not proj:
+                return self._json({'error': 'not_found'}, 404)
+            try:
+                hosting.undeploy_project(proj['id'])
+                return self._json({'ok': True})
+            except Exception as e:
+                logger.exception('undeploy_project failed')
+                return self._json({'error': str(e)}, 500)
         if path == '/api/projects':
             name = (payload.get('name') or '').strip()
             if not name:
