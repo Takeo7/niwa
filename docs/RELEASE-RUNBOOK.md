@@ -10,10 +10,12 @@ El **CLI** (`niwa update`) es el único camino real de actualización. La
 **UI** (Sistema → Actualizar) muestra estado + genera el comando a
 copiar, pero no ejecuta. El motor (`bin/update_engine.py`) hace
 automáticamente: guard de repo dirty → backup SQLite → git pull →
-copiar ficheros → rebuild container → restart executor → health-check.
-Si el health-check falla dispara auto-revert (git reset al commit
-previo + restore de DB). Cada run queda anotado en
-`<install>/data/update-log.json` (últimos 20). La UI consume ese log.
+copiar ficheros → rebuild container → restart executor →
+**health-check triple** (HTTP `/health` + `schema_version` ≥
+baseline + `docker compose ps` app running). Si alguno falla dispara
+auto-revert (git reset al commit previo + restore de DB). Cada run
+queda anotado en `<install>/data/update-log.json` (últimos 20). La
+UI consume ese log.
 
 ## 1. Instalación limpia
 
@@ -94,6 +96,42 @@ Al terminar se imprime un **manifest** con:
 - "Última actualización" con badge **OK** (verde).
 - `before → after` visible.
 - `backup_path` registrado.
+
+### Checklist manual post-update (honest)
+
+El motor ya hizo 3 smokes automáticos antes de marcar el update como
+success (HTTP `/health` + `schema_version` avanzado si había baseline
++ `docker compose ps` reporta app `running`). Si alguno fallaba ya
+habría disparado auto-revert. Complementa con 4 checks que el motor
+**no puede** hacer solo:
+
+```bash
+# 1. Executor systemd activo (el motor lo reinicia pero no vuelve a
+#    validarlo después del restart).
+systemctl status niwa-niwa-executor.service --no-pager | head -5
+# Esperado: "active (running)"
+
+# 2. Última entrada del update-log no tiene errores sueltos.
+python3 -c "import json; e=json.load(open('/root/.niwa/data/update-log.json'))[-1]; \
+  print('success=', e['success'], 'reverted=', e.get('reverted'), \
+  'errors=', e.get('errors'), 'warnings=', e.get('warnings'))"
+# Esperado: success=True, reverted=False, errors=[]
+
+# 3. Crear una tarea dummy via API y verificar que el executor la
+#    levanta. El motor toca el executor pero no lo ejerce.
+curl -s -X POST http://127.0.0.1:8080/api/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"smoke post-update","status":"pendiente"}' \
+  -b <tu-cookie-de-sesión>
+# Espera unos segundos y comprueba en la UI que la tarea transitiona.
+
+# 4. MCP gateway contract (solo si instalaste en modo assistant).
+curl -s http://127.0.0.1:8080/api/health/full | python3 -m json.tool
+# Verifica que "mcp_gateway" y "executor" aparezcan con estado ok.
+```
+
+Si cualquier paso **falla**, el runbook de 4.x (abajo) explica cómo
+volver al commit previo con `niwa restore --from=...`.
 
 ## 4. Recovery de un update fallido
 
