@@ -7,6 +7,7 @@ import {
   IconFileText,
   IconPalette,
   IconCloudUpload,
+  IconBrandGithub,
 } from '@tabler/icons-react';
 import { ServicesPanel } from './ServicesPanel';
 import { AgentsPanel } from './AgentsPanel';
@@ -15,6 +16,7 @@ import { RoutinesPanel } from './RoutinesPanel';
 import { LogsPanel } from './LogsPanel';
 import { StylesPanel } from './StylesPanel';
 import { DeploymentsPanel } from './DeploymentsPanel';
+import { GithubPanel } from './GithubPanel';
 
 export function SystemView() {
   return (
@@ -62,6 +64,12 @@ export function SystemView() {
           >
             Hosting
           </Tabs.Tab>
+          <Tabs.Tab
+            value="github"
+            leftSection={<IconBrandGithub size={16} />}
+          >
+            GitHub
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="services" pt="md">
@@ -84,6 +92,9 @@ export function SystemView() {
         </Tabs.Panel>
         <Tabs.Panel value="hosting" pt="md">
           <DeploymentsPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="github" pt="md">
+          <GithubPanel />
         </Tabs.Panel>
       </Tabs>
     </Stack>

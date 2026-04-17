@@ -781,6 +781,44 @@ export function useHostingStatus(enabled: boolean = true) {
   });
 }
 
+// ── GitHub PAT (PR-49) ──
+export interface GithubStatus {
+  connected: boolean;
+  username: string | null;
+  scopes: string[];
+  updated_at: string | null;
+}
+
+export function useGithubStatus() {
+  return useQuery({
+    queryKey: ['github-status'],
+    queryFn: () => api<GithubStatus>('github/status'),
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveGithubToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) =>
+      apiPost<{ ok: boolean } & GithubStatus>('github/token', { token }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['github-status'] });
+    },
+  });
+}
+
+export function useDisconnectGithub() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete<{ ok: boolean }>('github/token'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['github-status'] });
+    },
+  });
+}
+
 export function useDeployProject() {
   const qc = useQueryClient();
   return useMutation({
