@@ -326,11 +326,14 @@ function EditProjectModal({
 
   async function handleSave() {
     try {
+      // Send directory always (empty string triggers backend autogen
+      // since PR-55). Sending ``undefined`` when empty used to drop
+      // the field silently and leave the project without directory.
       await updateProject.mutateAsync({
         slug: project.slug,
         name,
         description,
-        directory: directory.trim() || undefined,
+        directory: directory.trim(),
       });
       notifications.show({
         title: 'Proyecto actualizado',

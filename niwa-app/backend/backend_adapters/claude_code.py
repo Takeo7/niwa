@@ -625,13 +625,16 @@ class ClaudeCodeAdapter(BackendAdapter):
             "the working directory instead.\n\n"
             "## REGISTER THE PROJECT\n"
             "Before writing any file, call the `project_create` MCP "
-            "tool so the project shows up in the Niwa UI. Exact "
-            "arguments:\n\n"
+            "tool so the project shows up in the Niwa UI AND the "
+            "current task gets attached to it in the same "
+            "transaction. Exact arguments — pass `task_id` as the "
+            "literal string below so the link is atomic:\n\n"
             "```json\n"
             "{\n"
-            f'  "name": {title!r},\n'
+            f'  "name": {json.dumps(title)},\n'
             '  "area": "proyecto",\n'
-            f'  "directory": {pdir!r},\n'
+            f'  "directory": {json.dumps(pdir)},\n'
+            f'  "task_id": {json.dumps(task.get("id", ""))},\n'
             '  "description": "<one sentence of what you\'re building>"\n'
             "}\n"
             "```\n\n"

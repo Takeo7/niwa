@@ -142,7 +142,13 @@ _LEGACY_TOOL_DEFS = [
         ),
         Tool(
             name="project_create",
-            description="Create a new project. Required: name, area. Returns the created project.",
+            description=(
+                "Create a new project. Required: name, area. Optional: "
+                "task_id — when provided, the server attaches that task "
+                "to the new project in the same transaction (use this "
+                "when the current task should live under the project "
+                "you're about to create). Returns the created project."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -151,6 +157,13 @@ _LEGACY_TOOL_DEFS = [
                     "description": {"type": "string"},
                     "directory": {"type": "string", "description": "Filesystem path for the project"},
                     "url": {"type": "string", "description": "URL (repo, docs, etc.)"},
+                    "task_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional: attach this task to the new project "
+                            "atomically. Pass the current task's id."
+                        ),
+                    },
                 },
                 "required": ["name", "area"],
             },
@@ -824,14 +837,23 @@ def _deploy_web(args):
 
 
 def _undeploy_web(args):
+    """Undeploy a project. Symmetric fix to ``_deploy_web`` (PR-55).
+
+    Previous implementation only flipped ``deployments.status`` in the
+    DB — it did NOT regenerate the Caddyfile nor reload Caddy. So the
+    UI and MCP both said "inactive" while the site kept serving.
+    Delegating to ``POST /api/projects/:id/undeploy`` (same HTTP path
+    the web UI uses) runs ``hosting.undeploy_project()`` which does
+    the reload — a single source of truth for both actions.
+    """
     project_id = args["project_id"]
-    now = _now_iso()
-    with _rw_conn() as c:
-        c.execute(
-            "UPDATE deployments SET status='inactive', updated_at=? WHERE project_id=?",
-            (now, project_id),
+    status, resp = _app_request(
+        f"/api/projects/{project_id}/undeploy", method="POST", body={}
+    )
+    if status != 200:
+        raise ValueError(
+            f"undeploy_web failed (status={status}): {resp.get('error', resp)}"
         )
-        c.commit()
     return {"ok": True}
 
 

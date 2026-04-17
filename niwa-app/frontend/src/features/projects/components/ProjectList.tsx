@@ -65,19 +65,22 @@ export function ProjectList() {
   };
 
   const handleSave = async () => {
+    // Always send ``directory``; empty string means "autogenerate"
+    // (backend /api/projects since PR-51 for POST, PR-55 for PATCH).
+    const dir = directory.trim();
     if (editing) {
       await updateProject.mutateAsync({
         slug: editing.slug,
         name,
         description,
-        directory: directory.trim() || undefined,
+        directory: dir,
       });
       notifications.show({ title: 'Proyecto actualizado', message: name, color: 'green' });
     } else {
       await createProject.mutateAsync({
         name,
         description,
-        directory: directory.trim() || undefined,
+        directory: dir,
       });
       notifications.show({ title: 'Proyecto creado', message: name, color: 'green' });
     }
