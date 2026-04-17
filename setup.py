@@ -624,6 +624,11 @@ class WizardConfig:
         self.llm_provider: str = ""
         self.llm_command: str = ""
         self.projects: list[dict] = []  # [{name, slug, directory}, ...]
+        # PR final 1: canonical update command for this install.
+        # Filled in by execute_install after ``_install_niwa_wrapper``
+        # tries to drop a symlink on a PATH entry.
+        self.niwa_command: str = "niwa"
+        self.niwa_command_origin: str = ""
         self.telegram_bot_token: str = ""
         self.telegram_chat_id: str = ""
         self.webhook_url: str = ""
@@ -1327,6 +1332,57 @@ def step_summary(cfg: WizardConfig) -> bool:
 
 
 # ────────────────────────── execution ──────────────────────────
+def _install_niwa_wrapper(cfg: "WizardConfig") -> tuple[Optional[str], str]:
+    """Best-effort install of a global ``niwa`` command (PR final 1).
+
+    Returns ``(command, origin)``:
+
+      - ``command`` is what the operator should type. ``niwa`` if we
+        managed to drop a symlink/wrapper on a PATH entry; otherwise
+        the absolute path to ``<repo>/niwa`` (always works).
+      - ``origin`` is a short human-readable string saying where the
+        command came from (for the install summary).
+
+    Priority order:
+
+      1. ``/usr/local/bin/niwa`` — standard for sudo installs.
+      2. ``~/.local/bin/niwa`` — common user-local PATH on Linux.
+      3. Absolute path to ``<repo>/niwa``.
+
+    Any step that fails (permissions, read-only FS, etc.) falls
+    through to the next without blocking the install.
+    """
+    import shutil as _sh
+    script_src = Path(__file__).resolve().parent / "niwa"
+    if not script_src.exists():
+        return None, "(repo niwa script missing)"
+
+    candidates = []
+    if os.geteuid() == 0:
+        candidates.append(Path("/usr/local/bin/niwa"))
+    candidates.append(Path.home() / ".local" / "bin" / "niwa")
+
+    for target in candidates:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() or target.is_symlink():
+                try:
+                    target.unlink()
+                except IsADirectoryError:
+                    _sh.rmtree(str(target))
+            target.symlink_to(script_src)
+            path_env = os.environ.get("PATH", "")
+            if str(target.parent) in path_env.split(os.pathsep):
+                return "niwa", f"symlink {target} → {script_src}"
+            # Parent not in PATH: the symlink exists but bare
+            # ``niwa`` won't find it. Keep walking candidates.
+            continue
+        except Exception:
+            continue
+
+    return str(script_src), f"fallback to {script_src} (no writable PATH dir found)"
+
+
 def execute_install(cfg: WizardConfig) -> None:
     import sqlite3
     header("Step 14 — Building install")
@@ -1403,6 +1459,19 @@ def execute_install(cfg: WizardConfig) -> None:
             else str(cfg.niwa_home / "data" / "projects")
         ),
     }
+
+    # PR final 1: canonical ``niwa`` command.
+    #
+    # Try to drop a symlink on a PATH entry (/usr/local/bin for sudo
+    # installs, ~/.local/bin for rootless). If that works, the canonical
+    # command is just ``niwa``. If nothing on PATH is writable, fall
+    # back to the absolute path so docs/UI can still surface something
+    # that *always* works for this specific install.
+    niwa_cmd, niwa_cmd_origin = _install_niwa_wrapper(cfg)
+    cfg.niwa_command = niwa_cmd or "niwa"
+    cfg.niwa_command_origin = niwa_cmd_origin
+    env_vars["NIWA_UPDATE_COMMAND"] = f"{cfg.niwa_command} update"
+    env_vars["NIWA_RESTORE_COMMAND"] = f"{cfg.niwa_command} restore --from="
 
     # Write secrets file
     write_env_file(cfg.niwa_home / "secrets" / "mcp.env", env_vars)
@@ -3665,6 +3734,20 @@ def cmd_install_quick(args) -> int:
 
     print()
     ok(f"Quick install ({cfg.quick_mode}) completed — smoke: PASS in {smoke['duration_ms']}ms")
+    # PR final 1: surface the canonical update/restore commands so
+    # the operator knows exactly what to type.
+    print()
+    if cfg.niwa_command == "niwa":
+        info(f"Canonical command available as ``niwa`` in PATH ({cfg.niwa_command_origin}).")
+    else:
+        warn(
+            f"``niwa`` is NOT on your PATH. Use the absolute path:\n"
+            f"    {cfg.niwa_command}\n"
+            f"    (add a symlink to a dir in PATH if you want the short form.)"
+        )
+    info(f"Update:  {cfg.niwa_command} update")
+    info(f"Restore: {cfg.niwa_command} restore --from=<backup>")
+    info(f"Backup:  {cfg.niwa_command} backup")
     if cfg.quick_mode == "assistant":
         # The installer smoke tolerates LLM-not-configured (SPEC PR-11 rule G
         # + PR-09 Dec A): the MCP contract surface is fully advertised even

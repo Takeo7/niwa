@@ -274,16 +274,33 @@ Try:
 ## CLI commands
 
 ```bash
-./niwa install --quick --mode core --yes   # quick non-interactive install (PR-11)
-./niwa install --quick --mode assistant    # same, plus OpenClaw registration
-./niwa install                             # interactive 13-step wizard
-./niwa status                              # show status of an existing install
-./niwa restart                             # docker compose restart
-./niwa logs [service]                      # tail logs (default: mcp-gateway)
-./niwa uninstall                           # tear down (containers + images + install dir)
-./niwa uninstall --keep-data               # keep DB, configs, images; only stop containers
-./niwa uninstall -y                        # skip confirmation
+./niwa install --quick --mode core --yes     # quick non-interactive install
+./niwa install --quick --mode assistant      # same, plus OpenClaw registration
+./niwa install                               # interactive 14-step wizard
+./niwa install --quick --mode <m> --rotate-secrets   # forzar rotación de tokens + admin pw
+./niwa status                                # status del install
+./niwa restart                               # docker compose restart
+./niwa logs [service]                        # tail logs
+./niwa update                                # pull → backup → rebuild → restart → health + auto-revert
+./niwa restore --from=<path>                 # restaurar DB + rollback de código
+./niwa restore --from=<path> --db-only       # solo DB, sin tocar código
+./niwa backup                                # snapshot manual de SQLite
+./niwa uninstall                             # tear down (containers + images + install dir)
+./niwa uninstall --keep-data                 # keep DB, configs, images; only stop containers
+./niwa uninstall -y                          # skip confirmation
 ```
+
+Tras el primer install, el instalador intenta dejar `niwa` como
+symlink en `PATH` (`/usr/local/bin/niwa` con sudo; `~/.local/bin/niwa`
+rootless). Si lo consigue, todos los comandos de arriba se pueden
+ejecutar sin el `./`. Si no, el install imprime el path absoluto
+alternativo — la UI (Sistema → Actualizar) también muestra el comando
+exacto que funciona para esta instalación.
+
+**Preservación de secretos en reinstall:** por defecto, un reinstall
+same-mode **preserva** tokens, admin password y session secret. Esto
+evita romper el login y las integraciones cada vez que ejecutas
+`install`. Usa `--rotate-secrets` para forzar rotación completa.
 
 `niwa logs` accepts: `mcp-gateway`, `mcp-gateway-sse`, `caddy`, `app`, `socket-proxy`, `executor` (host-side launchd/systemd log).
 

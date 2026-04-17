@@ -2597,6 +2597,14 @@ def _collect_version_info() -> dict:
 
     last_update = _read_last_update_entry()
 
+    # PR final 1: canonical update/restore commands for THIS install.
+    # The installer wrote them to ``mcp.env`` based on whether it
+    # could drop a symlink on a PATH entry. The UI surfaces them
+    # verbatim so the operator always copies a command that works on
+    # their machine.
+    update_cmd = os.environ.get("NIWA_UPDATE_COMMAND", "").strip() or "niwa update"
+    restore_cmd = os.environ.get("NIWA_RESTORE_COMMAND", "").strip() or "niwa restore --from="
+
     return {
         "version": NIWA_VERSION,
         "name": "Niwa",
@@ -2610,11 +2618,9 @@ def _collect_version_info() -> dict:
         "last_backup_path": last_backup_path,
         "last_backup_at": last_backup_at,
         "needs_restart": False,
-        # PR-58b2: surface the most recent update attempt so the UI
-        # can show a banner like "última actualización: hace 2h,
-        # revertida por health-check fallido". ``None`` on a fresh
-        # install that hasn't run ``niwa update`` yet.
         "last_update": last_update,
+        "update_command": update_cmd,
+        "restore_command": restore_cmd,
     }
 
 
@@ -4415,7 +4421,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({
                 "ok": True,
                 "action_required": "run_cli",
-                "command": "niwa update",
+                "command": info["update_command"],
                 "current_commit": info["commit"],
                 "current_commit_short": info["commit_short"],
                 "branch": info["branch"],
@@ -4423,7 +4429,7 @@ class Handler(BaseHTTPRequestHandler):
                 "needs_update": info["needs_update"],
                 "repo_dirty": info["repo_dirty"],
                 "message": (
-                    "Actualiza desde el host con `niwa update`. "
+                    f"Actualiza desde el host con `{info['update_command']}`. "
                     "La UI no ejecuta actualizaciones (no tiene acceso "
                     "al Docker socket ni a systemd). "
                     "Ver docs/DECISIONS-LOG.md — decisión 'Update architecture'."
