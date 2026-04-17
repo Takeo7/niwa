@@ -300,9 +300,36 @@ def _claim_next_openclaw_task() -> Optional[sqlite3.Row]:
 
 # ─────────────── PR-38: auto-registro de proyecto ───────────────
 
-# Root directory where auto-created project folders live on the host.
-# Matches the convention already used for hosted sites (see setup.py:2281).
-_AUTO_PROJECTS_ROOT = INSTALL_DIR / "data" / "projects"
+# Root directory where project folders live on the host. MUST be
+# writable by the user that runs this executor (typically ``niwa``).
+#
+# Previous default lived under ``$INSTALL_DIR/data/projects`` which on
+# sudo installs resolves to ``/root/.niwa/data/projects`` — owned by
+# root and not writable by the ``niwa`` user. That caused Claude to
+# fall back to ``/tmp`` silently (Bug 34 root cause).
+#
+# The env var ``NIWA_PROJECTS_ROOT`` takes precedence (set by the
+# installer in mcp.env). Fallback is the executor user's home +
+# ``projects`` which, for the ``niwa`` user, is ``/home/niwa/projects``.
+def _resolve_projects_root() -> Path:
+    env_root = os.environ.get("NIWA_PROJECTS_ROOT") or ENV.get("NIWA_PROJECTS_ROOT")
+    if env_root:
+        return Path(env_root)
+    try:
+        return Path.home() / "projects"
+    except Exception:
+        return INSTALL_DIR / "data" / "projects"
+
+
+_AUTO_PROJECTS_ROOT = _resolve_projects_root()
+
+# Best-effort: ensure the root exists at startup so we don't fail on
+# the first task. Silent-OK if we can't create it — we'll log when a
+# task actually tries and fails.
+try:
+    _AUTO_PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
 
 _SLUG_ALLOWED = re.compile(r"[^a-z0-9-]+")
 
@@ -437,6 +464,31 @@ def _resolve_project_dir(project_id: Optional[str]) -> Optional[Path]:
             p = Path(row["directory"]).expanduser()
             if p.is_dir():
                 return p
+            # Auto-heal (PR-51): the project row declares a directory
+            # that doesn't exist yet. If it lives under our managed
+            # projects root (writable by us), mkdir it now so the
+            # adapter/task can use it. Paths outside the root stay
+            # untouched — they're user-provided and we don't want to
+            # silently create arbitrary filesystem locations.
+            try:
+                projects_root = _AUTO_PROJECTS_ROOT.resolve()
+                p_resolved = p.resolve()
+                if str(p_resolved).startswith(str(projects_root) + os.sep) or p_resolved == projects_root:
+                    p_resolved.mkdir(parents=True, exist_ok=True)
+                    log.info(
+                        "project_dir auto-heal: created %s for project %s",
+                        p_resolved, project_id,
+                    )
+                    return p_resolved
+                log.warning(
+                    "project %s declares directory %s outside projects root %s; "
+                    "not auto-creating",
+                    project_id, p, projects_root,
+                )
+            except OSError as e:
+                log.warning(
+                    "project_dir auto-heal failed for %s: %s", p, e,
+                )
     return None
 
 
