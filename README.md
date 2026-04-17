@@ -211,19 +211,38 @@ The interactive installer is a **14-step wizard** that configures: instance name
 
 ## CLI Commands
 
-### setup.py commands
+### CLI commands
+
+Tras `niwa install`, el instalador intenta dejar `niwa` disponible en el
+PATH (`/usr/local/bin/niwa` en sudo installs, `~/.local/bin/niwa` en
+rootless). Si consigue crear el symlink, todos los comandos funcionan
+con la forma corta:
 
 ```bash
-python3 setup.py install        # interactive 14-step wizard (default)
-python3 setup.py status         # show running status (container health, endpoints)
-python3 setup.py restart        # restart all Docker containers
-python3 setup.py logs [service] # tail container or executor logs
-python3 setup.py config         # view or update configuration
-python3 setup.py backup         # online SQLite backup with 7-day rotation
-python3 setup.py update         # git pull, rebuild, restart (preserves data)
-python3 setup.py hosting        # set up web hosting with Caddy
-python3 setup.py uninstall      # tear down (containers + images + install dir)
+niwa install                 # interactive 14-step wizard (default)
+niwa install --quick --mode core --yes
+niwa install --quick --mode assistant --yes
+niwa install --quick --mode <modo> --yes --rotate-secrets   # fuerza rotar tokens + admin pw
+niwa status                  # running status (container health, endpoints)
+niwa restart                 # restart all Docker containers
+niwa logs [service]          # tail container or executor logs
+niwa config                  # view or update configuration
+niwa backup                  # online SQLite backup (rota >14d automáticamente en update)
+niwa update                  # pull → backup → rebuild → restart → health-check → auto-revert si falla
+niwa restore --from=<path>   # restaurar DB + rollback de código al commit del backup
+niwa restore --from=<path> --db-only   # restaurar solo DB
+niwa hosting                 # set up web hosting with Caddy
+niwa uninstall               # tear down (containers + images + install dir)
 ```
+
+Si `niwa` no quedó en el PATH (filesystem de solo lectura, dir sin
+permiso, etc.) el instalador imprime el path absoluto que sí funciona,
+p. ej. `/root/niwa/niwa update`. La UI (Sistema → Actualizar) muestra
+siempre el comando ejecutable exacto para esta instalación.
+
+Preservación de secretos: un reinstall same-mode **preserva por
+defecto** tokens, admin password y session secret. Pasa
+`--rotate-secrets` para forzar rotación (se avisa en los logs).
 
 ### bin/niwa management commands
 

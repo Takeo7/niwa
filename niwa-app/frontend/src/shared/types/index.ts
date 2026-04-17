@@ -234,6 +234,10 @@ export interface VersionInfo {
   last_backup_path?: string | null;
   last_backup_at?: string | null;
   needs_restart?: boolean;
+  // PR final 1: canonical commands for THIS install (``niwa update``
+  // when a symlink is on PATH, absolute path otherwise).
+  update_command?: string;
+  restore_command?: string;
   [key: string]: unknown;
 }
 

@@ -23,8 +23,14 @@ cd /root
 git clone https://github.com/Takeo7/niwa.git
 cd niwa
 git checkout v0.2
-python3 setup.py install --quick --mode assistant --yes
+./niwa install --quick --mode assistant --yes
 ```
+
+Al terminar el install imprime el **comando canónico** — normalmente
+`niwa` (symlinked a `/usr/local/bin/niwa` en sudo installs). Si el
+install no pudo dejar nada en el PATH, avisa con el path absoluto a
+usar; todo el resto del runbook asume el comando corto, sustitúyelo
+si hace falta.
 
 Al terminar anota:
 - La contraseña generada (se imprime en el summary; **no se repite**).
@@ -146,7 +152,7 @@ session secret (PR-60). Para forzar rotación (por compromiso, off-boarding
 de un operador, etc.):
 
 ```bash
-python3 setup.py install --quick --mode <modo> --yes --rotate-secrets
+niwa install --quick --mode <modo> --yes --rotate-secrets
 ```
 
 El password nuevo se imprime al final. Hay que actualizar:
@@ -158,7 +164,7 @@ El password nuevo se imprime al final. Hay que actualizar:
 
 Checklist para validar una release candidate en un VPS limpio:
 
-- [ ] **Install limpia**: `./niwa install --quick --mode assistant --yes`
+- [ ] **Install limpia**: `./niwa install --quick --mode assistant --yes` (tras el primer install, todos los demás pasos usan `niwa …` ya disponible en PATH).
       completa sin errores.
 - [ ] **Smoke post-install**: `docker compose ps` todos `Up`, `curl
       /health` 200, UI responde.
@@ -200,7 +206,7 @@ niwa restore --from=/root/.niwa/data/backups/niwa-<timestamp>.sqlite3
 niwa restore --from=/ruta/backup.sqlite3 --db-only
 
 # Forzar rotación de secretos
-python3 setup.py install --quick --mode <modo> --yes --rotate-secrets
+niwa install --quick --mode <modo> --yes --rotate-secrets
 ```
 
 ## 8. Qué NO hacer

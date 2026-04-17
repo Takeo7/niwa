@@ -51,6 +51,12 @@ export function UpdatePanel() {
 
   const needsUpdate = Boolean(v.needs_update);
   const repoDirty = Boolean(v.repo_dirty);
+  const updateCmd = (v.update_command as string | undefined) || 'niwa update';
+  const restoreCmdPrefix =
+    (v.restore_command as string | undefined) || 'niwa restore --from=';
+  const restoreSuggestion = v.last_backup_path
+    ? `${restoreCmdPrefix}${v.last_backup_path}`
+    : `${restoreCmdPrefix}<path>`;
   const lastUpdate = (v as {
     last_update?: {
       timestamp?: string;
@@ -131,8 +137,8 @@ export function UpdatePanel() {
             Ejecuta el comando de abajo por SSH en el servidor.
           </Alert>
           <Group gap="xs">
-            <Code style={{ flex: 1, padding: '8px 12px' }}>niwa update</Code>
-            <CopyButton value="niwa update" timeout={1500}>
+            <Code style={{ flex: 1, padding: '8px 12px' }}>{updateCmd}</Code>
+            <CopyButton value={updateCmd} timeout={1500}>
               {({ copied, copy }) => (
                 <Tooltip label={copied ? 'Copiado' : 'Copiar'} withArrow>
                   <ActionIcon variant="light" size="lg" onClick={copy}>
@@ -169,10 +175,25 @@ export function UpdatePanel() {
               </Code>
             )}
             <Divider my="xs" />
-            <Text size="xs" c="dimmed">
-              Si algo fue mal:{' '}
-              <Code>niwa restore --from={v.last_backup_path ?? '<path>'}</Code>
-            </Text>
+            <Group gap="xs">
+              <Text size="xs" c="dimmed">
+                Si algo fue mal:
+              </Text>
+              <Code style={{ flex: 1 }}>{restoreSuggestion}</Code>
+              <CopyButton value={restoreSuggestion} timeout={1500}>
+                {({ copied, copy }) => (
+                  <Tooltip label={copied ? 'Copiado' : 'Copiar'} withArrow>
+                    <ActionIcon variant="subtle" size="sm" onClick={copy}>
+                      {copied ? (
+                        <IconCheck size={12} />
+                      ) : (
+                        <IconCopy size={12} />
+                      )}
+                    </ActionIcon>
+                  </Tooltip>
+                )}
+              </CopyButton>
+            </Group>
           </Stack>
         </Card>
       )}
