@@ -29,6 +29,7 @@ import scheduler
 import notifier
 import image_service
 import hosting
+import github_client
 import oauth
 import state_machines
 import time as _time
@@ -3453,6 +3454,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.exception('hosting_status failed')
                 return self._json({'error': str(e)}, 500)
+        if path == '/api/github/status':
+            try:
+                return self._json(github_client.status())
+            except Exception as e:
+                logger.exception('github_status failed')
+                return self._json({'error': str(e)}, 500)
         if path == '/api/kanban-columns':
             include_terminal = qs.get('include_terminal', ['1'])[0] == '1'
             return self._json(fetch_kanban_columns(include_terminal=include_terminal))
@@ -3947,6 +3954,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'JSON inválido'}, 400)
             except Exception as e:
                 return self._json({'error': f'Error importando tokens: {e}'}, 500)
+        if path == '/api/github/token':
+            token = (payload.get('token') or '').strip()
+            if not token:
+                return self._json({'error': 'empty_token'}, 400)
+            try:
+                state = github_client.set_pat(token)
+                return self._json({'ok': True, **state})
+            except ValueError as e:
+                code = str(e)
+                if code == 'unauthorized':
+                    return self._json({'error': 'unauthorized', 'message': 'El token no es válido o ha caducado.'}, 401)
+                if code == 'forbidden':
+                    return self._json({'error': 'forbidden', 'message': 'GitHub ha rechazado la petición (rate limit o permisos).'}, 403)
+                if code == 'empty_token':
+                    return self._json({'error': 'empty_token'}, 400)
+                return self._json({'error': code}, 400)
+            except Exception as e:
+                logger.exception('github set_pat failed')
+                return self._json({'error': str(e)}, 500)
         _m_proj_deploy = re.match(r'^/api/projects/([^/]+)/deploy$', path)
         if _m_proj_deploy:
             key = _m_proj_deploy.group(1)
@@ -4390,6 +4416,13 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if self._require_auth():
             return
+        if path == '/api/github/token':
+            try:
+                github_client.clear_pat()
+                return self._json({'ok': True})
+            except Exception as e:
+                logger.exception('github clear_pat failed')
+                return self._json({'error': str(e)}, 500)
         if re.match(r'^/api/tasks/[^/]+/labels/[^/]+$', path):
             parts = path.split('/')
             task_id, label = parts[3], urllib.parse.unquote(parts[5])

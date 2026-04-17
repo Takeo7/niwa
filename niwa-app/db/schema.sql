@@ -389,6 +389,16 @@ CREATE TABLE IF NOT EXISTS secret_bindings (
 CREATE INDEX IF NOT EXISTS idx_backend_runs_task_status ON backend_runs(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_approvals_status_requested ON approvals(status, requested_at);
 
+-- ── GitHub PAT (singleton, PR-49) ──
+CREATE TABLE IF NOT EXISTS github_tokens (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    token_encrypted TEXT NOT NULL,
+    username        TEXT,
+    scopes          TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
 -- ── Schema versioning (migration tracking) ──
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
