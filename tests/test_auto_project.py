@@ -65,10 +65,16 @@ def executor(monkeypatch, tmp_path):
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     (tmp_path / "logs").mkdir(exist_ok=True)
     (tmp_path / "logs" / "executor.log").touch()
+    # PR-51: the executor now reads NIWA_PROJECTS_ROOT (mcp.env or env
+    # var) and falls back to ``~/projects``. Pin it here so the tests
+    # keep using the historical ``<NIWA_HOME>/data/projects`` path.
+    projects_root = tmp_path / "data" / "projects"
     (tmp_path / "secrets" / "mcp.env").write_text(
-        f"NIWA_DB_PATH={db_path}\n",
+        f"NIWA_DB_PATH={db_path}\n"
+        f"NIWA_PROJECTS_ROOT={projects_root}\n",
     )
     monkeypatch.setenv("NIWA_HOME", str(tmp_path))
+    monkeypatch.setenv("NIWA_PROJECTS_ROOT", str(projects_root))
 
     # Create minimal schema — only the columns touched by the helpers.
     conn = sqlite3.connect(str(db_path))

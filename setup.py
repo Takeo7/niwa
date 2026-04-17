@@ -1389,6 +1389,14 @@ def execute_install(cfg: WizardConfig) -> None:
         # servers/tasks-mcp/server.py exposes the 21 legacy tools).
         "NIWA_MCP_CONTRACT": cfg.mcp_contract or "",
         "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token or "",
+        # PR-51: projects root shared between app and executor. Must be
+        # writable by the executor user (`niwa`) on sudo installs.
+        # Rootless installs keep the path under NIWA_HOME (same uid as
+        # the executor = the installing user).
+        "NIWA_PROJECTS_ROOT": (
+            "/home/niwa/projects" if os.getuid() == 0
+            else str(cfg.niwa_home / "data" / "projects")
+        ),
     }
 
     # Write secrets file
@@ -2096,6 +2104,24 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
         subprocess.run(["chown", "-R", "niwa:niwa", str(niwa_home), str(shared_dir)], check=True)
+        # PR-51: executor-writable projects root. Without this, the
+        # executor (running as `niwa`) cannot mkdir under the default
+        # paths and Claude silently falls back to /tmp (Bug 34 root).
+        # Creating it here, owned by niwa:niwa, and wiring the env var
+        # so both app and executor pick the same location.
+        niwa_projects_root = Path("/home/niwa") / "projects"
+        try:
+            niwa_projects_root.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["chown", "-R", "niwa:niwa", str(niwa_projects_root)],
+                check=True,
+            )
+            subprocess.run(
+                ["chmod", "755", str(niwa_projects_root)],
+                check=True,
+            )
+        except Exception as e:
+            warn(f"Could not prepare {niwa_projects_root}: {e}")
         subprocess.run(["loginctl", "enable-linger", "niwa"], capture_output=True)
         executor_path = niwa_home / "bin" / "task-executor.py"
         niwa_home_env = str(niwa_home)

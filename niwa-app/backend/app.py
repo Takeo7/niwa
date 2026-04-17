@@ -42,6 +42,26 @@ from urllib.parse import urlparse, parse_qs
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get('NIWA_DB_PATH', str(BASE_DIR / 'data' / 'niwa.sqlite3')))
+
+
+def _default_projects_root() -> Path:
+    """Projects root directory (PR-51).
+
+    MUST match the one used by ``bin/task-executor.py`` so that rows
+    we insert here are reachable by the executor. Precedence:
+
+      1. ``NIWA_PROJECTS_ROOT`` env var (installer sets this in mcp.env).
+      2. ``/home/niwa/projects`` — convention for the default `niwa` user.
+
+    The executor creates the directory with its own uid when it runs a
+    task (``_resolve_project_dir`` auto-heals under this root). We do
+    NOT mkdir here because the app lives inside a container and the
+    ownership wouldn't match the executor's uid on the host.
+    """
+    env_root = os.environ.get('NIWA_PROJECTS_ROOT', '').strip()
+    if env_root:
+        return Path(env_root)
+    return Path('/home/niwa/projects')
 SCHEMA_PATH = BASE_DIR / 'db' / 'schema.sql'
 HOST = os.environ.get('NIWA_APP_HOST', '0.0.0.0')
 PORT = int(os.environ.get('NIWA_APP_PORT', '8080'))
@@ -4025,12 +4045,19 @@ class Handler(BaseHTTPRequestHandler):
                 existing = conn.execute('SELECT id FROM projects WHERE slug=?', (slug,)).fetchone()
                 if existing:
                     slug = f'{slug}-{uuid.uuid4().hex[:6]}'
+                # PR-51: if the caller didn't supply a directory, generate
+                # one under the executor-writable projects root. Leaving
+                # it empty meant Claude had no cwd and fell back to /tmp
+                # (Bug 34 root cause).
+                directory = (payload.get('directory') or '').strip()
+                if not directory:
+                    directory = str(_default_projects_root() / slug)
                 conn.execute(
                     'INSERT INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory, url) VALUES (?,?,?,?,?,?,?,?,?,?)',
-                    (proj_id, slug, name, payload.get('area', 'proyecto'), payload.get('description', ''), 1, ts, ts, payload.get('directory', ''), payload.get('url', '')),
+                    (proj_id, slug, name, payload.get('area', 'proyecto'), payload.get('description', ''), 1, ts, ts, directory, payload.get('url', '')),
                 )
                 conn.commit()
-            return self._json({'ok': True, 'id': proj_id, 'slug': slug}, 201)
+            return self._json({'ok': True, 'id': proj_id, 'slug': slug, 'directory': directory}, 201)
         if path == '/api/tasks':
             task_id = create_task(payload)
             return self._json({'ok': True, 'id': task_id}, 201)
