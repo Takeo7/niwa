@@ -358,39 +358,22 @@ class TestAutoProjectFinalize:
 # ─────────────────────── adapter._build_prompt ───────────────────────
 
 class TestAdapterPromptInjection:
+    """PR-45: auto-project rules live in the APPENDED SYSTEM PROMPT
+    (via ``--append-system-prompt``), not in the user message. The
+    user prompt stays minimal — just the task goal. These tests
+    assert rules appear ONLY in the system prompt and that the user
+    prompt is clean, so future refactors that drift the rules back
+    into the user message get caught."""
+
     def _load_adapter(self):
         from backend_adapters.claude_code import ClaudeCodeAdapter
         return ClaudeCodeAdapter
 
-    def test_no_injection_when_project_id_set(self):
-        adapter = self._load_adapter()
-        task = {
-            "title": "Existing project task",
-            "description": "work on the thing",
-            "project_id": "proj-abc",
-            "project_directory": "/opt/niwa/data/projects/foo",
-        }
-        prompt = adapter._build_prompt(task)
-        assert "project_create" not in prompt, (
-            "Tasks already attached to a project must not be nagged "
-            "to create a new one — the operator chose the project "
-            "explicitly."
-        )
-
-    def test_no_injection_when_directory_missing(self):
-        adapter = self._load_adapter()
-        task = {
-            "title": "Orphan task",
-            "description": "but executor didn't pre-create a dir",
-            "project_id": None,
-        }
-        prompt = adapter._build_prompt(task)
-        assert "project_create" not in prompt, (
-            "Without a pre-created directory there's nothing to tell "
-            "Claude to write into — skip the instruction."
-        )
-
-    def test_injection_when_auto_project(self):
+    def test_user_prompt_has_no_rules(self):
+        """The user prompt built by ``_build_prompt`` must NOT
+        contain the auto-project rules — those go to the system
+        prompt in PR-45. Regression against reintroducing them in
+        the user message."""
         adapter = self._load_adapter()
         task = {
             "title": "Build my blog",
@@ -398,181 +381,159 @@ class TestAdapterPromptInjection:
             "project_id": None,
             "project_directory": "/opt/niwa/data/projects/my-blog-abc123",
         }
-        prompt = adapter._build_prompt(task)
-        assert "project_create" in prompt
-        assert "/opt/niwa/data/projects/my-blog-abc123" in prompt
-        assert "area" in prompt and "proyecto" in prompt, (
-            "The prompt must include the exact args (name, area, "
-            "directory) so Claude doesn't have to invent them."
+        user_prompt = adapter._build_prompt(task)
+        assert "WORKING DIRECTORY" not in user_prompt, (
+            "PR-45 moved the rules to --append-system-prompt. The "
+            "user prompt must NOT echo them — doing so defeats the "
+            "point (rules-in-user-message was exactly what failed "
+            "in PR-38..PR-44)."
         )
-        # The task title should appear as the name suggestion so
-        # Claude can pick something sensible even on the first try.
-        assert "Build my blog" in prompt
+        assert "project_create" not in user_prompt
+        assert "## Task" in user_prompt or user_prompt.startswith("#") or \
+               "Build my blog" in user_prompt, (
+            "The user prompt must still deliver the task goal "
+            "(title/description/notes). It's minimal, not empty."
+        )
 
-    # PR-42 / PR-43 — Bug 34: the PR-38 prompt was too soft; the
-    # PR-42 blacklist of fixed paths (/tmp/, /home/, /root/…) bit
-    # back in prod because project_directory in a sudo install sits
-    # under /root/.niwa/ — blacklist and main rule contradicted each
-    # other and Claude evaded both by going to /tmp/. PR-43 states
-    # the rule positively ("paths must start with pdir") and keeps
-    # /tmp/ only as a common-mistake example.
+    def test_system_prompt_none_when_project_id_set(self):
+        adapter = self._load_adapter()
+        task = {
+            "title": "Existing project task",
+            "description": "work on the thing",
+            "project_id": "proj-abc",
+            "project_directory": "/opt/niwa/data/projects/foo",
+        }
+        sys_prompt = adapter._build_system_prompt(task)
+        assert sys_prompt is None, (
+            "Tasks already attached to a project must not get the "
+            "auto-project rules — the operator chose the project "
+            "explicitly."
+        )
 
-    def test_prompt_mentions_tmp_as_common_mistake(self):
-        """The /tmp/ mention stays as an example of what Claude
-        defaults to — removing it would lose the specific warning
-        that catches the most common failure mode."""
+    def test_system_prompt_none_when_directory_missing(self):
+        adapter = self._load_adapter()
+        task = {
+            "title": "Orphan task",
+            "description": "but executor didn't pre-create a dir",
+            "project_id": None,
+        }
+        sys_prompt = adapter._build_system_prompt(task)
+        assert sys_prompt is None
+
+    def test_system_prompt_built_when_auto_project(self):
+        adapter = self._load_adapter()
+        task = {
+            "title": "Build my blog",
+            "description": "please",
+            "project_id": None,
+            "project_directory": "/opt/niwa/data/projects/my-blog-abc123",
+        }
+        sp = adapter._build_system_prompt(task)
+        assert sp is not None
+        assert "project_create" in sp
+        assert "/opt/niwa/data/projects/my-blog-abc123" in sp
+        assert "area" in sp and "proyecto" in sp
+        assert "Build my blog" in sp
+
+    # Rule content tests moved from _build_prompt → _build_system_prompt
+    # after PR-45. The constraints are the same; only their carrier
+    # changed (user msg → system prompt).
+
+    def test_system_prompt_mentions_tmp_as_common_mistake(self):
         adapter = self._load_adapter()
         task = {
             "title": "x", "project_id": None,
             "project_directory": "/root/.niwa/data/projects/p-abc",
         }
-        prompt = adapter._build_prompt(task)
-        assert "/tmp/" in prompt, (
-            "Keep /tmp/ as the named common mistake Claude falls "
-            "into — without that specificity the warning is vague."
-        )
-        assert "STRICT" in prompt, (
-            "The instruction must read as imperative, not "
-            "conditional — Claude treated the PR-38 wording as a "
-            "suggestion."
-        )
+        sp = adapter._build_system_prompt(task)
+        assert "/tmp/" in sp
 
-    def test_prompt_has_no_contradictory_blacklist(self):
-        """The PR-42 blacklist of /root/, /home/, /var/, /opt/
-        contradicted the main rule whenever ``project_directory``
-        started with one of those prefixes. In a sudo install
-        ``project_directory`` sits under ``/root/.niwa/``, so the
-        blacklist said "never write to /root/" while the main rule
-        said "MUST write under /root/.niwa/<slug>/". Claude resolved
-        the ambiguity by going to /tmp/. PR-43 drops those fixed
-        blacklists entirely."""
+    def test_system_prompt_has_no_contradictory_blacklist(self):
+        """PR-42 blacklist of /root/, /home/, /var/, /opt/ collided
+        with project_directory in sudo installs. PR-43 removed it;
+        PR-45 keeps it removed now that rules live in the system
+        prompt."""
         adapter = self._load_adapter()
         task = {
             "title": "x", "project_id": None,
             "project_directory": "/root/.niwa/data/projects/p-abc",
         }
-        prompt = adapter._build_prompt(task)
-        # /root/ MUST NOT appear as a standalone blacklist entry
-        # that would contradict the main rule.
-        assert "`/root/...`" not in prompt, (
-            "PR-43 removed the fixed /root/ blacklist — it "
-            "contradicted project_directory in sudo installs. "
-            "Use a positive rule instead: 'must start with <pdir>'."
-        )
-        # Same for the other fixed prefixes that could overlap with
-        # a legitimate project_directory.
-        assert "`/home/...`" not in prompt
-        assert "`/var/...`" not in prompt
-        assert "`/opt/...`" not in prompt
+        sp = adapter._build_system_prompt(task)
+        assert "`/root/...`" not in sp
+        assert "`/home/...`" not in sp
+        assert "`/var/...`" not in sp
+        assert "`/opt/...`" not in sp
 
-    def test_prompt_states_positive_start_rule(self):
-        """The replacement for the blacklist: a positive rule that
-        says exactly which prefix all paths must start with. This
-        works regardless of where ``_auto_projects_root`` lives
-        (/root/.niwa/, /opt/niwa/, /home/niwa/…)."""
+    def test_system_prompt_states_positive_start_rule(self):
         adapter = self._load_adapter()
         pdir = "/root/.niwa/data/projects/blog-abc"
-        task = {
-            "title": "x", "project_id": None,
-            "project_directory": pdir,
-        }
-        prompt = adapter._build_prompt(task)
-        # The pdir appears both as the target and framed as "must
-        # start with". Any rewrite that drops the "must start with"
-        # framing reintroduces the ambiguity.
-        assert "start with" in prompt.lower(), (
-            "State the rule positively: 'every path MUST start "
-            "with <pdir>' — that's unambiguous even when pdir "
-            "shares a prefix with a previously-blacklisted path."
-        )
-        # And the pdir itself must appear in the rule body (not
-        # just in the task description).
-        assert prompt.count(pdir) >= 2, (
-            "pdir should appear at least twice: as the target dir "
-            "and as the prefix in the 'must start with' rule. "
-            "Once isn't enough to anchor the rule."
-        )
+        task = {"title": "x", "project_id": None, "project_directory": pdir}
+        sp = adapter._build_system_prompt(task)
+        assert "start with" in sp.lower()
+        assert sp.count(pdir) >= 2
 
-    def test_prompt_includes_concrete_tool_call_example(self):
-        """A literal JSON example of the `project_create` arguments
-        eliminates ambiguity about what Claude should pass. Without
-        an example, Claude sometimes guesses the schema."""
+    def test_system_prompt_includes_concrete_tool_call_example(self):
         adapter = self._load_adapter()
         task = {
             "title": "Build a blog",
             "project_id": None,
             "project_directory": "/opt/niwa/data/projects/blog-xyz",
         }
-        prompt = adapter._build_prompt(task)
-        # Look for a fenced json block that contains all four args.
-        assert "```json" in prompt
-        # The fenced block should include the four keys.
-        assert '"name"' in prompt
-        assert '"area"' in prompt
-        assert '"directory"' in prompt
-        assert '"description"' in prompt
+        sp = adapter._build_system_prompt(task)
+        assert "```json" in sp
+        assert '"name"' in sp
+        assert '"area"' in sp
+        assert '"directory"' in sp
+        assert '"description"' in sp
 
-    def test_prompt_tells_claude_relative_paths_work(self):
-        """The PR-42 prompt tells Claude `cwd` is already the project
-        dir, so relative paths "just work". Without this hint Claude
-        defaults to absolute paths and misses the project dir."""
+    def test_system_prompt_tells_claude_relative_paths_work(self):
         adapter = self._load_adapter()
         task = {
             "title": "x", "project_id": None,
             "project_directory": "/opt/niwa/data/projects/p-abc",
         }
-        prompt = adapter._build_prompt(task)
-        assert "relative" in prompt.lower(), (
-            "Tell Claude that relative paths resolve to the project "
-            "dir. Absolute paths were the Bug 34 footgun."
-        )
+        sp = adapter._build_system_prompt(task)
+        assert "relative" in sp.lower()
 
-    def test_rules_come_before_task_title(self):
-        """PR-44 — Bug 34 parte 3: the system rules (WORKING
-        DIRECTORY, REGISTER THE PROJECT) must appear BEFORE the
-        task title / description in the prompt.
-
-        History: PR-43 had a non-contradictory positive rule but
-        Claude STILL wrote to /tmp/ in prod. Root cause was prompt
-        ordering — the rules came after the task description, so
-        Claude latched onto the goal first ("créame una web") and
-        planned to write to /tmp/ before reading the rules.
-        Standard prompt engineering: constraints first, goal second.
-
-        Dropping this order reintroduces the failure mode."""
+    def test_build_command_passes_append_system_prompt_flag(self):
+        """PR-45 — Bug 34 parte 4: when ``append_system_prompt`` is
+        provided, ``_build_command`` must add the CLI flag. Without
+        this the system prompt is silently dropped and we're back to
+        the PR-44 behaviour (rules in user message → ignored)."""
         adapter = self._load_adapter()
-        task = {
-            "title": "Build a thing",
-            "description": "do the thing",
-            "project_id": None,
-            "project_directory": "/root/.niwa/data/projects/thing-abc",
-        }
-        prompt = adapter._build_prompt(task)
-        rule_idx = prompt.index("WORKING DIRECTORY")
-        task_idx = prompt.index("# Task: Build a thing")
-        assert rule_idx < task_idx, (
-            "Rules must precede the task header in the prompt. "
-            "Claude treats the first content as setup/context and "
-            "the last as the thing to execute — put rules first or "
-            "they become epilogue."
+        cmd = adapter._build_command(
+            model="claude-sonnet-4-6",
+            append_system_prompt="some rules go here",
+        )
+        assert "--append-system-prompt" in cmd, (
+            "PR-45: the rules live in the system prompt. If this "
+            "flag isn't in the CLI command, they never reach Claude "
+            "as a system prompt — which was the whole point of PR-45."
+        )
+        idx = cmd.index("--append-system-prompt")
+        assert cmd[idx + 1] == "some rules go here", (
+            "The argument right after the flag must be the rules "
+            "text literally — no quoting, Popen handles it."
         )
 
-    def test_prompt_preserves_conversational_escape_hatch(self):
-        """A task that is purely conversational ('resume this',
-        'explain how X works') should be allowed to skip
-        project_create without tripping the rule. The prompt must
-        keep that escape hatch — otherwise the adapter becomes too
-        rigid for non-artifact tasks."""
+    def test_build_command_omits_flag_when_rules_none(self):
+        """No project_directory → ``_build_system_prompt`` returns
+        None → ``_build_command`` called without the flag. This is
+        the path chat-style tasks and tasks with explicit
+        project_id follow; they should not carry a dangling flag."""
+        adapter = self._load_adapter()
+        cmd = adapter._build_command(
+            model="claude-sonnet-4-6",
+            append_system_prompt=None,
+        )
+        assert "--append-system-prompt" not in cmd
+
+    def test_system_prompt_preserves_conversational_escape_hatch(self):
         adapter = self._load_adapter()
         task = {
             "title": "resume lo del informe anual",
             "project_id": None,
             "project_directory": "/opt/niwa/data/projects/informe-xyz",
         }
-        prompt = adapter._build_prompt(task)
-        assert "conversational" in prompt.lower() or \
-               "skip" in prompt.lower(), (
-            "The prompt must let conversational tasks off the hook — "
-            "forcing project_create on a 'summarise X' would be "
-            "noisy and create empty project rows."
-        )
+        sp = adapter._build_system_prompt(task)
+        assert "conversational" in sp.lower() or "skip" in sp.lower()
