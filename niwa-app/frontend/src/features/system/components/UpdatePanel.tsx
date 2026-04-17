@@ -25,6 +25,20 @@ import {
 } from '@tabler/icons-react';
 import { useVersion } from '../../../shared/api/queries';
 
+/** POSIX shell quoting (PR final 3).
+ *
+ * Paths that contain spaces, quotes, or other metacharacters break
+ * copy-paste if they aren't wrapped. This is the classic
+ * "single-quote everything" escape: wrap in `'…'` and replace any
+ * literal `'` with `'\\''`. Idempotent enough for the only case we
+ * care about (last_backup_path). Not a general-purpose sanitiser —
+ * we control both producer and consumer. */
+export function shellQuote(s: string): string {
+  if (s === '') return "''";
+  if (/^[A-Za-z0-9_\-./:=@%+]+$/.test(s)) return s;
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 /** PR-61: honest update dashboard.
  *
  * The UI does NOT execute the update (PR-58a decision — container
@@ -55,7 +69,7 @@ export function UpdatePanel() {
   const restoreCmdPrefix =
     (v.restore_command as string | undefined) || 'niwa restore --from=';
   const restoreSuggestion = v.last_backup_path
-    ? `${restoreCmdPrefix}${v.last_backup_path}`
+    ? `${restoreCmdPrefix}${shellQuote(v.last_backup_path)}`
     : `${restoreCmdPrefix}<path>`;
   const lastUpdate = (v as {
     last_update?: {
