@@ -3952,8 +3952,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'error': 'not_found'}, 404)
             if not proj['directory']:
                 return self._json({'error': 'project_has_no_directory'}, 400)
+            # Deliberately ignore payload slug/directory: the project's own
+            # slug + directory are the only values we trust. Accepting them
+            # from the request would let any authenticated admin publish
+            # arbitrary host paths (e.g. /etc, /root) as static sites.
             try:
-                result = hosting.deploy_project(proj['id'], slug=payload.get('slug') or '', directory=payload.get('directory') or '')
+                result = hosting.deploy_project(proj['id'])
                 return self._json({'ok': True, **result})
             except ValueError as e:
                 return self._json({'error': str(e)}, 400)

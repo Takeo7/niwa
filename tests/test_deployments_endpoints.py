@@ -220,3 +220,28 @@ def test_undeploy_project_not_found(server):
     )
     assert status == 404
     assert out["error"] == "not_found"
+
+
+def test_deploy_ignores_payload_slug_and_directory(server):
+    """Security pin: payload-supplied slug/directory MUST be ignored so an
+    authenticated admin can't publish arbitrary host paths (``/etc``,
+    ``/root/...``) as static sites by abusing the endpoint. The only
+    values trusted are the project's own slug + directory in SQLite.
+    """
+    status, out = _request(
+        server["base"],
+        "/api/projects/site-a/deploy",
+        method="POST",
+        body={"slug": "evil-slug", "directory": "/etc"},
+    )
+    assert status == 200, out
+    # The stored deployment uses the project's slug + directory, not the
+    # attacker-supplied ones.
+    assert out["slug"] == "site-a"
+    assert out["directory"] == server["proj_dir"]
+    status, listing = _request(server["base"], "/api/deployments")
+    assert status == 200
+    deployments = listing["deployments"]
+    assert len(deployments) == 1
+    assert deployments[0]["slug"] == "site-a"
+    assert deployments[0]["directory"] == server["proj_dir"]
