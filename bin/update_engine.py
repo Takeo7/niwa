@@ -123,6 +123,10 @@ def _default_backup(ctx: _Ctx) -> Optional[str]:
     Target: ``<install_dir>/data/backups/niwa-<timestamp>.sqlite3``.
     Returns the absolute path as a string, or ``None`` if the DB
     file doesn't exist yet (fresh install never ran migrations).
+
+    Rotation: after a successful backup, prune files older than 14
+    days. Keeps 2 weeks of pre-update snapshots without letting the
+    directory grow forever (review PR-58b1 menor).
     """
     env_db = os.environ.get("NIWA_DB_PATH", "")
     db_path = Path(env_db) if env_db else (ctx.install_dir / "data" / "niwa.sqlite3")
@@ -138,6 +142,20 @@ def _default_backup(ctx: _Ctx) -> Optional[str]:
     finally:
         dst_conn.close()
         src_conn.close()
+    # Rotation: drop backups older than 14 days. We keep the just-
+    # created one no matter what (cutoff check uses mtime).
+    try:
+        import time as _t
+        cutoff = _t.time() - 14 * 86400
+        for old in backup_dir.glob("niwa-*.sqlite3"):
+            if old == dst:
+                continue
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+    except Exception:
+        # Never let rotation failures kill the update — we already
+        # have the backup we care about.
+        pass
     return str(dst)
 
 

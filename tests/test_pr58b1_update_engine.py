@@ -291,6 +291,44 @@ def test_default_backup_writes_a_real_sqlite_file(tmp_path, monkeypatch):
 # ── Ordering invariants ──────────────────────────────────────────────
 
 
+def test_default_backup_rotates_old_snapshots(tmp_path, monkeypatch):
+    """Rotation invariant: backups older than 14 days are pruned,
+    the fresh one is kept no matter its timestamp in the filename.
+    """
+    import time as _t
+
+    db = tmp_path / "data" / "niwa.sqlite3"
+    db.parent.mkdir()
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+    backups_dir = db.parent / "backups"
+    backups_dir.mkdir()
+    # Seed one "recent" (8 days old) and one "old" (30 days old) backup.
+    recent = backups_dir / "niwa-recent.sqlite3"
+    old = backups_dir / "niwa-old.sqlite3"
+    recent.write_text("recent")
+    old.write_text("old")
+    now = _t.time()
+    os.utime(recent, (now - 8 * 86400, now - 8 * 86400))
+    os.utime(old, (now - 30 * 86400, now - 30 * 86400))
+
+    monkeypatch.setenv("NIWA_DB_PATH", str(db))
+    inst = _install(tmp_path / "inst")
+    r = _clean_repo_runner()
+    manifest = update_engine.perform_update(
+        install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
+        runner=r, printer=lambda *a, **k: None,
+        timestamp="20260417-140000",
+    )
+    assert manifest["success"] is True
+    assert recent.exists(), "8-day-old backup should be kept"
+    assert not old.exists(), "30-day-old backup should be pruned"
+    assert Path(manifest["backup_path"]).exists(), "fresh backup must exist"
+
+
 def test_backup_runs_before_pull(tmp_path):
     """Hard pin: backup happens BEFORE git pull. A broken ordering
     means an update could fail halfway with no restore point."""
