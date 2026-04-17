@@ -3029,6 +3029,54 @@ def cmd_update(args) -> None:
         sys.exit(1)
 
 
+def cmd_restore(args) -> None:
+    """Restore from a backup (PR-59).
+
+    Delegates to ``bin/update_engine.perform_restore`` which by
+    default rolls back both code (git checkout to the commit
+    recorded in the update log for this backup) and DB. Use
+    ``--db-only`` to skip the code rollback.
+    """
+    install_dir = Path(args.dir) if getattr(args, "dir", None) else _find_install_dir()
+    if not install_dir or not install_dir.exists():
+        print("\u274c Niwa install not found. Use --dir or set NIWA_HOME.")
+        sys.exit(1)
+    repo_dir = install_dir / "repo"
+    if not (repo_dir / ".git").exists():
+        repo_dir = Path(__file__).parent
+        if not (repo_dir / ".git").exists():
+            print("\u274c Git repo not found.")
+            sys.exit(1)
+
+    engine_path = Path(__file__).parent / "bin"
+    if str(engine_path) not in sys.path:
+        sys.path.insert(0, str(engine_path))
+    import update_engine  # type: ignore
+
+    manifest = update_engine.perform_restore(
+        install_dir=install_dir, repo_dir=repo_dir,
+        backup_path=args.from_backup, db_only=bool(args.db_only),
+    )
+
+    print()
+    if manifest["success"]:
+        print("\u2705 Restore completado.")
+    else:
+        print("\u274c Restore falló.")
+    if manifest.get("target_commit"):
+        print(f"   Código restaurado a: {manifest['target_commit'][:12]}")
+    elif not args.db_only:
+        print("   Código: no restaurado (entry del log no encontrada)")
+    if manifest.get("db_restored"):
+        print(f"   DB: restaurada desde {manifest['backup_path']}")
+    for w in manifest.get("warnings") or []:
+        print(f"   \u26a0 {w}")
+    for e in manifest.get("errors") or []:
+        print(f"   \u274c {e}")
+    if not manifest["success"]:
+        sys.exit(1)
+
+
 def cmd_hosting(args) -> None:
     """Set up web hosting for static project sites."""
     install_dir = _find_install_dir(getattr(args, 'dir', None))
@@ -3780,6 +3828,18 @@ def main():
     p_update = sub.add_parser("update", help="Update Niwa to the latest version (preserves config/data)")
     p_update.add_argument("--dir", help="Install directory")
 
+    p_restore = sub.add_parser(
+        "restore",
+        help="Restore from a backup: DB + rollback code (PR-59).",
+    )
+    p_restore.add_argument("--from", dest="from_backup", required=True,
+                           help="Path to the backup .sqlite3 file to restore from")
+    p_restore.add_argument("--dir", help="Install directory")
+    p_restore.add_argument(
+        "--db-only", action="store_true",
+        help="Restore DB but do NOT roll back code (use when you know what you're doing)",
+    )
+
     p_hosting = sub.add_parser("hosting", help="Set up web hosting for projects")
     p_hosting.add_argument("--domain", help="Domain for hosting (e.g., projects.myweb.com)")
     p_hosting.add_argument("--port", type=int, default=8880, help="Hosting port (default 8880)")
@@ -3805,6 +3865,8 @@ def main():
         cmd_config(args)
     elif cmd == "update":
         cmd_update(args)
+    elif cmd == "restore":
+        cmd_restore(args)
     elif cmd == "hosting":
         cmd_hosting(args)
 
