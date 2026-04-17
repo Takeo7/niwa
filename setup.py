@@ -2970,7 +2970,13 @@ def cmd_backup(args) -> None:
 
 def cmd_update(args) -> None:
     """Update Niwa: pull latest code, rebuild containers, apply migrations.
-    Preserves all config, secrets, and data."""
+    Preserves all config, secrets, and data.
+
+    PR-58b1: delegates to ``bin/update_engine.perform_update`` so the
+    flow is testable in isolation (subprocess runner + backup_fn
+    injectables) and we get a structured manifest back for ops
+    visibility.
+    """
     install_dir = Path(args.dir) if getattr(args, 'dir', None) else _find_install_dir()
     if not install_dir or not install_dir.exists():
         print("\u274c Niwa install not found. Use --dir or set NIWA_HOME.")
@@ -2984,102 +2990,43 @@ def cmd_update(args) -> None:
             print("\u274c Git repo not found. Clone the repo first.")
             sys.exit(1)
 
-    print("\U0001f504 Updating Niwa...")
+    # Wire the engine. ``bin/update_engine.py`` is a sibling of the
+    # installed ``bin/niwa`` script, but when running from the repo
+    # clone ``setup.py`` lives at the repo root and ``bin/`` is a
+    # subdirectory — add it to sys.path explicitly.
+    engine_path = Path(__file__).parent / "bin"
+    if str(engine_path) not in sys.path:
+        sys.path.insert(0, str(engine_path))
+    import update_engine  # type: ignore
 
-    # PR-58a: guard against dirty repo. Pulling on top of local
-    # modifications used to silently fall through (``Continuing with
-    # current code``) — now we abort with an actionable message. The
-    # operator decides: stash, reset, or abandon the update.
-    porcelain = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=str(repo_dir),
-        capture_output=True, text=True, timeout=10,
+    manifest = update_engine.perform_update(
+        install_dir=install_dir,
+        repo_dir=repo_dir,
     )
-    if (porcelain.stdout or "").strip():
-        print("  \u274c El repositorio tiene cambios locales sin commitear.")
-        print("  No actualizo para evitar mezclar ramas o perder trabajo.")
-        print(f"  Inspecciona con: git -C {repo_dir} status")
-        print( "  Y elige:")
-        print( "    - git stash         (guardar cambios aparte)")
-        print( "    - git checkout .    (descartar cambios sin stage)")
-        print( "    - git reset --hard  (descartar TODO)")
-        print( "  Después vuelve a ejecutar `niwa update`.")
-        sys.exit(1)
 
-    # 1. Detect current branch dynamically — no more hardcoded ``main``
-    # (PR-58a). Previously ``git pull origin main`` mixed release
-    # lines when the install tracked ``v0.2``.
-    branch_result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(repo_dir),
-        capture_output=True, text=True, timeout=10,
-    )
-    current_branch = (branch_result.stdout or "").strip()
-    if not current_branch or current_branch == "HEAD":
-        print("  \u274c No se pudo determinar la rama actual.")
-        print("  El repo parece estar en detached HEAD. Haz checkout de una")
-        print("  rama (p. ej. `git checkout v0.2`) antes de actualizar.")
-        sys.exit(1)
-
-    # 2. Git pull
-    print(f"  \u2192 Pulling latest code (branch: {current_branch})...")
-    result = subprocess.run(
-        ["git", "pull", "origin", current_branch], cwd=str(repo_dir),
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"  \u274c Git pull failed: {result.stderr[:300]}")
-        print("  Resuelve el problema y vuelve a ejecutar `niwa update`.")
-        sys.exit(1)
-    print(f"  \u2713 {result.stdout.strip()}")
-
-    # 2. Copy updated files (preserve secrets/config)
-    print("  \u2192 Updating executor...")
-    src_executor = repo_dir / "bin" / "task-executor.py"
-    dst_executor = install_dir / "bin" / "task-executor.py"
-    if src_executor.exists() and dst_executor.exists():
-        shutil.copy2(str(src_executor), str(dst_executor))
-        print("  \u2713 Executor updated")
-
-    print("  \u2192 Updating MCP servers...")
-    for server_name in ("tasks-mcp", "notes-mcp", "platform-mcp"):
-        src = repo_dir / "servers" / server_name / "server.py"
-        dst = install_dir / "servers" / server_name / "server.py"
-        if src.exists() and dst.parent.exists():
-            shutil.copy2(str(src), str(dst))
-            print(f"  \u2713 {server_name}")
-
-    # 3. Rebuild app container
-    print("  \u2192 Rebuilding app container...")
-    instance = install_dir.name.replace(".", "")
-    compose_file = install_dir / "docker-compose.yml"
-    if compose_file.exists():
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "build", "--no-cache", "app"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print("  \u2713 App container rebuilt")
-            # Restart app
-            subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up", "-d", "--no-deps", "app"],
-                capture_output=True, text=True
-            )
-            print("  \u2713 App restarted")
-        else:
-            print(f"  \u26a0\ufe0f  Build failed: {result.stderr[:200]}")
-
-    # 4. Restart executor
-    print("  \u2192 Restarting executor...")
-    service_name = f"niwa-{instance}-executor.service" if instance != "niwa" else "niwa-executor.service"
-    result = subprocess.run(["systemctl", "restart", service_name],
-                          capture_output=True, text=True)
-    if result.returncode == 0:
-        print("  \u2713 Executor restarted")
+    # Emit a terse manifest summary after the streaming printer output.
+    print()
+    if manifest["success"]:
+        print("\u2705 Update completado.")
     else:
-        print(f"  \u26a0\ufe0f  Executor restart failed (may need: sudo systemctl restart {service_name})")
-
-    print("\n\u2705 Niwa updated successfully!")
-    print("   Config, secrets, and data are preserved.")
-    print("   Migrations will run automatically on next app startup.")
+        print("\u274c Update abortado antes de aplicar cambios.")
+    print(f"   Branch: {manifest.get('branch') or '(desconocida)'}")
+    if manifest.get("before_commit"):
+        print(f"   Antes:  {manifest['before_commit'][:12]}")
+    if manifest.get("after_commit"):
+        print(f"   Después: {manifest['after_commit'][:12]}")
+    if manifest.get("backup_path"):
+        print(f"   Backup: {manifest['backup_path']}")
+    if manifest.get("components_updated"):
+        print(f"   Componentes: {', '.join(manifest['components_updated'])}")
+    for w in manifest.get("warnings") or []:
+        print(f"   \u26a0 {w}")
+    for e in manifest.get("errors") or []:
+        print(f"   \u274c {e}")
+    if manifest.get("needs_restart"):
+        print("   \u26a0 Reinicia manualmente el executor para completar.")
+    if not manifest["success"]:
+        sys.exit(1)
 
 
 def cmd_hosting(args) -> None:
