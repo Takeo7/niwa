@@ -1359,6 +1359,49 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
                 )
 
 
+def _build_retry_decision(
+    task_id: str, retry_from_run_id: str, c: sqlite3.Connection,
+) -> Optional[dict]:
+    """Resolve a retry marker to a pseudo-decision dict (PR-57).
+
+    Called before ``routing_service.decide()``. Reads the prior run
+    and returns a dict matching the shape ``routing_service.decide``
+    would produce, but with ``selected_backend_profile_id`` and
+    ``routing_decision_id`` pinned to the prior run's values so the
+    new ``backend_run`` ends up as a sibling retry instead of a
+    reroute.
+
+    Returns ``None`` if the prior run is missing or its
+    ``backend_profile_id`` no longer exists (stale marker / GC'd
+    data / admin manual edit). In that case the caller clears the
+    marker and falls back to the normal routing path so the task
+    never stays stuck.
+    """
+    prev = c.execute(
+        "SELECT id, backend_profile_id, routing_decision_id "
+        "FROM backend_runs WHERE id = ?",
+        (retry_from_run_id,),
+    ).fetchone()
+    if not prev:
+        return None
+    # Sanity-check the backend still exists — the run could survive a
+    # profile hard-delete and we'd crash later on FK.
+    bp = c.execute(
+        "SELECT id FROM backend_profiles WHERE id = ?",
+        (prev["backend_profile_id"],),
+    ).fetchone()
+    if not bp:
+        return None
+    return {
+        "routing_decision_id": prev["routing_decision_id"],
+        "selected_backend_profile_id": prev["backend_profile_id"],
+        "fallback_chain": [],  # retry is a single-attempt, not a reroute
+        "reason_summary": f"retry of run {retry_from_run_id}",
+        "relation_type_override": "retry",
+        "previous_run_id_override": retry_from_run_id,
+    }
+
+
 def _execute_task_v02_body(
     task_dict: dict,
     task_id: str,
@@ -1370,9 +1413,35 @@ def _execute_task_v02_body(
 ) -> tuple[bool, str]:
     if codex_tmpdirs is None:
         codex_tmpdirs = []
-    # Step 1: Route
+    # Step 1: Route — unless this task is a retry (PR-57). When
+    # ``retry_from_run_id`` is set, we bypass routing and reuse the
+    # prior run's backend + routing decision so the new backend_run
+    # becomes a ``relation_type='retry'`` sibling rather than a
+    # rerouted attempt. Graceful degrade: if the marker points at a
+    # prior run that no longer exists, clear it and fall back to the
+    # normal routing path.
+    retry_from = task_dict.get("retry_from_run_id")
     with _conn() as c:
-        decision = routing_service.decide(task_dict, c)
+        decision: Optional[dict] = None
+        if retry_from:
+            decision = _build_retry_decision(task_id, retry_from, c)
+            if decision is None:
+                log.warning(
+                    "task %s: retry marker %s points to missing/stale data; "
+                    "clearing marker and rerouting normally",
+                    task_id, retry_from,
+                )
+            # Always clear the marker — either we consumed it
+            # successfully into ``decision``, or we determined it's
+            # corrupt and we want the task to proceed via routing.
+            c.execute(
+                "UPDATE tasks SET retry_from_run_id = NULL, updated_at = ? "
+                "WHERE id = ?",
+                (_now_iso(), task_id),
+            )
+            c.commit()
+        if decision is None:
+            decision = routing_service.decide(task_dict, c)
 
         if decision.get("approval_required"):
             log.info(
@@ -1423,11 +1492,23 @@ def _execute_task_v02_body(
 
     import capability_service
 
-    prior_run_id: str | None = None
+    # PR-57: when the retry path synthesised the decision, the very
+    # first run in the chain must be a ``relation_type='retry'`` with
+    # ``previous_run_id`` pointing at the original. Subsequent entries
+    # in the chain (if any fallback were used) still use 'fallback'.
+    retry_previous_run_id = decision.get("previous_run_id_override")
+    retry_relation_type = decision.get("relation_type_override")
+
+    prior_run_id: str | None = retry_previous_run_id
     last_error = ""
 
     for chain_idx, profile_id in enumerate(execution_chain):
-        relation_type = "fallback" if chain_idx > 0 else None
+        if chain_idx == 0 and retry_relation_type:
+            relation_type = retry_relation_type
+        elif chain_idx > 0:
+            relation_type = "fallback"
+        else:
+            relation_type = None
 
         with _conn() as c:
             profile = c.execute(
