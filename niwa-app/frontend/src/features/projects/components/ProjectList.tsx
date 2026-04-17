@@ -45,11 +45,13 @@ export function ProjectList() {
   const [editing, setEditing] = useState<Project | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [directory, setDirectory] = useState('');
 
   const openNew = () => {
     setEditing(null);
     setName('');
     setDescription('');
+    setDirectory('');
     setFormOpen(true);
   };
 
@@ -58,15 +60,25 @@ export function ProjectList() {
     setEditing(p);
     setName(p.name);
     setDescription(p.description || '');
+    setDirectory(p.directory || '');
     setFormOpen(true);
   };
 
   const handleSave = async () => {
     if (editing) {
-      await updateProject.mutateAsync({ slug: editing.slug, name, description });
+      await updateProject.mutateAsync({
+        slug: editing.slug,
+        name,
+        description,
+        directory: directory.trim() || undefined,
+      });
       notifications.show({ title: 'Proyecto actualizado', message: name, color: 'green' });
     } else {
-      await createProject.mutateAsync({ name, description });
+      await createProject.mutateAsync({
+        name,
+        description,
+        directory: directory.trim() || undefined,
+      });
       notifications.show({ title: 'Proyecto creado', message: name, color: 'green' });
     }
     setFormOpen(false);
@@ -171,6 +183,11 @@ export function ProjectList() {
                     <Badge size="xs" color="green" variant="outline">
                       {p.done_tasks} hechas
                     </Badge>
+                    {!p.directory && (
+                      <Badge size="xs" color="orange" variant="light">
+                        sin directorio
+                      </Badge>
+                    )}
                   </Group>
                   <Text size="xs" c="dimmed">{pct}%</Text>
                 </Group>
@@ -200,6 +217,13 @@ export function ProjectList() {
             onChange={(e) => setDescription(e.currentTarget.value)}
             minRows={3}
             placeholder="Descripción del proyecto"
+          />
+          <TextInput
+            label="Directorio"
+            value={directory}
+            onChange={(e) => setDirectory(e.currentTarget.value)}
+            placeholder="Déjalo vacío para autogenerar en /home/niwa/projects/<slug>"
+            description="Ruta absoluta donde Claude y el executor trabajarán. Si lo dejas vacío, Niwa genera una bajo NIWA_PROJECTS_ROOT."
           />
           <Group justify="flex-end" mt="sm">
             <Button variant="subtle" onClick={() => setFormOpen(false)}>

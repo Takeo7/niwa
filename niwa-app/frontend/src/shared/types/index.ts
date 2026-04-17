@@ -6,6 +6,7 @@ export interface Task {
   area: string;
   project_id: string | null;
   project_name: string | null;
+  project_slug: string | null;
   status: string;
   priority: string;
   urgent: number;

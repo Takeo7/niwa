@@ -113,9 +113,21 @@ export function TaskDetailPage() {
               {task.priority}
             </Badge>
             {task.project_name && (
-              <Badge variant="outline" radius="sm">
-                {task.project_name}
-              </Badge>
+              task.project_slug ? (
+                <Badge
+                  variant="outline"
+                  radius="sm"
+                  component={Link}
+                  to={`/projects/${task.project_slug}`}
+                  style={{ cursor: 'pointer', textDecoration: 'none' }}
+                >
+                  {task.project_name}
+                </Badge>
+              ) : (
+                <Badge variant="outline" radius="sm">
+                  {task.project_name}
+                </Badge>
+              )
             )}
             {task.urgent === 1 && (
               <Badge color="red" radius="sm">Urgente</Badge>
