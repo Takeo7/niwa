@@ -153,6 +153,138 @@ def list_deployments():
     return [dict(r) for r in c.execute("SELECT * FROM deployments WHERE status='active' ORDER BY deployed_at DESC").fetchall()]
 
 
+def _detect_public_ip(timeout: float = 3.0):
+    """Best-effort public IP detection. Returns None if no echo service
+    answers. Used by the hosting wizard to tell the user which IP to put
+    in their wildcard DNS record."""
+    import urllib.request
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "niwa/0.2"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                ip = r.read().decode().strip()
+                # Crude sanity check: digits + dots, v4 only for now.
+                if ip and all(c.isdigit() or c == "." for c in ip) and ip.count(".") == 3:
+                    return ip
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_a_records(hostname: str):
+    """Return the list of IPv4 addresses the hostname resolves to, or []."""
+    import socket
+    try:
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        return sorted({info[4][0] for info in infos})
+    except Exception:
+        return []
+
+
+def _port_listening(host: str, port: int, timeout: float = 2.0) -> bool:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _http_probe(url: str, timeout: float = 5.0):
+    """GET ``url``. Return ``{'ok': bool, 'status': int | None, 'error': str | None}``."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "niwa-hosting-probe/0.2"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return {"ok": True, "status": int(r.status), "error": None}
+    except Exception as e:
+        return {"ok": False, "status": None, "error": str(e)}
+
+
+def get_status() -> dict:
+    """Aggregate the hosting configuration + live verification checks.
+
+    Returned shape (intended for the frontend wizard):
+
+        {
+            'domain':            str,        # empty if not configured
+            'port':              int,
+            'public_ip':         str | None, # as seen from outside
+            'caddy_listening':   bool,       # 127.0.0.1:<port> open
+            'dns':     {'host': str, 'ips': list[str]},
+            'wildcard':{'host': str, 'ips': list[str]},
+            'http':    {'tried': list[str], 'ok': bool, 'status': int | None,
+                        'url': str | None, 'error': str | None},
+            'suggested_records': list[dict],
+        }
+
+    DNS and HTTP probes are only performed when a domain is configured.
+    The function tolerates network failures silently — each field
+    degrades to an empty/False value rather than raising.
+    """
+    c = _db()
+    row_domain = c.execute(
+        "SELECT value FROM settings WHERE key='svc.hosting.domain'"
+    ).fetchone()
+    row_port = c.execute(
+        "SELECT value FROM settings WHERE key='svc.hosting.port'"
+    ).fetchone()
+    domain = (row_domain["value"] if row_domain else "").strip()
+    try:
+        port = int(row_port["value"]) if row_port and row_port["value"] else HOSTING_PORT
+    except (ValueError, TypeError):
+        port = HOSTING_PORT
+
+    public_ip = _detect_public_ip()
+    caddy_listening = _port_listening("127.0.0.1", port)
+
+    result = {
+        "domain": domain,
+        "port": port,
+        "public_ip": public_ip,
+        "caddy_listening": caddy_listening,
+        "dns": {"host": domain, "ips": []},
+        "wildcard": {"host": "", "ips": []},
+        "http": {"tried": [], "ok": False, "status": None, "url": None, "error": None},
+        "suggested_records": [],
+    }
+
+    if domain:
+        result["dns"]["ips"] = _resolve_a_records(domain)
+        probe_sub = f"niwa-probe.{domain}"
+        result["wildcard"] = {
+            "host": probe_sub,
+            "ips": _resolve_a_records(probe_sub),
+        }
+        # Probe HTTPS first (Cloudflare proxy default), then plain HTTP.
+        tried: list[str] = []
+        for scheme in ("https", "http"):
+            url = f"{scheme}://{domain}/"
+            tried.append(url)
+            probe = _http_probe(url)
+            if probe["ok"]:
+                result["http"] = {
+                    "tried": tried,
+                    "ok": True,
+                    "status": probe["status"],
+                    "url": url,
+                    "error": None,
+                }
+                break
+        else:
+            result["http"]["tried"] = tried
+            result["http"]["error"] = probe["error"] if tried else None
+        if public_ip:
+            result["suggested_records"] = [
+                {"type": "A", "name": "@", "value": public_ip, "proxied": True},
+                {"type": "A", "name": "*", "value": public_ip, "proxied": True},
+            ]
+    return result
+
+
 def _reload_caddy():
     """Reload or start the hosting Caddy instance.
 

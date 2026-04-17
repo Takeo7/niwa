@@ -16,6 +16,7 @@ import {
   useUndeployProject,
 } from '../../../shared/api/queries';
 import type { Deployment } from '../../../shared/types';
+import { HostingDomainWizard } from './HostingDomainWizard';
 
 export function DeploymentsPanel() {
   const { data, isLoading, refetch, isFetching } = useDeployments();
@@ -33,6 +34,7 @@ export function DeploymentsPanel() {
 
   return (
     <Stack gap="md">
+      <HostingDomainWizard />
       <Group justify="space-between">
         <Title order={4}>Sitios desplegados</Title>
         <Button

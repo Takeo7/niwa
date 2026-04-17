@@ -748,6 +748,39 @@ export function useDeployments() {
   });
 }
 
+// ── Hosting status (PR-48) ──
+export interface HostingStatus {
+  domain: string;
+  port: number;
+  public_ip: string | null;
+  caddy_listening: boolean;
+  dns: { host: string; ips: string[] };
+  wildcard: { host: string; ips: string[] };
+  http: {
+    tried: string[];
+    ok: boolean;
+    status: number | null;
+    url: string | null;
+    error: string | null;
+  };
+  suggested_records: Array<{
+    type: string;
+    name: string;
+    value: string;
+    proxied: boolean;
+  }>;
+}
+
+export function useHostingStatus(enabled: boolean = true) {
+  return useQuery({
+    queryKey: ['hosting-status'],
+    queryFn: () => api<HostingStatus>('hosting/status'),
+    enabled,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+}
+
 export function useDeployProject() {
   const qc = useQueryClient();
   return useMutation({

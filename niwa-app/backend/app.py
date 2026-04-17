@@ -3447,6 +3447,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.exception('list_deployments failed')
                 return self._json({'error': str(e)}, 500)
+        if path == '/api/hosting/status':
+            try:
+                return self._json(hosting.get_status())
+            except Exception as e:
+                logger.exception('hosting_status failed')
+                return self._json({'error': str(e)}, 500)
         if path == '/api/kanban-columns':
             include_terminal = qs.get('include_terminal', ['1'])[0] == '1'
             return self._json(fetch_kanban_columns(include_terminal=include_terminal))

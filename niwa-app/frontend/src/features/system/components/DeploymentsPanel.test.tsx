@@ -32,10 +32,26 @@ function wrap(ui: ReactNode) {
   );
 }
 
+const EMPTY_HOSTING_STATUS = {
+  domain: '',
+  port: 8880,
+  public_ip: null,
+  caddy_listening: false,
+  dns: { host: '', ips: [] },
+  wildcard: { host: '', ips: [] },
+  http: { tried: [], ok: false, status: null, url: null, error: null },
+  suggested_records: [],
+};
+
 function mockFetch(responses: Record<string, unknown>) {
+  // DeploymentsPanel now embeds HostingDomainWizard, which calls
+  // ``/api/hosting/status`` on mount. Provide a harmless default so the
+  // wizard doesn't crash reading ``status.dns.ips`` on unmocked paths.
+  const defaults = { '/api/hosting/status': EMPTY_HOSTING_STATUS };
+  const merged = { ...defaults, ...responses };
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
-    for (const [path, body] of Object.entries(responses)) {
+    for (const [path, body] of Object.entries(merged)) {
       if (url.includes(path)) {
         return new Response(JSON.stringify(body), {
           status: 200,
@@ -88,6 +104,12 @@ describe('DeploymentsPanel', () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/hosting/status')) {
+        return new Response(JSON.stringify(EMPTY_HOSTING_STATUS), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.includes('/api/deployments')) {
         return new Response(
           JSON.stringify({
