@@ -147,8 +147,12 @@ class ClaudeCodeAdapter(BackendAdapter):
             return mkdir_err
 
         prompt = self._build_prompt(task)
+        append_sys = self._build_system_prompt(task)
         model = profile.get("default_model") or "claude-sonnet-4-6"
-        cmd = self._build_command(model=model, profile=profile)
+        cmd = self._build_command(
+            model=model, profile=profile,
+            append_system_prompt=append_sys,
+        )
         cwd = self._resolve_cwd(task, artifact_root)
 
         return self._execute(
@@ -183,9 +187,11 @@ class ClaudeCodeAdapter(BackendAdapter):
             return mkdir_err
 
         prompt = self._build_prompt(task)
+        append_sys = self._build_system_prompt(task)
         model = profile.get("default_model") or "claude-sonnet-4-6"
         cmd = self._build_command(
             model=model, resume_session_id=session_id, profile=profile,
+            append_system_prompt=append_sys,
         )
         cwd = self._resolve_cwd(task, artifact_root)
 
@@ -541,101 +547,112 @@ class ClaudeCodeAdapter(BackendAdapter):
 
     @staticmethod
     def _build_prompt(task: dict) -> str:
-        """Assemble prompt text from task data.
+        """Assemble the USER prompt text from task data.
 
-        Order matters: system-level rules (auto-project working
-        directory, project_create registration) go FIRST so Claude
-        reads them before the task description. PR-43 put them after
-        the description, and Claude treated the description as the
-        primary goal and the rules as epilogue — he kept writing to
-        /tmp/ even with a non-contradictory positive rule. PR-44
-        moves the rules to the top.
+        The auto-project rules used to live here (PR-38..PR-44), but
+        PR-45 moves them to the system prompt via
+        ``--append-system-prompt`` — see ``_build_system_prompt()``.
+        With ``--dangerously-skip-permissions`` the filesystem has no
+        hard sandbox, so Claude's adherence to rules is the only
+        enforcement we have; rules carry much more weight when they
+        arrive as a SYSTEM prompt rather than embedded in the user
+        message.
         """
-        pdir = task.get("project_directory")
+        parts: list[str] = []
         title = task.get("title", "")
-        rules_parts: list[str] = []
-        body_parts: list[str] = []
-
-        # ── System rules (top of prompt) ──
-        # PR-38 / PR-42 / PR-43 / PR-44: if the executor pre-created
-        # a project directory for this task (no project_id yet),
-        # force Claude to write there. Iteration history:
-        #
-        #   PR-38: soft wording ("if this involves creating
-        #     artifacts…") → Claude treated it as a suggestion and
-        #     used /tmp/ by habit.
-        #   PR-42: imperative + blacklist of /tmp/, /home/, /root/,
-        #     /var/, /opt/ → blacklist contradicted the main rule in
-        #     sudo installs (project_directory under /root/.niwa/).
-        #     Claude evaded both conflicting rules via /tmp/.
-        #   PR-43: positive rule only ("paths must start with
-        #     <pdir>"), no blacklist → still failed because the
-        #     rules came AFTER the task description in the prompt,
-        #     so Claude latched onto the task first and planned to
-        #     write to /tmp/ before ever reading the rules.
-        #   PR-44: system rules go FIRST. Standard prompt
-        #     engineering: context + constraints before the goal.
-        #
-        # User insight (critical): Claude obeys unambiguous rules
-        # when they come first. The problem was never the flag or
-        # the wording — it was prompt ordering.
-        if pdir and not task.get("project_id"):
-            rules_parts.append(
-                "## WORKING DIRECTORY — STRICT RULE\n"
-                f"A fresh directory has been prepared for this task:\n\n"
-                f"    {pdir}\n\n"
-                "Your shell is already `cd`'d there — "
-                "**relative paths just work**. Prefer them.\n\n"
-                "**THE RULE:** every absolute path you write to MUST "
-                f"start with `{pdir}`. Anything else is out of scope "
-                "for this task and will be lost — the post-hook that "
-                "registers your work as a Niwa project only looks "
-                "inside that directory.\n\n"
-                "Common mistake to avoid: defaulting to `/tmp/<name>/`. "
-                "If you catch yourself about to call "
-                "`Write(/tmp/...)` or `Bash(mkdir /tmp/...)`, stop "
-                "and use the working directory instead.\n\n"
-                "## REGISTER THE PROJECT\n"
-                "Before writing any file, call the `project_create` "
-                "MCP tool so it shows up in the Niwa UI. Exact "
-                "arguments:\n\n"
-                "```json\n"
-                "{\n"
-                f'  "name": {title!r},\n'
-                '  "area": "proyecto",\n'
-                f'  "directory": {pdir!r},\n'
-                '  "description": "<one sentence of what you\'re building>"\n'
-                "}\n"
-                "```\n\n"
-                "If this task is purely conversational (a question, a "
-                "review, a summary) and you will NOT create files, "
-                "you may skip `project_create` entirely. But if you "
-                "create even one file, both rules above apply: "
-                "register the project AND write inside the working "
-                "directory."
-            )
-
-        # ── Task body (bottom of prompt) ──
         if title:
-            body_parts.append(f"# Task: {title}")
+            parts.append(f"# Task: {title}")
         desc = task.get("description", "")
         if desc:
-            body_parts.append(desc)
+            parts.append(desc)
         notes = task.get("notes", "")
         if notes:
-            body_parts.append(f"## Notes\n{notes}")
+            parts.append(f"## Notes\n{notes}")
+        return "\n\n".join(parts) if parts else "Complete the assigned task."
 
-        all_parts = rules_parts + body_parts
-        return "\n\n".join(all_parts) if all_parts else "Complete the assigned task."
+    @staticmethod
+    def _build_system_prompt(task: dict) -> str | None:
+        """Build the appended system prompt with auto-project rules.
+
+        Returns the text to pass via ``--append-system-prompt`` or
+        ``None`` if there are no rules to append (task already has
+        ``project_id`` or executor didn't pre-create a directory).
+
+        Iteration history — why the system prompt, not the user
+        message:
+
+        *   PR-38 → PR-44 tried progressively harder wording in the
+            USER prompt (soft → imperative → positive-only → rules
+            first). None worked in production; Claude kept writing to
+            ``/tmp/``.
+        *   Root cause (GPT-4o analysis, confirmed with
+            ``claude -p --help``): the rules were part of the user
+            message, not the system prompt. With
+            ``--dangerously-skip-permissions`` the model decides
+            freely, and user messages are goals to execute, not
+            constraints to obey. Claude Code defaults to ``/tmp/``
+            unless told otherwise via the SYSTEM prompt.
+        *   PR-45: move the rules to
+            ``--append-system-prompt``. The user's task description
+            stays as the user message (the GOAL); the rules are
+            framed as persistent operator-level CONTEXT, which is
+            exactly what system prompts are for.
+
+        Niwa's design intent: task execution must remain unrestricted
+        (tasks legitimately need to touch arbitrary paths). So this
+        is NOT a sandbox — it's a strong hint. If Claude still slips,
+        the safety net is the post-hook that registers the project
+        from whatever files appeared in the project_directory.
+        """
+        pdir = task.get("project_directory")
+        if not pdir or task.get("project_id"):
+            return None
+        title = task.get("title", "")
+        return (
+            "## WORKING DIRECTORY\n"
+            "This task was dispatched by Niwa with a pre-created "
+            "project directory. The subprocess is already `cd`'d to "
+            "that directory and it is the intended destination for "
+            "any files you create in this task:\n\n"
+            f"    {pdir}\n\n"
+            "Prefer relative paths — they resolve to the directory "
+            "above automatically. When you must use an absolute "
+            f"path, it MUST start with `{pdir}`.\n\n"
+            "Do NOT default to `/tmp/<name>/` — files there are "
+            "invisible to the Niwa project registry and will appear "
+            "lost to the operator. If you catch yourself about to "
+            "call `Write(/tmp/...)` or `Bash(mkdir /tmp/...)`, use "
+            "the working directory instead.\n\n"
+            "## REGISTER THE PROJECT\n"
+            "Before writing any file, call the `project_create` MCP "
+            "tool so the project shows up in the Niwa UI. Exact "
+            "arguments:\n\n"
+            "```json\n"
+            "{\n"
+            f'  "name": {title!r},\n'
+            '  "area": "proyecto",\n'
+            f'  "directory": {pdir!r},\n'
+            '  "description": "<one sentence of what you\'re building>"\n'
+            "}\n"
+            "```\n\n"
+            "Skip `project_create` only if the task is purely "
+            "conversational (a question, a review, a summary) and "
+            "you will create no files. If you create even one file, "
+            "register the project first and write inside the "
+            "working directory."
+        )
 
     @staticmethod
     def _build_command(*, model: str,
                        resume_session_id: str | None = None,
-                       profile: dict | None = None) -> list[str]:
+                       profile: dict | None = None,
+                       append_system_prompt: str | None = None) -> list[str]:
         """Build the ``claude`` CLI command list.
 
-        Never includes ``--dangerously-skip-permissions``.  That flag
-        is deferred to PR-05 behind capability_profile + approval gate.
+        ``append_system_prompt`` (PR-45) is appended via
+        ``--append-system-prompt``; used for auto-project rules that
+        must arrive as a SYSTEM prompt (not a user message) so the
+        model weighs them as constraints, not as task content.
         """
         cli_parts = [CLAUDE_CLI_COMMAND]
         if profile and profile.get("command_template"):
@@ -647,6 +664,8 @@ class ClaudeCodeAdapter(BackendAdapter):
             cmd.extend(["--model", model])
         if resume_session_id:
             cmd.extend(["--resume", resume_session_id])
+        if append_system_prompt:
+            cmd.extend(["--append-system-prompt", append_system_prompt])
         # PR-33 introduced a _dangerous_mode toggle to conditionally
         # add the flag. PR-34 makes it the default: the niwa user is
         # a dedicated service account (not root), OS permissions ARE
