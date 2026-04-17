@@ -62,6 +62,64 @@ def _default_projects_root() -> Path:
     if env_root:
         return Path(env_root)
     return Path('/home/niwa/projects')
+
+
+def _ensure_managed_project_dir(path: str) -> bool:
+    """Create the project directory if it lives under the managed root (PR-57).
+
+    Returns ``True`` if the directory now exists (either because we
+    just created it, or because it was already there). Returns
+    ``False`` if the path is OUTSIDE the managed root — in that case
+    we refuse to create arbitrary host paths from an HTTP handler,
+    and the caller lets ``hosting.deploy_project`` fail with its
+    existing "Directory not found" message so the operator sees why.
+
+    We only ``chmod 0o777`` when we actually created the directory.
+    Touching existing permissions on every deploy would be surprising
+    for admins who set their own.
+
+    Why ``0o777`` in v0.2: the app runs as root inside the container;
+    the executor runs as ``niwa`` (uid 1001) on the host. They don't
+    share a uid or a common group, so the only simple way to
+    guarantee both sides can write is a permissive mode. Moving to
+    ``2775`` with a shared ``niwa`` group in the image is tracked
+    for v0.3 — out of scope here.
+    """
+    try:
+        target = Path(path).resolve()
+    except Exception:
+        return False
+    try:
+        root = _default_projects_root().resolve()
+    except Exception:
+        return False
+    # Require the resolved target to live STRICTLY under the root.
+    # ``path_under_root`` check via ``is_relative_to`` (3.9+).
+    try:
+        if not target.is_relative_to(root):
+            return False
+    except AttributeError:  # pragma: no cover — 3.8
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return False
+
+    if target.is_dir():
+        return True
+    # Never try to overwrite something that exists but isn't a dir.
+    if target.exists():
+        return False
+    try:
+        os.makedirs(target, exist_ok=True)
+        # os.makedirs(mode=…) is ANDed with umask; a second explicit
+        # chmod guarantees the bits we actually want.
+        os.chmod(target, 0o777)
+        return True
+    except OSError:
+        logger.exception("ensure_managed_project_dir failed for %s", target)
+        return False
+
+
 SCHEMA_PATH = BASE_DIR / 'db' / 'schema.sql'
 HOST = os.environ.get('NIWA_APP_HOST', '0.0.0.0')
 PORT = int(os.environ.get('NIWA_APP_PORT', '8080'))
@@ -3999,20 +4057,51 @@ class Handler(BaseHTTPRequestHandler):
             ts = now_iso()
             with db_conn() as conn:
                 task = conn.execute(
-                    "SELECT id, status FROM tasks WHERE id=?", (task_id,),
+                    "SELECT id, status, current_run_id, retry_from_run_id "
+                    "FROM tasks WHERE id=?", (task_id,),
                 ).fetchone()
                 if not task:
                     return self._json({'error': 'not_found'}, 404)
+                # PR-57: idempotent — if a retry is already queued, we
+                # return 200 with ``already_queued=True`` instead of
+                # 409. Double-clicking or stale tabs should not create
+                # duplicates or surprise the caller.
+                if task['retry_from_run_id']:
+                    return self._json({
+                        'ok': True,
+                        'status': task['status'],
+                        'already_queued': True,
+                        'retry_from_run_id': task['retry_from_run_id'],
+                    })
+                # Resolve the previous run: prefer ``current_run_id``
+                # (the "active intent" per schema.sql:46). If missing
+                # (older tasks or corrupted data) fall back to the
+                # most recent finished ``backend_run`` for this task.
+                prev_run_id = task['current_run_id']
+                if not prev_run_id:
+                    row = conn.execute(
+                        "SELECT id FROM backend_runs WHERE task_id=? "
+                        "ORDER BY COALESCE(finished_at, created_at) DESC "
+                        "LIMIT 1",
+                        (task_id,),
+                    ).fetchone()
+                    prev_run_id = row['id'] if row else None
                 # Flip status back to ``pendiente`` so the executor's
                 # poll loop picks it up. ``completed_at`` is reset so
                 # the Dashboard "hechas hoy" counter doesn't double-count.
+                # ``retry_from_run_id`` is the marker the executor
+                # reads to create a retry-linked backend_run.
                 conn.execute(
                     "UPDATE tasks SET status='pendiente', completed_at=NULL, "
-                    "updated_at=? WHERE id=?",
-                    (ts, task_id),
+                    "retry_from_run_id=?, updated_at=? WHERE id=?",
+                    (prev_run_id, ts, task_id),
                 )
                 conn.commit()
-            return self._json({'ok': True, 'status': 'pendiente'})
+            return self._json({
+                'ok': True,
+                'status': 'pendiente',
+                'retry_from_run_id': prev_run_id,
+            })
         _m_proj_deploy = re.match(r'^/api/projects/([^/]+)/deploy$', path)
         if _m_proj_deploy:
             key = _m_proj_deploy.group(1)
@@ -4028,6 +4117,13 @@ class Handler(BaseHTTPRequestHandler):
             # slug + directory are the only values we trust. Accepting them
             # from the request would let any authenticated admin publish
             # arbitrary host paths (e.g. /etc, /root) as static sites.
+            #
+            # PR-57: if the directory is managed (lives under
+            # NIWA_PROJECTS_ROOT), ensure it exists and is writable by
+            # the executor. Paths OUTSIDE the root aren't auto-created
+            # — hosting.deploy_project then fails with the existing
+            # "Directory not found" message so the operator sees why.
+            _ensure_managed_project_dir(proj['directory'])
             try:
                 result = hosting.deploy_project(proj['id'])
                 return self._json({'ok': True, **result})
