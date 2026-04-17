@@ -2498,7 +2498,11 @@ def _latest_remote_commit(repo: Path, branch: str, ttl: float = 60.0) -> Optiona
         return hit[1]
     fetched = _git(repo, "fetch", "origin", branch, timeout=15)
     sha = _git(repo, "rev-parse", f"origin/{branch}") if fetched is not None else None
-    _REMOTE_COMMIT_CACHE[key] = (now, sha)
+    # Only cache successful lookups so a transient network blip
+    # doesn't hide the remote state for a full TTL. Cache misses
+    # retry on the next call.
+    if sha is not None:
+        _REMOTE_COMMIT_CACHE[key] = (now, sha)
     return sha
 
 
@@ -4379,8 +4383,12 @@ class Handler(BaseHTTPRequestHandler):
             # escalates to root on the host. The CLI is already the
             # canonical path; this keeps it that way.
             info = _collect_version_info()
+            # HTTP 202 — we accepted the request but the work happens
+            # out-of-band (on the host). ``ok: true`` because the
+            # *intent* reporting succeeded; the payload tells the
+            # client what to do next.
             return self._json({
-                "ok": False,
+                "ok": True,
                 "action_required": "run_cli",
                 "command": "niwa update",
                 "current_commit": info["commit"],
@@ -4395,7 +4403,7 @@ class Handler(BaseHTTPRequestHandler):
                     "al Docker socket ni a systemd). "
                     "Ver docs/DECISIONS-LOG.md — decisión 'Update architecture'."
                 ),
-            })
+            }, 202)
         if path == '/api/settings/integrations/test-telegram':
             return self._json(test_telegram())
         if path == '/api/security/scan':

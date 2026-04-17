@@ -198,12 +198,13 @@ def test_system_update_returns_action_intent_not_execution(app_server, monkeypat
     status, out = _req(
         app_server["base"], "/api/system/update", method="POST", body={},
     )
-    assert status == 200
-    assert out["ok"] is False
+    # HTTP 202 Accepted — the request was received but the work
+    # happens on the host out-of-band (run_cli).
+    assert status == 202
+    assert out["ok"] is True
     assert out["action_required"] == "run_cli"
     assert out["command"] == "niwa update"
     assert "message" in out
-    # The message must tell the operator where to run the command.
     msg = out["message"].lower()
     assert "niwa update" in msg
     assert "host" in msg
@@ -231,7 +232,7 @@ def test_system_update_intent_includes_branch_and_commits(app_server, monkeypatc
     status, out = _req(
         app_server["base"], "/api/system/update", method="POST", body={},
     )
-    assert status == 200
+    assert status == 202
     assert out["branch"] == "v0.2"
     assert out["current_commit"].startswith("bbbb")
     assert out["current_commit_short"] == "bbbbbbbbbbbb"
