@@ -533,6 +533,28 @@ Tests en `tests/test_cookie_secure.py` (9 casos): las 3 señales, override '0' n
 **Severidad:** **media** (UX: el resultado es legible pero feo; las tablas y formato se pierden).
 **Estado:** **ARREGLADO en PR-37.** La sección Resultado ahora renderiza el `executor_output` vía `<ReactMarkdown remarkPlugins={[remarkGfm]}>` con override de `<a>` para abrir links externos en pestaña nueva (`rel=noopener noreferrer`). Sin nuevas deps: `react-markdown@9.1.0` y `remark-gfm@4.0.1` ya estaban en `package.json` (NoteEditor las usa desde antes). Se eliminó el wrapper `<Text>` para evitar HTML inválido (`<p>` dentro de `<p>`). Tests en `niwa-app/frontend/src/features/tasks/components/TaskDetailsTab.test.tsx` (5 casos): bold → `<strong>`, tablas GFM → `<table>`, links externos `target=_blank`, no render si vacío, HTML raw (`<script>`) queda escapado (react-markdown 9.x sin rehype-raw = no vector XSS).
 
+### Bug 33: `claude -p` CLI 2.1.97 sale exit 0 silencioso cuando `.credentials.json` está caducado
+
+**Descripción:** Observado en producción durante verificación post-sesión PRs 37-41. El CLI oficial `claude -p` de `@anthropic-ai/claude-code@2.1.97` da prioridad a `~/.claude/.credentials.json` sobre la env var `CLAUDE_CODE_OAUTH_TOKEN`. Si ese fichero existe pero las credenciales están caducadas, el CLI sale **exit 0 sin emitir ningún evento** en stream-json, ni siquiera `system_init`. El adapter v0.2 (`claude_code.py::_execute`) interpreta exit 0 + stream vacío como "finalizó correctamente" y retorna `{outcome: 'failure', error_code: None, exit_code: 1}` — el `error_code=None` es síntoma visible en la UI.
+
+**Ubicación:** upstream (Anthropic CLI), pero el adapter `claude_code.py::_execute` debería detectarlo y reportar mejor.
+
+**Severidad:** **media UX** (confunde al operador: exit silencioso sin pista de por qué falló).
+
+**Workaround operacional:** asegurar que `/home/niwa/.claude/.credentials.json` es válido (copiar desde `/root/.claude/` tras `claude setup-token` o regenerarlo). La env var `CLAUDE_CODE_OAUTH_TOKEN` SOLA no basta mientras exista el fichero caducado.
+
+**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: el adapter detecta "stream completó 0 eventos y exit 0" y reporta `error_code='auth_silent'` con mensaje explicando la causa probable (`.credentials.json` caducado) en el banner de PR-39. ~30 LOC en `_execute`.
+
+### Bug 34: Claude ignora `WORKING DIRECTORY` del prompt PR-38 y usa `/tmp/` por costumbre
+
+**Descripción:** Verificado en producción: con el prompt de PR-38 ("If this task involves creating persistent artifacts…"), Claude trata el `project_directory` como sugerencia, no como regla. Escribe a `/tmp/<nombre>/` y el post-hook safety net no encuentra ficheros en el `project_dir` → `rmtree` del dir vacío, `tasks.project_id` queda null, el proyecto no aparece en la UI. Feature 1 (auto-registro) falla silenciosamente.
+
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py::_build_prompt`.
+
+**Severidad:** **alta UX** (PR-38 prometía "usuario ve su proyecto en Proyectos"; el prompt suave hace que no cumpla la promesa).
+
+**Estado:** **ARREGLADO en PR-42.** Reescritura imperativa del prompt: (1) sección `## WORKING DIRECTORY — STRICT RULE` en mayúsculas, (2) blacklist explícito de `/tmp/`, `/home/`, `/root/`, `/var/`, `/opt/` con razón ("post-hook can't find files there"), (3) bloque JSON literal con los args exactos de `project_create` (`name`, `area`, `directory`, `description`) para eliminar ambigüedad de schema, (4) recordatorio "your shell is already `cd`'d there — relative paths just work" porque Claude defaulta a paths absolutos, (5) escape hatch preservado para tareas conversacionales ("if purely conversational, skip project_create"). Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (4 casos nuevos, total 8): blacklist de paths presente, bloque json con los 4 args, hint de paths relativos, escape hatch conservado.
+
 ### Bug 32: Tareas que Claude "completa" con exit 0 pero sin haber hecho nada (false-succeeded genérico)
 
 **Descripción:** PR-33/34 detectan `permission_denials` del stream-json y marcan el run como `failed`. Pero si Claude sale con exit 0 sin permission denials pero su output dice "no pude hacerlo" (p.ej., por rate limit, por no entender la tarea, por error de otro tipo), el run se marca `succeeded` y la tarea como `hecha` — falso positivo. El usuario ve "completada" sin trabajo real.

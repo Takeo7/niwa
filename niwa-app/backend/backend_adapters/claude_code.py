@@ -553,29 +553,52 @@ class ClaudeCodeAdapter(BackendAdapter):
         if notes:
             parts.append(f"\n## Notes\n{notes}")
 
-        # PR-38: if the executor pre-created a project directory for
-        # this task (no project_id yet), tell Claude to use it and to
-        # register the project via the MCP tool. The executor also
-        # has a safety-net post-hook that registers the project
-        # automatically if Claude writes files without calling the
-        # tool — but calling it explicitly lets Claude pick a better
-        # name/description than the fallback.
+        # PR-38 / PR-42: if the executor pre-created a project
+        # directory for this task (no project_id yet), force Claude
+        # to write there. Bug 34: with the PR-38 wording ("If this
+        # involves creating artifacts…") Claude treated the path as
+        # a suggestion and used /tmp/ by habit. The executor's
+        # post-hook safety net only rescues files written INSIDE the
+        # pre-created dir, so writes to /tmp/ leak. We harden the
+        # instruction: uppercase the rule, blacklist alternative
+        # paths, and give a concrete example of the tool call. Claude
+        # respects imperative rules with examples much more reliably
+        # than conditional prose.
         pdir = task.get("project_directory")
         if pdir and not task.get("project_id"):
             parts.append(
-                "\n## Working directory\n"
-                f"A fresh directory has been prepared for this task:\n"
+                "\n## WORKING DIRECTORY — STRICT RULE\n"
+                f"A fresh directory has been prepared for this task:\n\n"
                 f"    {pdir}\n\n"
-                "If this task involves creating persistent artifacts "
-                "(web, app, scripts, configs, datasets, etc.):\n"
-                "1. Call the `project_create` MCP tool FIRST with:\n"
-                f"   - name: {title or 'Untitled'!r}\n"
-                "   - area: 'proyecto'\n"
-                f"   - directory: {pdir!r}\n"
-                "   - description: a one-line summary of what you're building.\n"
-                "2. Write all files inside that directory using absolute paths.\n"
-                "If the task is conversational (a question, a review, a "
-                "summary), you can skip `project_create` and answer directly."
+                "Your shell is already `cd`'d there, so **relative paths "
+                "just work**. Prefer relative paths.\n\n"
+                "**Every file you create MUST live under:**\n"
+                f"    {pdir}\n\n"
+                "**FORBIDDEN paths — never write here, even if it seems "
+                "convenient:**\n"
+                "  - `/tmp/...` (the post-hook can't find files there)\n"
+                "  - `/home/...`\n"
+                "  - `/root/...`\n"
+                "  - `/var/...`, `/opt/...`, or any other absolute path\n"
+                "    outside the directory above.\n\n"
+                "If you catch yourself about to write `/tmp/<anything>`, "
+                "stop and use the working directory instead.\n\n"
+                "## REGISTER THE PROJECT\n"
+                "Before writing any file, call the `project_create` MCP "
+                "tool so it shows up in the Niwa UI. Exact arguments:\n\n"
+                "```json\n"
+                "{\n"
+                f'  "name": {title!r},\n'
+                '  "area": "proyecto",\n'
+                f'  "directory": {pdir!r},\n'
+                '  "description": "<one sentence of what you\'re building>"\n'
+                "}\n"
+                "```\n\n"
+                "If this task is purely conversational (a question, a "
+                "review, a summary) and you will NOT create files, you "
+                "may skip `project_create` entirely. But if you create "
+                "even one file, both rules above apply: register the "
+                "project AND write inside the working directory."
             )
 
         return "\n\n".join(parts) if parts else "Complete the assigned task."
