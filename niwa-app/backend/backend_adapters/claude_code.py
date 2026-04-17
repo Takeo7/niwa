@@ -541,42 +541,47 @@ class ClaudeCodeAdapter(BackendAdapter):
 
     @staticmethod
     def _build_prompt(task: dict) -> str:
-        """Assemble prompt text from task data."""
-        parts: list[str] = []
-        title = task.get("title", "")
-        if title:
-            parts.append(f"# Task: {title}")
-        desc = task.get("description", "")
-        if desc:
-            parts.append(desc)
-        notes = task.get("notes", "")
-        if notes:
-            parts.append(f"\n## Notes\n{notes}")
+        """Assemble prompt text from task data.
 
-        # PR-38 / PR-42 / PR-43: if the executor pre-created a
-        # project directory for this task (no project_id yet),
-        # force Claude to write there.
-        #
-        # Evolution: PR-38 wording was too soft ("if this involves
-        # creating artifacts…") and Claude defaulted to /tmp/.
-        # PR-42 added imperative language + a blacklist of common
-        # paths (/tmp/, /home/, /root/…). That broke in prod because
-        # ``_auto_projects_root = <NIWA_HOME>/data/projects/`` — when
-        # the installer ran as root, ``NIWA_HOME=/root/.niwa`` and
-        # every project_directory STARTS WITH /root/. The blacklist
-        # then contradicted the main rule ("write under /root/.niwa/
-        # …" + "never write under /root/…"). Claude resolved the
-        # ambiguity by writing to /tmp/ which at least violated only
-        # one of the conflicting rules.
-        #
-        # PR-43: drop the fixed blacklist. State the rule positively
-        # ("paths must start with <pdir>") and mention /tmp/ only as
-        # a common habit to avoid — not as a blanket ban that can
-        # collide with the project_directory itself.
+        Order matters: system-level rules (auto-project working
+        directory, project_create registration) go FIRST so Claude
+        reads them before the task description. PR-43 put them after
+        the description, and Claude treated the description as the
+        primary goal and the rules as epilogue — he kept writing to
+        /tmp/ even with a non-contradictory positive rule. PR-44
+        moves the rules to the top.
+        """
         pdir = task.get("project_directory")
+        title = task.get("title", "")
+        rules_parts: list[str] = []
+        body_parts: list[str] = []
+
+        # ── System rules (top of prompt) ──
+        # PR-38 / PR-42 / PR-43 / PR-44: if the executor pre-created
+        # a project directory for this task (no project_id yet),
+        # force Claude to write there. Iteration history:
+        #
+        #   PR-38: soft wording ("if this involves creating
+        #     artifacts…") → Claude treated it as a suggestion and
+        #     used /tmp/ by habit.
+        #   PR-42: imperative + blacklist of /tmp/, /home/, /root/,
+        #     /var/, /opt/ → blacklist contradicted the main rule in
+        #     sudo installs (project_directory under /root/.niwa/).
+        #     Claude evaded both conflicting rules via /tmp/.
+        #   PR-43: positive rule only ("paths must start with
+        #     <pdir>"), no blacklist → still failed because the
+        #     rules came AFTER the task description in the prompt,
+        #     so Claude latched onto the task first and planned to
+        #     write to /tmp/ before ever reading the rules.
+        #   PR-44: system rules go FIRST. Standard prompt
+        #     engineering: context + constraints before the goal.
+        #
+        # User insight (critical): Claude obeys unambiguous rules
+        # when they come first. The problem was never the flag or
+        # the wording — it was prompt ordering.
         if pdir and not task.get("project_id"):
-            parts.append(
-                "\n## WORKING DIRECTORY — STRICT RULE\n"
+            rules_parts.append(
+                "## WORKING DIRECTORY — STRICT RULE\n"
                 f"A fresh directory has been prepared for this task:\n\n"
                 f"    {pdir}\n\n"
                 "Your shell is already `cd`'d there — "
@@ -610,7 +615,18 @@ class ClaudeCodeAdapter(BackendAdapter):
                 "directory."
             )
 
-        return "\n\n".join(parts) if parts else "Complete the assigned task."
+        # ── Task body (bottom of prompt) ──
+        if title:
+            body_parts.append(f"# Task: {title}")
+        desc = task.get("description", "")
+        if desc:
+            body_parts.append(desc)
+        notes = task.get("notes", "")
+        if notes:
+            body_parts.append(f"## Notes\n{notes}")
+
+        all_parts = rules_parts + body_parts
+        return "\n\n".join(all_parts) if all_parts else "Complete the assigned task."
 
     @staticmethod
     def _build_command(*, model: str,
