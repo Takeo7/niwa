@@ -85,32 +85,49 @@ export function AppShell({ children }: Props) {
   const handleUpdate = async () => {
     try {
       const result = await systemUpdate.mutateAsync();
-      if (result.ok) {
-        const msg = result.needs_restart
-          ? `${result.message}\nRecarga la página para ver los cambios.`
-          : result.message;
+      // PR-58a: the endpoint no longer executes update. It returns
+      // an action intent describing the command to run on the host.
+      const cmd = result.command || 'niwa update';
+      const extra: string[] = [];
+      if (result.branch) extra.push(`Rama: ${result.branch}`);
+      if (result.current_commit_short) {
+        extra.push(`Commit actual: ${result.current_commit_short}`);
+      }
+      if (result.latest_remote_commit) {
+        extra.push(`Remoto: ${result.latest_remote_commit.slice(0, 12)}`);
+      }
+      if (result.repo_dirty) {
+        extra.push('⚠ Repo con cambios locales — niwa update abortará.');
+      }
+      const title = result.needs_update
+        ? 'Actualización disponible'
+        : 'Ejecutar update desde el host';
+      const body =
+        `${result.message || 'Actualiza desde el host.'}\n\n` +
+        `$ ${cmd}\n\n` +
+        extra.join('\n');
+      try {
+        await navigator.clipboard.writeText(cmd);
         notifications.show({
-          title: 'Actualización exitosa',
-          message: msg,
-          color: 'green',
-          autoClose: 8000,
-        });
-      } else if (result.manual_steps) {
-        notifications.show({
-          title: 'Actualización manual requerida',
-          message: `${result.message}\n${result.manual_steps.join('\n')}`,
-          color: 'yellow',
+          title,
+          message: `${body}\n\n(Comando copiado al portapapeles)`,
+          color: result.needs_update ? 'blue' : 'gray',
           autoClose: false,
         });
-      } else {
+      } catch {
         notifications.show({
-          title: 'Error al actualizar',
-          message: result.message || 'Error desconocido',
-          color: 'red',
+          title,
+          message: body,
+          color: result.needs_update ? 'blue' : 'gray',
+          autoClose: false,
         });
       }
     } catch {
-      notifications.show({ title: 'Error', message: 'No se pudo conectar con el servidor', color: 'red' });
+      notifications.show({
+        title: 'Error',
+        message: 'No se pudo conectar con el servidor',
+        color: 'red',
+      });
     }
   };
 

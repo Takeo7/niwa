@@ -1237,3 +1237,41 @@ Ubicar la transición en el service garantiza que **toda ruta presente y futura*
 - (a) Un solo archivo de tests que cubre ambas mitades — rechazado: confunde el scope de cada test y hace difícil localizar el fallo cuando uno de los sides rompe.
 
 **Impacto:** 15 tests nuevos (9 en el archivo approval + 6 en el executor). 112/112 pasa la suite approval+executor.
+
+## 2026-04-17 — PR-58a (Release readiness)
+
+### Decisión 1: la UI no ejecuta update. El CLI (`niwa update`) es el único camino real de actualización.
+
+**Decisión:** el endpoint `POST /api/system/update` deja de ejecutar el update. En su lugar devuelve una *action intent*: un JSON con el comando a ejecutar en el host (`niwa update`), el commit actual, el commit remoto detectado, `needs_update`, y `repo_dirty`. La UI renderiza el comando con un botón copy-to-clipboard. Tras correr el CLI, `/api/version` refresca y la UI muestra el nuevo estado.
+
+**Motivo:** el proceso web corre dentro del container `app`. Desde ahí **no puede**:
+
+- `docker compose build --no-cache app` — requiere el Docker socket; montarlo es privesc a root del host (una RCE en la UI escala a root).
+- `systemctl restart niwa-executor` — el container no es PID1 del host.
+
+Alternativas descartadas:
+
+- **Docker socket mounted**: superficie de ataque inaceptable.
+- **SSH helper desde container al host**: daemon SSH local + keys gestionadas + nueva superficie.
+- **Trigger file / daemon host-side**: arquitectura nueva, latencia, debug más complejo.
+- **Híbrida (UI hace lo que puede desde container)**: enmascara inconsistencias — frontend refrescado pero backend/executor viejos.
+
+Se rompe la promesa visual del botón "Actualizar Niwa" pero ya estaba rota: no hacía rebuild del container ni restart del executor. Ser honestos a cambio de ser seguros.
+
+**Impacto:** endpoint cambia semántica (ejecutar → reportar). Frontend adapta UX (PR-61). Nada privilegiado cruza container↔host.
+
+### Decisión 2: `/api/version` enriquecido con todo el estado relevante para update.
+
+**Decisión:** `GET /api/version` ahora devuelve `{version, name, branch, commit, commit_short, latest_remote_commit, needs_update, schema_version, repo_dirty, last_backup_path, last_backup_at, needs_restart}`.
+
+**Motivo:** el update necesita decisiones observables. Un solo endpoint, una fuente de verdad. `latest_remote_commit` cachea 60s para no hacer `git fetch` en cada poll.
+
+**Impacto:** ~150 LOC de helpers (`_discover_repo_dir`, `_git`, `_latest_remote_commit`, `_find_last_backup`, `_collect_version_info`).
+
+### Decisión 3: `niwa update` aborta sobre repo dirty en vez de seguir silenciosamente.
+
+**Decisión:** antes del `git pull`, `cmd_update` ejecuta `git status --porcelain`; si hay output, aborta con mensaje sugiriendo `git stash` / `git checkout .` / `git reset --hard`. Y detecta branch dinámicamente — fuera el `git pull origin main` hardcoded.
+
+**Motivo:** el código anterior imprimía "Continuing with current code..." cuando el pull fallaba. Updates quedaban a medias. Release-safe no admite silencios.
+
+**Impacto:** cero LOC adicionales al happy path. Edge cases rompen loud y temprano.

@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone, date, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 import tasks_helpers
@@ -2446,6 +2447,152 @@ def save_integrations(payload):
     return saved
 
 
+def _discover_repo_dir() -> Optional[Path]:
+    """Find the git checkout of the Niwa repo. Shared by version +
+    update handlers (PR-58a)."""
+    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
+    candidates = [
+        Path("/repo"),
+        install_dir.parent / "niwa",
+        Path.home() / "niwa",
+        Path.home() / "Documentos" / "niwa",
+        Path("/root/niwa"),
+    ]
+    for candidate in candidates:
+        if (candidate / "setup.py").exists() and (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _git(repo: Path, *args: str, timeout: int = 10) -> Optional[str]:
+    """Run a git command in ``repo``. Returns stdout stripped on
+    success, ``None`` on any failure — callers pick a safe default."""
+    try:
+        r = subprocess.run(
+            ["git", *args], cwd=str(repo),
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if r.returncode != 0:
+            return None
+        return (r.stdout or "").strip()
+    except Exception:
+        return None
+
+
+_REMOTE_COMMIT_CACHE: dict[str, tuple[float, Optional[str]]] = {}
+
+
+def _latest_remote_commit(repo: Path, branch: str, ttl: float = 60.0) -> Optional[str]:
+    """Return the remote tip for ``branch`` (best-effort, cached).
+
+    ``git fetch`` hits the network; we cache per (repo, branch) for
+    60s so the ``/api/version`` poll doesn't hammer the remote on
+    every page refresh. ``None`` if fetch fails (offline, etc.) —
+    the UI degrades to "can't check".
+    """
+    import time as _t
+    key = f"{repo}|{branch}"
+    now = _t.time()
+    hit = _REMOTE_COMMIT_CACHE.get(key)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    fetched = _git(repo, "fetch", "origin", branch, timeout=15)
+    sha = _git(repo, "rev-parse", f"origin/{branch}") if fetched is not None else None
+    # Only cache successful lookups so a transient network blip
+    # doesn't hide the remote state for a full TTL. Cache misses
+    # retry on the next call.
+    if sha is not None:
+        _REMOTE_COMMIT_CACHE[key] = (now, sha)
+    return sha
+
+
+def _find_last_backup() -> tuple[Optional[str], Optional[str]]:
+    """Return ``(path, iso_mtime)`` of the most recent backup, or
+    ``(None, None)`` if none."""
+    try:
+        backups_dir = DB_PATH.parent / "backups"
+        if not backups_dir.is_dir():
+            return None, None
+        latest = None
+        for p in backups_dir.glob("niwa-*.sqlite3"):
+            if not latest or p.stat().st_mtime > latest.stat().st_mtime:
+                latest = p
+        if not latest:
+            return None, None
+        import datetime as _dt
+        mtime = _dt.datetime.fromtimestamp(
+            latest.stat().st_mtime, tz=timezone.utc,
+        ).isoformat()
+        return str(latest), mtime
+    except Exception:
+        return None, None
+
+
+def _collect_version_info() -> dict:
+    """Enriched ``/api/version`` response for the update UX (PR-58a).
+
+    Fields:
+        version, name: static product identity.
+        branch, commit, commit_short: git state of the repo checkout
+            that Niwa was installed from (if we can find it).
+        latest_remote_commit, needs_update: best-effort check against
+            ``origin/<branch>``. Both ``None`` if offline.
+        schema_version: highest applied migration.
+        repo_dirty: True if the working tree has uncommitted changes —
+            ``niwa update`` will refuse to run in that state.
+        last_backup_path, last_backup_at: most recent db backup.
+        needs_restart: placeholder — PR-58b1 will populate this from
+            the update manifest after it runs.
+    """
+    repo = _discover_repo_dir()
+    branch = commit = commit_short = None
+    latest_remote = None
+    repo_dirty = False
+    if repo:
+        branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD") or None
+        if branch == "HEAD":
+            branch = None  # detached
+        commit = _git(repo, "rev-parse", "HEAD")
+        commit_short = commit[:12] if commit else None
+        # ``git status --porcelain`` prints anything when the tree is
+        # dirty and nothing when clean. Faster than diff-quiet + cached.
+        porcelain = _git(repo, "status", "--porcelain")
+        repo_dirty = bool(porcelain)
+        if branch:
+            latest_remote = _latest_remote_commit(repo, branch)
+
+    schema_version = None
+    try:
+        with db_conn() as c:
+            row = c.execute(
+                "SELECT MAX(version) AS v FROM schema_version"
+            ).fetchone()
+            schema_version = row["v"] if row and row["v"] is not None else None
+    except Exception:
+        pass
+
+    last_backup_path, last_backup_at = _find_last_backup()
+
+    needs_update = bool(
+        commit and latest_remote and commit != latest_remote
+    )
+
+    return {
+        "version": NIWA_VERSION,
+        "name": "Niwa",
+        "branch": branch,
+        "commit": commit,
+        "commit_short": commit_short,
+        "latest_remote_commit": latest_remote,
+        "needs_update": needs_update,
+        "schema_version": schema_version,
+        "repo_dirty": repo_dirty,
+        "last_backup_path": last_backup_path,
+        "last_backup_at": last_backup_at,
+        "needs_restart": False,
+    }
+
+
 def run_niwa_update():
     """Actualizar Niwa desde el repositorio git.
 
@@ -3569,7 +3716,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/metrics/executor':
             return self._json(get_executor_metrics())
         if path == '/api/version':
-            return self._json({'version': NIWA_VERSION, 'name': 'Niwa'})
+            return self._json(_collect_version_info())
         if path == '/api/health/full':
             return self._json(fetch_health())
         if path == '/api/stats':
@@ -4222,8 +4369,41 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_delayed_exit, daemon=True).start()
             return self._json({'ok': True, 'message': 'Restarting...'})
         if path == '/api/system/update':
-            result = run_niwa_update()
-            return self._json(result)
+            # PR-58a: the UI no longer executes update. The web process
+            # runs inside the app container and doesn't have the
+            # privileges needed for ``docker compose build`` or
+            # ``systemctl restart`` on the host. Instead we return an
+            # *action intent* describing what the operator should run.
+            # The UI renders the command with a copy-to-clipboard
+            # button.
+            #
+            # Rationale: granting the container access to the Docker
+            # socket (the only way to rebuild the image from inside)
+            # is a privilege-escalation surface — any RCE in the UI
+            # escalates to root on the host. The CLI is already the
+            # canonical path; this keeps it that way.
+            info = _collect_version_info()
+            # HTTP 202 — we accepted the request but the work happens
+            # out-of-band (on the host). ``ok: true`` because the
+            # *intent* reporting succeeded; the payload tells the
+            # client what to do next.
+            return self._json({
+                "ok": True,
+                "action_required": "run_cli",
+                "command": "niwa update",
+                "current_commit": info["commit"],
+                "current_commit_short": info["commit_short"],
+                "branch": info["branch"],
+                "latest_remote_commit": info["latest_remote_commit"],
+                "needs_update": info["needs_update"],
+                "repo_dirty": info["repo_dirty"],
+                "message": (
+                    "Actualiza desde el host con `niwa update`. "
+                    "La UI no ejecuta actualizaciones (no tiene acceso "
+                    "al Docker socket ni a systemd). "
+                    "Ver docs/DECISIONS-LOG.md — decisión 'Update architecture'."
+                ),
+            }, 202)
         if path == '/api/settings/integrations/test-telegram':
             return self._json(test_telegram())
         if path == '/api/security/scan':
