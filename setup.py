@@ -1332,16 +1332,37 @@ def step_summary(cfg: WizardConfig) -> bool:
 
 
 # ────────────────────────── execution ──────────────────────────
+def _is_niwa_managed_target(target: Path, script_src: Path) -> bool:
+    """True iff ``target`` is a symlink that resolves to the repo's
+    ``niwa`` wrapper (PR final 3).
+
+    Used by ``_install_niwa_wrapper`` to decide whether it's safe to
+    replace whatever is at a PATH candidate. Anything that is not a
+    symlink, or a symlink pointing elsewhere, is considered foreign
+    and MUST be left alone.
+    """
+    try:
+        if not target.is_symlink():
+            return False
+        # ``readlink`` + resolve both sides; ``samefile`` handles ../
+        # and absolute/relative mixes. ``samefile`` raises on missing
+        # targets, which we treat as "not managed" (broken symlinks
+        # we won't trust either).
+        return target.resolve(strict=True).samefile(script_src)
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def _install_niwa_wrapper(cfg: "WizardConfig") -> tuple[Optional[str], str]:
     """Best-effort install of a global ``niwa`` command (PR final 1).
 
     Returns ``(command, origin)``:
 
       - ``command`` is what the operator should type. ``niwa`` if we
-        managed to drop a symlink/wrapper on a PATH entry; otherwise
-        the absolute path to ``<repo>/niwa`` (always works).
-      - ``origin`` is a short human-readable string saying where the
-        command came from (for the install summary).
+        managed to drop a symlink on a PATH entry; otherwise the
+        absolute path to ``<repo>/niwa`` (always works).
+      - ``origin`` is a short human-readable string explaining where
+        the command came from (used in the install summary).
 
     Priority order:
 
@@ -1349,10 +1370,12 @@ def _install_niwa_wrapper(cfg: "WizardConfig") -> tuple[Optional[str], str]:
       2. ``~/.local/bin/niwa`` — common user-local PATH on Linux.
       3. Absolute path to ``<repo>/niwa``.
 
-    Any step that fails (permissions, read-only FS, etc.) falls
-    through to the next without blocking the install.
+    PR final 3 — non-destructive: never unlinks or rmtrees a foreign
+    file at any candidate path. If something is already there and
+    it's NOT a symlink managed by Niwa, skip to the next candidate.
+    If all candidates collide, fall through to the absolute path
+    fallback with an ``origin`` that explains which paths collided.
     """
-    import shutil as _sh
     script_src = Path(__file__).resolve().parent / "niwa"
     if not script_src.exists():
         return None, "(repo niwa script missing)"
@@ -1362,25 +1385,37 @@ def _install_niwa_wrapper(cfg: "WizardConfig") -> tuple[Optional[str], str]:
         candidates.append(Path("/usr/local/bin/niwa"))
     candidates.append(Path.home() / ".local" / "bin" / "niwa")
 
+    collisions: list[str] = []
     for target in candidates:
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Only replace a target we know we own.
             if target.exists() or target.is_symlink():
-                try:
+                if _is_niwa_managed_target(target, script_src):
+                    # Managed — safe to refresh the symlink (covers
+                    # re-installs pointing at a new repo clone path).
                     target.unlink()
-                except IsADirectoryError:
-                    _sh.rmtree(str(target))
+                else:
+                    collisions.append(str(target))
+                    continue
             target.symlink_to(script_src)
             path_env = os.environ.get("PATH", "")
             if str(target.parent) in path_env.split(os.pathsep):
                 return "niwa", f"symlink {target} → {script_src}"
-            # Parent not in PATH: the symlink exists but bare
-            # ``niwa`` won't find it. Keep walking candidates.
+            # Parent not in PATH: the symlink exists but ``niwa`` (no
+            # path) won't find it. Keep walking.
             continue
         except Exception:
             continue
 
-    return str(script_src), f"fallback to {script_src} (no writable PATH dir found)"
+    fallback_origin = f"fallback to {script_src}"
+    if collisions:
+        fallback_origin += (
+            f"; left foreign binaries untouched at: {', '.join(collisions)}"
+        )
+    else:
+        fallback_origin += " (no writable PATH dir found)"
+    return str(script_src), fallback_origin
 
 
 def execute_install(cfg: WizardConfig) -> None:
@@ -1470,8 +1505,17 @@ def execute_install(cfg: WizardConfig) -> None:
     niwa_cmd, niwa_cmd_origin = _install_niwa_wrapper(cfg)
     cfg.niwa_command = niwa_cmd or "niwa"
     cfg.niwa_command_origin = niwa_cmd_origin
-    env_vars["NIWA_UPDATE_COMMAND"] = f"{cfg.niwa_command} update"
-    env_vars["NIWA_RESTORE_COMMAND"] = f"{cfg.niwa_command} restore --from="
+    # PR final 3: shell-safe. If the fallback path has spaces (or
+    # any other shell metachar), ``shlex.quote`` wraps it in single
+    # quotes. The produced string is always safe to copy into a
+    # terminal and execute.
+    import shlex as _shlex
+    niwa_q = _shlex.quote(cfg.niwa_command)
+    env_vars["NIWA_UPDATE_COMMAND"] = f"{niwa_q} update"
+    # Restore command is a *prefix*: the UI concatenates the backup
+    # path (itself shell-quoted on the client side). Trailing space
+    # is intentional — makes ``<prefix> <quoted-path>`` read cleanly.
+    env_vars["NIWA_RESTORE_COMMAND"] = f"{niwa_q} restore --from="
 
     # Write secrets file
     write_env_file(cfg.niwa_home / "secrets" / "mcp.env", env_vars)

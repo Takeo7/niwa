@@ -12,7 +12,7 @@ import {
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { UpdatePanel } from './UpdatePanel';
+import { UpdatePanel, shellQuote } from './UpdatePanel';
 
 function wrap(ui: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -138,5 +138,40 @@ describe('UpdatePanel', () => {
       expect(screen.getByText(/Cómo actualizar/i)).toBeTruthy(),
     );
     expect(screen.getByText('niwa update')).toBeTruthy();
+  });
+});
+
+describe('shellQuote (PR final 3)', () => {
+  it('deja paths limpios sin quotes', () => {
+    expect(shellQuote('/usr/local/bin/niwa')).toBe('/usr/local/bin/niwa');
+    expect(shellQuote('niwa')).toBe('niwa');
+    expect(shellQuote('a.sqlite3')).toBe('a.sqlite3');
+  });
+
+  it('cuota paths con espacios', () => {
+    expect(shellQuote('/data backups/niwa.sqlite3')).toBe(
+      "'/data backups/niwa.sqlite3'",
+    );
+  });
+
+  it('escapa single quotes literales', () => {
+    // La fórmula clásica: '...' + '\'' + '...'.
+    expect(shellQuote("a'b")).toBe("'a'\\''b'");
+  });
+
+  it('empty string queda como dos single quotes', () => {
+    expect(shellQuote('')).toBe("''");
+  });
+
+  it('restore suggestion con espacios round-trip compatible con shell', () => {
+    // Simula lo que UpdatePanel concatena:
+    //   restore_command + shellQuote(last_backup_path)
+    const prefix = "'/repo path/niwa' restore --from=";
+    const bkp = '/data backups/niwa 2026.sqlite3';
+    const suggestion = prefix + shellQuote(bkp);
+    // Forma final esperada: 'precmd' restore --from='path con espacios'
+    expect(suggestion).toBe(
+      "'/repo path/niwa' restore --from='/data backups/niwa 2026.sqlite3'",
+    );
   });
 });
