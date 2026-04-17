@@ -234,11 +234,13 @@ def app_server(tmp_path, monkeypatch):
     c.commit()
     c.close()
 
-    if "app" in sys.modules:
-        import app
-        app.DB_PATH = Path(db_path)
-    else:
-        import app
+    # Fresh module each fixture (review P1): reusing ``sys.modules['app']``
+    # between tests pins module-level state (cached DB_PATH, globals,
+    # _REMOTE_COMMIT_CACHE) that poisons the next run. Drop it so each
+    # test gets a clean app import with its own tmp DB.
+    monkeypatch.delitem(sys.modules, "app", raising=False)
+    import app  # type: ignore
+    app.DB_PATH = Path(db_path)
 
     port = _free_port()
     app.HOST = "127.0.0.1"

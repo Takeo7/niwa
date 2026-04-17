@@ -347,7 +347,15 @@ def _get_db_path(ctx: _Ctx) -> Path:
 
 
 def _restore_db(ctx: _Ctx, backup_path: str) -> bool:
-    """Copy backup → db_path atomically. Used by auto-revert."""
+    """Copy backup → db_path atomically. Used by auto-revert.
+
+    WAL safety (review P1): SQLite keeps ``-wal`` and ``-shm``
+    sidecar files next to the main DB when in WAL journal mode. If
+    we only overwrite the main file, the pre-existing sidecars get
+    replayed on the next open and corrupt the restored state. Delete
+    them before copying so the restored DB starts from a known clean
+    point. The next `init_db` recreates them.
+    """
     try:
         src = Path(backup_path)
         if not src.exists():
@@ -360,6 +368,15 @@ def _restore_db(ctx: _Ctx, backup_path: str) -> bool:
             try:
                 _run(ctx, "docker", "compose", "-f", str(compose_file),
                      "stop", "app", timeout=60)
+            except Exception:
+                pass
+        # Scrub WAL sidecars so they can't re-fold stale writes onto
+        # the restored main file.
+        for sidecar in (dst.with_suffix(dst.suffix + "-wal"),
+                        dst.with_suffix(dst.suffix + "-shm")):
+            try:
+                if sidecar.exists():
+                    sidecar.unlink()
             except Exception:
                 pass
         shutil.copy2(str(src), str(dst))
@@ -408,7 +425,18 @@ def _auto_revert(ctx: _Ctx) -> bool:
         else:
             _record_warning(ctx, "auto-revert: restore de DB no completó")
     else:
-        _record_warning(ctx, "auto-revert: no hay backup_path — DB no se toca")
+        # Review P1: sin backup, la DB puede haberse migrado al
+        # schema N+1 mientras el código vuelve a N. Estado
+        # inconsistente — error, no warning. needs_restart forza al
+        # operador a tomar acción manual.
+        _record_error(
+            ctx,
+            "auto-revert: no hay backup_path. La DB podría tener "
+            "schema N+1 mientras el código se restaura a N. Estado "
+            "inconsistente — revisa manualmente la DB antes de "
+            "reiniciar el app.",
+        )
+        ctx.manifest["needs_restart"] = True
 
     # Re-rebuild + restart so the container picks up the reverted code.
     _rebuild_app(ctx)

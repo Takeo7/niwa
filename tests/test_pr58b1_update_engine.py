@@ -201,6 +201,7 @@ def test_happy_path_populates_full_manifest(tmp_path):
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=r, printer=lambda *a, **k: None,
         backup_fn=_fake_backup,
+        health_check_fn=lambda ctx: True,
         timestamp="20260417-120000",
     )
     assert manifest["success"] is True
@@ -232,6 +233,7 @@ def test_build_failure_is_warning_not_error(tmp_path):
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=r, printer=lambda *a, **k: None,
         backup_fn=lambda ctx: None,
+        health_check_fn=lambda ctx: True,
     )
     # success True because pull + copy ran; rebuild is best-effort.
     assert manifest["success"] is True
@@ -248,6 +250,7 @@ def test_systemctl_restart_failure_sets_needs_restart(tmp_path):
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=r, printer=lambda *a, **k: None,
         backup_fn=lambda ctx: None,
+        health_check_fn=lambda ctx: True,
     )
     assert manifest["success"] is True
     assert manifest["needs_restart"] is True
@@ -276,6 +279,7 @@ def test_default_backup_writes_a_real_sqlite_file(tmp_path, monkeypatch):
     manifest = update_engine.perform_update(
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=r, printer=lambda *a, **k: None,
+        health_check_fn=lambda ctx: True,
         timestamp="20260417-130000",
     )
     assert manifest["success"] is True
@@ -321,6 +325,7 @@ def test_default_backup_rotates_old_snapshots(tmp_path, monkeypatch):
     manifest = update_engine.perform_update(
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=r, printer=lambda *a, **k: None,
+        health_check_fn=lambda ctx: True,
         timestamp="20260417-140000",
     )
     assert manifest["success"] is True
@@ -351,5 +356,6 @@ def test_backup_runs_before_pull(tmp_path):
         install_dir=inst["install_dir"], repo_dir=inst["repo_dir"],
         runner=_wrapped_runner, printer=lambda *a, **k: None,
         backup_fn=_fake_backup,
+        health_check_fn=lambda ctx: True,
     )
     assert order == ["backup", "pull"], order
