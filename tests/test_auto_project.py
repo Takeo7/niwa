@@ -527,6 +527,36 @@ class TestAdapterPromptInjection:
             "dir. Absolute paths were the Bug 34 footgun."
         )
 
+    def test_rules_come_before_task_title(self):
+        """PR-44 — Bug 34 parte 3: the system rules (WORKING
+        DIRECTORY, REGISTER THE PROJECT) must appear BEFORE the
+        task title / description in the prompt.
+
+        History: PR-43 had a non-contradictory positive rule but
+        Claude STILL wrote to /tmp/ in prod. Root cause was prompt
+        ordering — the rules came after the task description, so
+        Claude latched onto the goal first ("créame una web") and
+        planned to write to /tmp/ before reading the rules.
+        Standard prompt engineering: constraints first, goal second.
+
+        Dropping this order reintroduces the failure mode."""
+        adapter = self._load_adapter()
+        task = {
+            "title": "Build a thing",
+            "description": "do the thing",
+            "project_id": None,
+            "project_directory": "/root/.niwa/data/projects/thing-abc",
+        }
+        prompt = adapter._build_prompt(task)
+        rule_idx = prompt.index("WORKING DIRECTORY")
+        task_idx = prompt.index("# Task: Build a thing")
+        assert rule_idx < task_idx, (
+            "Rules must precede the task header in the prompt. "
+            "Claude treats the first content as setup/context and "
+            "the last as the thing to execute — put rules first or "
+            "they become epilogue."
+        )
+
     def test_prompt_preserves_conversational_escape_hatch(self):
         """A task that is purely conversational ('resume this',
         'explain how X works') should be allowed to skip
