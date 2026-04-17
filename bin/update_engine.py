@@ -57,11 +57,14 @@ engine ships first with real backup coverage).
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -79,6 +82,7 @@ class _Ctx:
     runner: _UpdateRunner
     timestamp: str
     backup_fn: Callable[["_Ctx"], Optional[str]]
+    health_check_fn: Callable[["_Ctx"], bool]
     manifest: dict = field(default_factory=dict)
 
 
@@ -298,6 +302,200 @@ def _restart_executor(ctx: _Ctx) -> None:
     _record_component(ctx, f"executor:{service_name}")
 
 
+def _read_app_port(ctx: _Ctx) -> Optional[int]:
+    """Read the app port from mcp.env (canonical source since the
+    installer writes it there). Falls back to 8080."""
+    mcp_env = ctx.install_dir / "secrets" / "mcp.env"
+    if mcp_env.exists():
+        try:
+            for line in mcp_env.read_text().splitlines():
+                if line.startswith("NIWA_APP_PORT="):
+                    return int(line.split("=", 1)[1].strip().strip('"').strip("'"))
+        except Exception:
+            pass
+    return 8080
+
+
+def _default_health_check(ctx: _Ctx) -> bool:
+    """Wait for the app to respond to ``/health``. Retries with a
+    short backoff for up to ~60s total — the container restart
+    alone can take 20s on a slow disk.
+    """
+    port = _read_app_port(ctx)
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.monotonic() + 60
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                if r.status == 200:
+                    ctx.printer(f"  ✓ health-check OK tras {attempt} intentos")
+                    return True
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            pass
+        time.sleep(min(attempt, 5))
+    ctx.printer(f"  ❌ health-check falló en {url} tras {attempt} intentos")
+    return False
+
+
+def _get_db_path(ctx: _Ctx) -> Path:
+    env_db = os.environ.get("NIWA_DB_PATH", "")
+    if env_db:
+        return Path(env_db)
+    return ctx.install_dir / "data" / "niwa.sqlite3"
+
+
+def _restore_db(ctx: _Ctx, backup_path: str) -> bool:
+    """Copy backup → db_path atomically. Used by auto-revert.
+
+    WAL safety (review P1): SQLite keeps ``-wal`` and ``-shm``
+    sidecar files next to the main DB when in WAL journal mode. If
+    we only overwrite the main file, the pre-existing sidecars get
+    replayed on the next open and corrupt the restored state. Delete
+    them before copying so the restored DB starts from a known clean
+    point. The next `init_db` recreates them.
+    """
+    try:
+        src = Path(backup_path)
+        if not src.exists():
+            return False
+        dst = _get_db_path(ctx)
+        # Best-effort: take the app down first so we don't race
+        # writers. Failure to stop doesn't block the restore.
+        compose_file = ctx.install_dir / "docker-compose.yml"
+        if compose_file.exists():
+            try:
+                _run(ctx, "docker", "compose", "-f", str(compose_file),
+                     "stop", "app", timeout=60)
+            except Exception:
+                pass
+        # Scrub WAL sidecars so they can't re-fold stale writes onto
+        # the restored main file.
+        for sidecar in (dst.with_suffix(dst.suffix + "-wal"),
+                        dst.with_suffix(dst.suffix + "-shm")):
+            try:
+                if sidecar.exists():
+                    sidecar.unlink()
+            except Exception:
+                pass
+        shutil.copy2(str(src), str(dst))
+        return True
+    except Exception as exc:
+        _record_error(ctx, f"Restore de DB desde backup falló: {exc}")
+        return False
+
+
+def _auto_revert(ctx: _Ctx) -> bool:
+    """Roll back code + DB to the state captured BEFORE the pull.
+
+    Triggered when the post-update health-check fails. Best-effort:
+    each step that fails is recorded as a warning so the operator
+    can see exactly what degraded. Returns True if the rollback
+    sequence completed end-to-end (code reset + DB restored +
+    health-check green again), False otherwise.
+    """
+    ctx.printer("  ↩️  Auto-revert iniciado (health-check post-update falló)")
+    before = ctx.manifest.get("before_commit")
+    backup_path = ctx.manifest.get("backup_path")
+
+    if not before:
+        _record_warning(ctx, "auto-revert: no hay before_commit; solo revert de DB posible")
+    else:
+        try:
+            r = _run(ctx, "git", "reset", "--hard", before,
+                     cwd=ctx.repo_dir, timeout=60)
+            if r.returncode != 0:
+                _record_warning(
+                    ctx,
+                    f"auto-revert: git reset --hard {before[:12]} devolvió "
+                    f"{r.returncode}: {(r.stderr or '')[:200]}",
+                )
+            else:
+                ctx.printer(f"  ✓ código revertido a {before[:12]}")
+                # Re-copy the pre-update executor + MCP servers.
+                _copy_executor(ctx)
+                _copy_mcp_servers(ctx)
+        except Exception as exc:
+            _record_warning(ctx, f"auto-revert: git reset falló: {exc}")
+
+    if backup_path:
+        if _restore_db(ctx, backup_path):
+            ctx.printer(f"  ✓ DB restaurada desde {backup_path}")
+        else:
+            _record_warning(ctx, "auto-revert: restore de DB no completó")
+    else:
+        # Review P1: sin backup, la DB puede haberse migrado al
+        # schema N+1 mientras el código vuelve a N. Estado
+        # inconsistente — error, no warning. needs_restart forza al
+        # operador a tomar acción manual.
+        _record_error(
+            ctx,
+            "auto-revert: no hay backup_path. La DB podría tener "
+            "schema N+1 mientras el código se restaura a N. Estado "
+            "inconsistente — revisa manualmente la DB antes de "
+            "reiniciar el app.",
+        )
+        ctx.manifest["needs_restart"] = True
+
+    # Re-rebuild + restart so the container picks up the reverted code.
+    _rebuild_app(ctx)
+    _restart_executor(ctx)
+    # Try health-check again after revert.
+    ok = ctx.health_check_fn(ctx)
+    if ok:
+        ctx.manifest["reverted"] = True
+        ctx.printer("  ✅ auto-revert completado: instalación restaurada al estado previo")
+    else:
+        ctx.manifest["reverted"] = False
+        _record_error(
+            ctx,
+            "auto-revert no pudo dejar la instalación sana. Intervención manual requerida. "
+            f"Backup disponible en: {backup_path or '(ninguno)'}",
+        )
+    return ok
+
+
+def _write_update_log(ctx: _Ctx) -> None:
+    """Persist the manifest in ``<install_dir>/data/update-log.json``
+    so ``/api/version`` can surface last-update context. Keeps the
+    last 20 entries.
+    """
+    try:
+        log_path = ctx.install_dir / "data" / "update-log.json"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        entries = []
+        if log_path.exists():
+            try:
+                entries = json.loads(log_path.read_text()) or []
+                if not isinstance(entries, list):
+                    entries = []
+            except json.JSONDecodeError:
+                entries = []
+        # Append a compact entry (full manifest) at the end.
+        compact = {
+            "timestamp": ctx.timestamp,
+            "success": ctx.manifest.get("success"),
+            "reverted": ctx.manifest.get("reverted"),
+            "branch": ctx.manifest.get("branch"),
+            "before_commit": ctx.manifest.get("before_commit"),
+            "after_commit": ctx.manifest.get("after_commit"),
+            "backup_path": ctx.manifest.get("backup_path"),
+            "errors": ctx.manifest.get("errors") or [],
+            "warnings": ctx.manifest.get("warnings") or [],
+            "duration_seconds": ctx.manifest.get("duration_seconds"),
+        }
+        entries.append(compact)
+        # Retain the last 20 entries.
+        if len(entries) > 20:
+            entries = entries[-20:]
+        log_path.write_text(json.dumps(entries, indent=2))
+    except Exception:
+        # Logging is best-effort; the update itself shouldn't fail
+        # because we couldn't persist its manifest.
+        pass
+
+
 def perform_update(
     install_dir: Path,
     repo_dir: Path,
@@ -306,6 +504,7 @@ def perform_update(
     runner: _UpdateRunner = subprocess.run,
     timestamp: Optional[str] = None,
     backup_fn: Optional[Callable[["_Ctx"], Optional[str]]] = None,
+    health_check_fn: Optional[Callable[["_Ctx"], bool]] = None,
 ) -> dict:
     """Run a full Niwa update and return a structured manifest.
 
@@ -324,6 +523,7 @@ def perform_update(
         runner=runner,
         timestamp=ts,
         backup_fn=backup_fn or _default_backup,
+        health_check_fn=health_check_fn or _default_health_check,
     )
     ctx.manifest.update({
         "success": False,
@@ -336,17 +536,21 @@ def perform_update(
         "errors": [],
         "warnings": [],
         "duration_seconds": 0.0,
+        "reverted": None,
+        "health_check_ok": None,
     })
 
     printer("🔄 Actualizando Niwa...")
 
     if not _assert_repo_clean(ctx):
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
+        _write_update_log(ctx)
         return ctx.manifest
 
     branch = _detect_branch(ctx)
     if not branch:
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
+        _write_update_log(ctx)
         return ctx.manifest
     ctx.manifest["branch"] = branch
 
@@ -354,10 +558,12 @@ def perform_update(
 
     if not _perform_backup(ctx):
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
+        _write_update_log(ctx)
         return ctx.manifest
 
     if not _git_pull(ctx, branch):
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
+        _write_update_log(ctx)
         return ctx.manifest
 
     ctx.manifest["after_commit"] = _git(ctx, "rev-parse", "HEAD")
@@ -367,7 +573,32 @@ def perform_update(
     _rebuild_app(ctx)
     _restart_executor(ctx)
 
-    ctx.manifest["success"] = True
+    # PR-58b2: post-update health-check + auto-revert on failure.
+    health_ok = ctx.health_check_fn(ctx)
+    ctx.manifest["health_check_ok"] = health_ok
+    if not health_ok:
+        _record_warning(
+            ctx,
+            "El app no responde a /health tras el update — disparando auto-revert.",
+        )
+        reverted = _auto_revert(ctx)
+        ctx.manifest["success"] = False
+        if not reverted:
+            _record_error(
+                ctx,
+                "Estado inconsistente: el update falló Y el auto-revert no recuperó. "
+                "Revisa los logs y usa `niwa restore --from=<backup>` (PR-59).",
+            )
+    else:
+        ctx.manifest["success"] = True
+        ctx.manifest["reverted"] = False
+
     ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
-    printer("✅ Update completado.")
+    _write_update_log(ctx)
+    if ctx.manifest["success"]:
+        printer("✅ Update completado.")
+    elif ctx.manifest.get("reverted"):
+        printer("↩️  Update revertido; instalación restaurada al estado previo.")
+    else:
+        printer("❌ Update falló y auto-revert incompleto — intervención manual requerida.")
     return ctx.manifest
