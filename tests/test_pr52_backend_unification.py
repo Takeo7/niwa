@@ -365,6 +365,28 @@ def test_mcp_deploy_web_propagates_error(monkeypatch):
     assert "deploy_web failed" in str(exc.value)
 
 
+def test_app_request_wraps_url_errors(monkeypatch):
+    """When the app is unreachable (container down, network fail,
+    DNS broken inside the MCP container), ``_app_request`` must NOT
+    leak the raw ``<urlopen error [Errno 111] ...>`` string. Wrap it
+    into a structured error so the MCP caller can recognise the case.
+    """
+    import server
+    import urllib.error as _ue
+
+    def _fail(*a, **kw):
+        raise _ue.URLError("[Errno 111] Connection refused")
+
+    # The function imports ``urllib.request`` lazily each call, so
+    # patching the module-level ``urlopen`` is the reliable hook.
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", _fail)
+    status, body = server._app_request("/api/projects", method="POST", body={})
+    assert status == 0
+    assert body["error"] == "app_unreachable"
+    assert "Connection refused" in body["detail"]
+
+
 # ── Orphan cleanup test (executor-side) ───────────────────────────────
 
 

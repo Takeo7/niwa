@@ -1132,6 +1132,12 @@ def _app_request(path: str, method: str = "POST", body: dict | None = None) -> t
             return exc.code, (json.loads(raw) if raw else {})
         except json.JSONDecodeError:
             return exc.code, {"error": raw[:500]}
+    except _ue.URLError as exc:
+        # App unreachable (network down, app container stopped, DNS
+        # inside the MCP container fails...). Rather than surface the
+        # raw ``<urlopen error [Errno 111] ...>`` to the caller, wrap
+        # it in an actionable error code.
+        return 0, {"error": "app_unreachable", "detail": str(exc.reason)}
 
 
 # ── PR-09: HTTP proxy for v02-assistant tools ────────────────────────
