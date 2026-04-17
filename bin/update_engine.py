@@ -496,6 +496,163 @@ def _write_update_log(ctx: _Ctx) -> None:
         pass
 
 
+def _find_manifest_entry_for_backup(
+    install_dir: Path, backup_path: str,
+) -> Optional[dict]:
+    """Locate the update-log entry that produced this backup — that's
+    the source of truth for which commit to roll the code back to.
+    Returns ``None`` if the log or entry can't be found (fresh
+    install, log rotated away, backup from another machine, etc.).
+    """
+    log_path = install_dir / "data" / "update-log.json"
+    if not log_path.exists():
+        return None
+    try:
+        entries = json.loads(log_path.read_text())
+    except Exception:
+        return None
+    if not isinstance(entries, list):
+        return None
+    # Search newest first — the most recent matching entry is the
+    # canonical one.
+    for entry in reversed(entries):
+        if isinstance(entry, dict) and entry.get("backup_path") == backup_path:
+            return entry
+    return None
+
+
+def perform_restore(
+    install_dir: Path,
+    repo_dir: Path,
+    backup_path: str,
+    *,
+    printer: _UpdatePrinter = print,
+    runner: _UpdateRunner = subprocess.run,
+    db_only: bool = False,
+    health_check_fn: Optional[Callable[["_Ctx"], bool]] = None,
+) -> dict:
+    """Restore from a backup. DB is always restored. Code is rolled
+    back to the commit recorded in the update-log for this backup
+    (unless ``db_only=True`` or the manifest entry is missing).
+
+    Manifest shape:
+
+        {
+            "success": bool,
+            "backup_path": str,
+            "db_restored": bool,
+            "code_restored": bool,
+            "target_commit": str | None,   # what we rolled code to
+            "manifest_entry_found": bool,  # was there a log entry?
+            "health_check_ok": bool | None,
+            "errors": [...],
+            "warnings": [...],
+        }
+
+    Failure modes:
+
+      * backup_path doesn't exist → success=False, immediate abort.
+      * code rollback fails → warning, DB still restored, success=False
+        with guidance.
+      * DB copy fails → success=False (the worst case).
+      * health-check fails post-restore → warning but still count as
+        "restored" (the operator sees the run result + the engine log).
+    """
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    ctx = _Ctx(
+        install_dir=install_dir,
+        repo_dir=repo_dir,
+        printer=printer,
+        runner=runner,
+        timestamp=ts,
+        backup_fn=lambda c: None,  # not used
+        health_check_fn=health_check_fn or _default_health_check,
+    )
+    ctx.manifest = {
+        "success": False,
+        "backup_path": backup_path,
+        "db_restored": False,
+        "code_restored": False,
+        "target_commit": None,
+        "manifest_entry_found": False,
+        "health_check_ok": None,
+        "errors": [],
+        "warnings": [],
+    }
+
+    printer(f"↩️  Restore desde {backup_path}")
+
+    if not Path(backup_path).exists():
+        _record_error(ctx, f"Backup no encontrado: {backup_path}")
+        return ctx.manifest
+
+    # Locate the manifest entry so we know which commit this backup
+    # belongs to. Missing entry is ok in ``--db-only`` mode; otherwise
+    # we warn and skip the code rollback (never guess — could mix
+    # branches silently).
+    entry = _find_manifest_entry_for_backup(install_dir, backup_path)
+    ctx.manifest["manifest_entry_found"] = entry is not None
+
+    target_commit = None
+    if entry and entry.get("before_commit"):
+        target_commit = entry["before_commit"]
+        ctx.manifest["target_commit"] = target_commit
+
+    if not db_only and target_commit:
+        ctx.printer(f"  → git checkout {target_commit[:12]}")
+        try:
+            r = _run(
+                ctx, "git", "checkout", target_commit,
+                cwd=ctx.repo_dir, timeout=60,
+            )
+            if r.returncode != 0:
+                _record_warning(
+                    ctx,
+                    f"git checkout {target_commit[:12]} devolvió "
+                    f"{r.returncode}: {(r.stderr or '')[:200]}. "
+                    f"La DB se restaurará igualmente — arregla el "
+                    f"repo manualmente.",
+                )
+            else:
+                ctx.manifest["code_restored"] = True
+                _record_component(ctx, f"code:{target_commit[:12]}")
+                _copy_executor(ctx)
+                _copy_mcp_servers(ctx)
+        except Exception as exc:
+            _record_warning(ctx, f"git checkout falló: {exc}")
+    elif not db_only and not target_commit:
+        _record_warning(
+            ctx,
+            "No encuentro la entry del update-log que generó este "
+            "backup — no puedo saber a qué commit revertir. Restaurando "
+            "solo DB. Revisa manualmente que el código concuerde con el "
+            "schema restaurado.",
+        )
+
+    if _restore_db(ctx, backup_path):
+        ctx.manifest["db_restored"] = True
+        _record_component(ctx, f"db:{Path(backup_path).name}")
+    else:
+        _record_error(ctx, "Restore de DB no completó.")
+        return ctx.manifest
+
+    # Bring the app back up after the stop in _restore_db.
+    _rebuild_app(ctx)
+    health_ok = ctx.health_check_fn(ctx)
+    ctx.manifest["health_check_ok"] = health_ok
+    if not health_ok:
+        _record_warning(
+            ctx,
+            "Restore completado pero el health-check post-restore no "
+            "respondió. Revisa logs del app.",
+        )
+
+    ctx.manifest["success"] = ctx.manifest["db_restored"]
+    if ctx.manifest["success"]:
+        printer("✅ Restore completado.")
+    return ctx.manifest
+
+
 def perform_update(
     install_dir: Path,
     repo_dir: Path,
