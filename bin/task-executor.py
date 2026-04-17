@@ -1135,7 +1135,66 @@ def _prepare_backend_env(profile: dict) -> dict | None:
         # Claude can also work with env vars already set in the
         # process, so empty extra is acceptable — return {} not None.
 
+    # GitHub PAT injection (PR-50). Any v0.2 backend — claude_code or
+    # codex — can benefit from ``git clone``/``git push`` with the admin's
+    # stored PAT. If the admin hasn't connected GitHub, this is a no-op.
+    try:
+        import github_client as _gh_client
+        pat = _gh_client.get_pat()
+        if pat:
+            extra["GITHUB_TOKEN"] = pat
+            extra["GH_TOKEN"] = pat  # alias used by the `gh` CLI
+            extra["GIT_TERMINAL_PROMPT"] = "0"
+            askpass = _ensure_git_askpass_script()
+            if askpass:
+                extra["GIT_ASKPASS"] = askpass
+    except Exception:
+        # Never block task execution because of a GitHub integration
+        # hiccup — the task may not even need git.
+        log.warning("github PAT injection failed", exc_info=True)
+
     return extra if extra else {}
+
+
+_GIT_ASKPASS_PATH = "/tmp/niwa-gh-askpass.sh"
+_GIT_ASKPASS_BODY = """#!/bin/sh
+# Niwa GitHub PAT ASKPASS helper — installed by task-executor.
+# Reads the ``GITHUB_TOKEN`` env var (injected per-run by the executor)
+# and answers Git's credential prompts without user interaction.
+case "$1" in
+  *[Uu]sername*) printf 'x-access-token' ;;
+  *[Pp]assword*) printf '%s' "${GITHUB_TOKEN:-}" ;;
+  *) printf '' ;;
+esac
+"""
+
+
+def _ensure_git_askpass_script() -> str | None:
+    """Ensure a tiny ASKPASS helper exists on disk and is executable.
+
+    Returns the absolute path, or ``None`` if it couldn't be created.
+    Idempotent and tolerant: if the file already has the expected body
+    and mode, we just return its path. On any failure we return None so
+    the caller treats it as "no helper available" rather than failing
+    the whole task.
+    """
+    try:
+        path = _GIT_ASKPASS_PATH
+        needs_write = True
+        try:
+            with open(path, "r") as f:
+                if f.read() == _GIT_ASKPASS_BODY:
+                    needs_write = False
+        except FileNotFoundError:
+            pass
+        if needs_write:
+            with open(path, "w") as f:
+                f.write(_GIT_ASKPASS_BODY)
+        os.chmod(path, 0o700)
+        return path
+    except Exception:
+        log.warning("could not create git askpass script", exc_info=True)
+        return None
 
 
 # ── Transient error codes eligible for fallback escalation ────────
