@@ -398,8 +398,12 @@ def _auto_project_has_files(project_dir: Path) -> bool:
 def _auto_project_finalize(ctx: dict, task_id: str) -> None:
     """Run after adapter.start() to commit or discard the auto-project.
 
-    - If the directory has no files: rmdir it (Claude either did
-      nothing useful, called something else, or failed).
+    - If the directory has no files: rmdir it AND drop the ``projects``
+      row (if any) that Claude created via ``project_create`` MCP tool
+      but never followed up with actual files. Otherwise the UI would
+      show a phantom project. Also null out ``tasks.project_id`` for
+      any task that got attached to that phantom row (PR-52 orphan
+      policy).
     - If it has files and there is no ``projects`` row pointing at
       ``directory``: insert one (Claude wrote artifacts but did not
       call the ``project_create`` MCP tool).
@@ -414,6 +418,35 @@ def _auto_project_finalize(ctx: dict, task_id: str) -> None:
                 shutil.rmtree(project_dir)
         except OSError:
             log.warning("auto-project: could not cleanup empty %s", project_dir)
+        # Orphan cleanup: if Claude called ``project_create`` but then
+        # wrote nothing useful, drop the row and detach tasks.
+        try:
+            with _conn() as c:
+                row = c.execute(
+                    "SELECT id FROM projects WHERE directory=?",
+                    (ctx["directory"],),
+                ).fetchone()
+                if row:
+                    c.execute(
+                        "UPDATE tasks SET project_id=NULL "
+                        "WHERE project_id=?",
+                        (row["id"],),
+                    )
+                    c.execute(
+                        "DELETE FROM projects WHERE id=?",
+                        (row["id"],),
+                    )
+                    c.commit()
+                    log.info(
+                        "auto-project: orphan cleanup removed phantom "
+                        "project %s (directory %s had no files)",
+                        row["id"], ctx["directory"],
+                    )
+        except Exception:
+            log.warning(
+                "auto-project: orphan cleanup failed for %s",
+                ctx["directory"], exc_info=True,
+            )
         return
 
     now = _now_iso()
