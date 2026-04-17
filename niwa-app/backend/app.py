@@ -4056,8 +4056,25 @@ class Handler(BaseHTTPRequestHandler):
                     'INSERT INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory, url) VALUES (?,?,?,?,?,?,?,?,?,?)',
                     (proj_id, slug, name, payload.get('area', 'proyecto'), payload.get('description', ''), 1, ts, ts, directory, payload.get('url', '')),
                 )
+                # PR-52: if caller passed a ``task_id``, link it to this
+                # project in the same transaction. Used by the MCP tool
+                # ``project_create`` so Claude can create a project AND
+                # attach the current task in one round-trip.
+                linked_task_id = (payload.get('task_id') or '').strip()
+                if linked_task_id:
+                    conn.execute(
+                        'UPDATE tasks SET project_id=?, updated_at=? '
+                        'WHERE id=? AND project_id IS NULL',
+                        (proj_id, ts, linked_task_id),
+                    )
                 conn.commit()
-            return self._json({'ok': True, 'id': proj_id, 'slug': slug, 'directory': directory}, 201)
+            return self._json({
+                'ok': True,
+                'id': proj_id,
+                'slug': slug,
+                'directory': directory,
+                'linked_task_id': linked_task_id or None,
+            }, 201)
         if path == '/api/tasks':
             task_id = create_task(payload)
             return self._json({'ok': True, 'id': task_id}, 201)

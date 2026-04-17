@@ -27,7 +27,15 @@ def _make_deps(db_conn, now_iso, uploads_dir):
 
 def get_task(task_id):
     with _db_conn() as conn:
-        row = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+        # PR-52: JOIN projects so the detail endpoint also carries
+        # project_slug/project_name. ``SELECT *`` isn't enough here
+        # because we need columns from a second table.
+        row = conn.execute(
+            "SELECT t.*, p.slug AS project_slug, p.name AS project_name "
+            "FROM tasks t LEFT JOIN projects p ON p.id = t.project_id "
+            "WHERE t.id=?",
+            (task_id,),
+        ).fetchone()
         if not row:
             return None
         result = dict(row)
@@ -99,7 +107,9 @@ def get_task(task_id):
 
 
 def fetch_tasks(area=None, status=None, today_only=False, include_done=False, project_id=None):
-    query = "SELECT t.*, p.name as project_name FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != 'chat'"
+    # PR-52: expose project_slug so the UI can link from task → project
+    # without a second round-trip. project_name was already exposed.
+    query = "SELECT t.*, p.name as project_name, p.slug as project_slug FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != 'chat'"
     params = []
     if project_id:
         query += ' AND t.project_id=?'

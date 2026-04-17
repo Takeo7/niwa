@@ -687,27 +687,44 @@ def _task_update(args: dict) -> dict:
 
 
 def _project_create(args: dict) -> dict:
-    name = args.get("name", "").strip()
+    """Create a project via the app's HTTP endpoint (PR-52).
+
+    Previous implementation inserted rows directly using a weaker slug
+    rule (``name.lower().replace(' ', '-')[:50]``), no slug dedup, no
+    auto-generated directory, and no task linking. The HTTP endpoint
+    (``POST /api/projects``) already handles all of that since PR-51;
+    delegating to it guarantees MCP and UI create projects identically.
+
+    If ``task_id`` is in ``args``, the HTTP endpoint also associates the
+    task to the new project in the same transaction.
+    """
+    name = (args.get("name") or "").strip()
     if not name:
         raise ValueError("name cannot be empty")
-    area = args.get("area", "proyecto")
+    area = args.get("area") or "proyecto"
     if area not in VALID_AREAS:
         raise ValueError(f"invalid area: {area}")
-    description = args.get("description", "")
-    directory = args.get("directory", "")
-    url = args.get("url", "")
-    slug = name.lower().replace(" ", "-").replace("_", "-")[:50]
-    now = _now_iso()
-    project_id = f"proj-{uuid.uuid4().hex[:12]}"
-    with _rw_conn() as c:
-        c.execute(
-            "INSERT INTO projects (id, slug, name, area, description, active, created_at, updated_at, directory, url) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
-            (project_id, slug, name, area, description, now, now, directory, url),
+    body = {
+        "name": name,
+        "area": area,
+        "description": args.get("description", ""),
+        "directory": args.get("directory", ""),
+        "url": args.get("url", ""),
+    }
+    if args.get("task_id"):
+        body["task_id"] = args["task_id"]
+    status, resp = _app_request("/api/projects", method="POST", body=body)
+    if status != 201:
+        raise ValueError(
+            f"project_create failed (status={status}): {resp.get('error', resp)}"
         )
-        c.commit()
-        row = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-        return _row_to_dict(row)
+    # Return the canonical row the HTTP endpoint constructed. Read it
+    # back so the caller gets the same shape they always got (full
+    # ``projects`` row) — keeps backward compat with existing callers.
+    proj_id = resp["id"]
+    with _ro_conn() as c:
+        row = c.execute("SELECT * FROM projects WHERE id=?", (proj_id,)).fetchone()
+    return _row_to_dict(row)
 
 
 def _project_context(args):
@@ -774,57 +791,36 @@ def _task_request_input(args):
     return {"ok": True, "status": "waiting_input", "event_id": eid, "question": question}
 
 def _deploy_web(args):
+    """Deploy a project's directory as a static site (PR-52).
+
+    Delegates to the app's HTTP endpoint ``POST /api/projects/:id/deploy``.
+    The previous MCP implementation only updated the ``deployments``
+    table; it never called ``hosting.generate_caddyfile()`` or
+    ``_reload_caddy()``, so Caddy kept serving the old config and the
+    site wasn't actually reachable — a split-brain that looked
+    "deployed" in the DB but wasn't live.
+
+    The HTTP endpoint runs ``hosting.deploy_project()`` which writes
+    the Caddyfile and reloads the server, so MCP and UI now produce
+    the same side effect.
+    """
     project_id = args["project_id"]
-    slug = args.get("slug", "")
-    with _rw_conn() as c:
-        project = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-        if not project:
-            raise ValueError(f"Project not found: {project_id}")
-        project = _row_to_dict(project)
-        slug = slug or project.get("slug", project_id)
-        directory = project.get("directory", "")
-        if not directory:
-            raise ValueError("Project has no directory set")
-
-        now = _now_iso()
-        existing = c.execute("SELECT id FROM deployments WHERE project_id=?", (project_id,)).fetchone()
-        if existing:
-            c.execute(
-                "UPDATE deployments SET slug=?, directory=?, status='active', updated_at=? WHERE project_id=?",
-                (slug, directory, now, project_id),
-            )
-        else:
-            deploy_id = str(uuid.uuid4())
-            c.execute(
-                "INSERT INTO deployments (id, project_id, slug, directory, status, deployed_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (deploy_id, project_id, slug, directory, "active", now, now),
-            )
-
-        # Read hosting config from DB settings, fall back to env vars
-        hosting_domain = ""
-        hosting_port = ""
-        try:
-            with _ro_conn() as rc:
-                for row in rc.execute("SELECT key, value FROM settings WHERE key LIKE 'svc.hosting.%'").fetchall():
-                    if row["key"] == "svc.hosting.domain":
-                        hosting_domain = row["value"]
-                    elif row["key"] == "svc.hosting.port":
-                        hosting_port = row["value"]
-        except Exception:
-            pass
-        if hosting_domain:
-            port = hosting_port or os.environ.get("NIWA_HOSTING_PORT", "8880")
-            url = f"https://{slug}.{hosting_domain}/"
-        else:
-            public_url = os.environ.get("NIWA_PUBLIC_URL", "http://localhost")
-            port = hosting_port or os.environ.get("NIWA_HOSTING_PORT", "8880")
-            url = f"{public_url}:{port}/{slug}/"
-
-        c.execute("UPDATE deployments SET url=? WHERE project_id=?", (url, project_id))
-        c.execute("UPDATE projects SET url=?, updated_at=? WHERE id=?", (url, now, project_id))
-        c.commit()
-
-    return {"url": url, "slug": slug, "directory": directory, "status": "deployed"}
+    status, resp = _app_request(
+        f"/api/projects/{project_id}/deploy", method="POST", body={}
+    )
+    if status != 200:
+        raise ValueError(
+            f"deploy_web failed (status={status}): {resp.get('error', resp)}"
+        )
+    # HTTP endpoint returns {'ok': True, 'url': ..., 'slug': ...,
+    # 'directory': ..., 'status': 'active'}. Drop the 'ok' flag to
+    # keep backward-compat with existing MCP callers.
+    return {
+        "url": resp.get("url"),
+        "slug": resp.get("slug"),
+        "directory": resp.get("directory"),
+        "status": "deployed",
+    }
 
 
 def _undeploy_web(args):
@@ -1105,6 +1101,43 @@ def _load_contract_tools() -> set[str] | None:
 
 
 _CONTRACT_TOOLS: set[str] | None = _load_contract_tools()
+
+
+# ── PR-52: generic HTTP delegation helper for project_create / deploy_web ──
+
+
+def _app_request(path: str, method: str = "POST", body: dict | None = None) -> tuple[int, dict]:
+    """Call the Niwa app HTTP API. Returns ``(status_code, body_json)``.
+
+    Uses the shared ``_S2S_TOKEN`` so the app accepts it as service-to-
+    service. HTTPErrors are captured and their body is parsed — callers
+    inspect ``status`` to decide what to do.  Network errors still raise.
+    """
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    url = f"{_APP_BASE_URL}{path}"
+    data = json.dumps(body or {}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if _S2S_TOKEN:
+        headers["Authorization"] = f"Bearer {_S2S_TOKEN}"
+    req = _ur.Request(url, data=data, headers=headers, method=method)
+    try:
+        with _ur.urlopen(req, timeout=35) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            return resp.status, (json.loads(raw) if raw else {})
+    except _ue.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            return exc.code, (json.loads(raw) if raw else {})
+        except json.JSONDecodeError:
+            return exc.code, {"error": raw[:500]}
+    except _ue.URLError as exc:
+        # App unreachable (network down, app container stopped, DNS
+        # inside the MCP container fails...). Rather than surface the
+        # raw ``<urlopen error [Errno 111] ...>`` to the caller, wrap
+        # it in an actionable error code.
+        return 0, {"error": "app_unreachable", "detail": str(exc.reason)}
 
 
 # ── PR-09: HTTP proxy for v02-assistant tools ────────────────────────
