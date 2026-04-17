@@ -267,6 +267,14 @@ def fake_install(tmp_path, monkeypatch):
     # the guard runs before anything else.
     import shutil as _sh
     _sh.copy(os.path.join(ROOT_DIR, "setup.py"), repo / "setup.py")
+    # ``setup.py cmd_update`` now imports ``bin/update_engine.py``
+    # (PR-58b1). Ship the engine alongside so the subprocess can
+    # reach the repo-dirty guard it exercises.
+    (repo / "bin").mkdir(exist_ok=True)
+    _sh.copy(
+        os.path.join(ROOT_DIR, "bin", "update_engine.py"),
+        repo / "bin" / "update_engine.py",
+    )
     (repo / "README.md").write_text("seed\n")
     subprocess.run(["git", "add", "."], cwd=str(repo), check=True)
     subprocess.run(
