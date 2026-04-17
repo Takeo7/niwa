@@ -24,6 +24,14 @@ interface Props {
   /** Pre-select this project when creating (e.g. "Nueva tarea" desde
    * la vista de un proyecto). Only applies in create mode. */
   initialProjectId?: string | null;
+  /** Link this new task to a parent task (PR-55: "Responder" para
+   * tareas en ``waiting_input``). Only applies in create mode. */
+  initialParentTaskId?: string | null;
+  /** Pre-fill the description field. Used by "Responder" to seed the
+   * reply context. */
+  initialDescription?: string;
+  /** Pre-fill the title field. */
+  initialTitle?: string;
 }
 
 const STATUS_OPTIONS = [
@@ -55,6 +63,9 @@ export function TaskForm({
   task,
   initialStatus,
   initialProjectId,
+  initialParentTaskId,
+  initialDescription,
+  initialTitle,
 }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -88,8 +99,8 @@ export function TaskForm({
       setArea(task.area || null);
       setUrgent(task.urgent === 1);
     } else {
-      setTitle('');
-      setDescription('');
+      setTitle(initialTitle || '');
+      setDescription(initialDescription || '');
       setStatus(initialStatus || 'pendiente');
       setPriority('media');
       setProjectId(initialProjectId || null);
@@ -98,7 +109,16 @@ export function TaskForm({
       setArea(null);
       setUrgent(false);
     }
-  }, [task, opened, initialStatus, initialProjectId, isEditing]);
+  }, [
+    task,
+    opened,
+    initialStatus,
+    initialProjectId,
+    initialParentTaskId,
+    initialDescription,
+    initialTitle,
+    isEditing,
+  ]);
 
   const projectOptions = (projects || []).map((p) => ({
     value: String(p.id),
@@ -117,6 +137,12 @@ export function TaskForm({
       area: area || '',
       urgent: urgent ? 1 : 0,
     };
+    // PR-55: record the parent relation when this is a reply / follow-up.
+    // Only applies on create — updating parent_task_id via the form is
+    // not exposed in the UI.
+    if (!isEditing && initialParentTaskId) {
+      data.parent_task_id = initialParentTaskId;
+    }
 
     if (isEditing) {
       await updateTask.mutateAsync({ id: task.id, ...data } as Parameters<typeof updateTask.mutateAsync>[0]);

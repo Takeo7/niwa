@@ -27,6 +27,7 @@ export interface Task {
   // holds the stdout of the latest executor comment event after ANSI
   // stripping. Rendered as markdown in TaskDetailsTab (PR-37).
   executor_output?: string;
+  parent_task_id?: string | null;
   // PR-39: latest run summary so the UI can show an error banner
   // without a second fetch. Populated by GET /api/tasks/:id only.
   last_run?: TaskLastRun | null;

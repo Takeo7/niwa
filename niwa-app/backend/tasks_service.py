@@ -147,7 +147,7 @@ def create_task(payload):
     title = (payload.get('title') or '').strip() or 'Nueva tarea'
     with _db_conn() as conn:
         conn.execute(
-            'INSERT INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,assigned_to_yume,assigned_to_claude,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,assigned_to_yume,assigned_to_claude,parent_task_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (
                 task_id,
                 title,
@@ -163,6 +163,7 @@ def create_task(payload):
                 payload.get('notes', ''),
                 1 if payload.get('assigned_to_yume') else 0,
                 1 if payload.get('assigned_to_claude') else 0,
+                payload.get('parent_task_id') or None,  # PR-55
                 ts,
                 ts,
             ),
@@ -172,7 +173,7 @@ def create_task(payload):
 
 
 def update_task(task_id, payload):
-    allowed = {'status', 'urgent', 'priority', 'scheduled_for', 'due_at', 'notes', 'title', 'description', 'area', 'project_id', 'assigned_to_yume', 'assigned_to_claude'}
+    allowed = {'status', 'urgent', 'priority', 'scheduled_for', 'due_at', 'notes', 'title', 'description', 'area', 'project_id', 'parent_task_id', 'assigned_to_yume', 'assigned_to_claude'}
     sets, params = [], []
     status_value = payload.get('status') if 'status' in payload else None
     for k, v in payload.items():

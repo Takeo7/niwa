@@ -29,6 +29,7 @@ import remarkGfm from 'remark-gfm';
 import {
   useUpdateTask,
   useDeleteTask,
+  useRetryTask,
   useTaskAttachments,
   useUploadTaskAttachment,
   useDeleteTaskAttachment,
@@ -39,6 +40,7 @@ import {
 } from '../hooks/useTasks';
 import { notifications } from '@mantine/notifications';
 import type { Task } from '../../../shared/types';
+import { TaskForm } from './TaskForm';
 
 const STATUS_OPTIONS = [
   { value: 'pendiente', label: 'Pendiente' },
@@ -62,6 +64,7 @@ export function TaskDetailsTab() {
   const navigate = useNavigate();
   const updateTask = useUpdateTask();
   const deleteTask = useDeleteTask();
+  const retryTask = useRetryTask();
   const { data: attachments } = useTaskAttachments(task.id);
   const uploadAttachment = useUploadTaskAttachment();
   const deleteAttachment = useDeleteTaskAttachment();
@@ -70,6 +73,7 @@ export function TaskDetailsTab() {
   const addTaskLabel = useAddTaskLabel();
   const removeTaskLabel = useRemoveTaskLabel();
   const [newLabel, setNewLabel] = useState('');
+  const [replyFormOpen, setReplyFormOpen] = useState(false);
 
   const handleStatusChange = (status: string | null) => {
     if (!status) return;
@@ -167,6 +171,31 @@ export function TaskDetailsTab() {
                 onClick={navigateToRuns}
               >
                 Ver runs
+              </Button>
+              <Button
+                size="xs"
+                variant="filled"
+                color="red"
+                loading={retryTask.isPending}
+                onClick={async () => {
+                  try {
+                    await retryTask.mutateAsync(task.id);
+                    notifications.show({
+                      title: 'Tarea reencolada',
+                      message: 'El executor la recogerá en el próximo ciclo.',
+                      color: 'green',
+                    });
+                  } catch (err) {
+                    notifications.show({
+                      title: 'Error al reintentar',
+                      message:
+                        err instanceof Error ? err.message : 'Fallo desconocido',
+                      color: 'red',
+                    });
+                  }
+                }}
+              >
+                Reintentar
               </Button>
             </Group>
           </Stack>
@@ -356,6 +385,15 @@ export function TaskDetailsTab() {
 
       <Divider />
       <Group justify="flex-end">
+        {(task.status === 'waiting_input' || task.status === 'hecha' || Boolean(task.executor_output)) && (
+          <Button
+            variant="light"
+            leftSection={<IconPlus size={16} />}
+            onClick={() => setReplyFormOpen(true)}
+          >
+            Responder
+          </Button>
+        )}
         {(task.status === 'en_progreso' || task.status === 'hecha') && (
           <Button
             color="orange"
@@ -377,6 +415,19 @@ export function TaskDetailsTab() {
           Eliminar tarea
         </Button>
       </Group>
+
+      <TaskForm
+        opened={replyFormOpen}
+        onClose={() => setReplyFormOpen(false)}
+        initialParentTaskId={task.id}
+        initialProjectId={task.project_id ?? null}
+        initialTitle={`Responder: ${task.title}`}
+        initialDescription={
+          task.executor_output
+            ? `Respuesta al run anterior.\n\n---\nContexto (output de la tarea "${task.title}"):\n\n${task.executor_output.slice(0, 500)}\n---\n\nTu respuesta:\n`
+            : `Respuesta a la tarea "${task.title}".\n\n`
+        }
+      />
     </Stack>
   );
 }

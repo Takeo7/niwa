@@ -40,6 +40,7 @@ import {
   useDeployments,
   useDeployProject,
   useUndeployProject,
+  useHostingStatus,
 } from '../../../shared/api/queries';
 import { FileTree } from './FileTree';
 import { CapabilitiesTab } from './CapabilitiesTab';
@@ -396,6 +397,7 @@ function DeployCard({
   const deployments = useDeployments();
   const deploy = useDeployProject();
   const undeploy = useUndeployProject();
+  const hostingStatus = useHostingStatus();
   const deployment: Deployment | undefined = deployments.data?.deployments.find(
     (d) => d.project_id === project.id,
   );
@@ -495,6 +497,13 @@ function DeployCard({
           <Text size="sm" c="dimmed">
             Publica los archivos de este proyecto como sitio estático.
           </Text>
+          {hostingStatus.data && !hostingStatus.data.caddy_listening && (
+            <Text size="xs" c="orange">
+              Caddy hosting aún no está escuchando en :{hostingStatus.data.port}.
+              El primer deploy lo arrancará — si falla, revisa{' '}
+              <Text span fw={500}>Sistema → Hosting</Text>.
+            </Text>
+          )}
           <Button
             leftSection={<IconCloudUpload size={16} />}
             size="compact-sm"
