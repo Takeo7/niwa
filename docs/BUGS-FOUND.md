@@ -553,7 +553,15 @@ Tests en `tests/test_cookie_secure.py` (9 casos): las 3 señales, override '0' n
 
 **Severidad:** **alta UX** (PR-38 prometía "usuario ve su proyecto en Proyectos"; el prompt suave hace que no cumpla la promesa).
 
-**Estado:** **ARREGLADO en PR-42.** Reescritura imperativa del prompt: (1) sección `## WORKING DIRECTORY — STRICT RULE` en mayúsculas, (2) blacklist explícito de `/tmp/`, `/home/`, `/root/`, `/var/`, `/opt/` con razón ("post-hook can't find files there"), (3) bloque JSON literal con los args exactos de `project_create` (`name`, `area`, `directory`, `description`) para eliminar ambigüedad de schema, (4) recordatorio "your shell is already `cd`'d there — relative paths just work" porque Claude defaulta a paths absolutos, (5) escape hatch preservado para tareas conversacionales ("if purely conversational, skip project_create"). Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (4 casos nuevos, total 8): blacklist de paths presente, bloque json con los 4 args, hint de paths relativos, escape hatch conservado.
+**Estado:** **ARREGLADO en PR-43** (primer intento PR-42 insuficiente — ver debajo).
+
+Historia:
+
+1. **PR-42 — intento 1: prompt imperativo con blacklist.** Añadía `## WORKING DIRECTORY — STRICT RULE` + blacklist fijo de `/tmp/`, `/home/`, `/root/`, `/var/`, `/opt/`. Verificado en VPS: Claude SIGUIÓ escribiendo a `/tmp/`. Causa raíz descubierta: en installs con `sudo`, `_auto_projects_root = /root/.niwa/data/projects/`. Cuando el executor mutaba `task_dict["project_directory"] = "/root/.niwa/data/projects/<slug>/"`, el prompt decía simultáneamente "MUST live under /root/.niwa/data/projects/<slug>/" Y "FORBIDDEN: /root/...". Contradicción interna. Claude, siendo razonable, evitó ambas reglas escribiendo a `/tmp/` donde al menos violaba solo una (el blacklist del /tmp/ menciona "post-hook can't find files there", menos fuerte que "MUST live under"). Insight importante: **Claude SÍ respeta instrucciones claras cuando no son contradictorias** — el usuario lo confirmó empíricamente con prompts directos al CLI.
+
+2. **PR-43 — intento 2: regla positiva única.** Se elimina el blacklist fijo. La regla es: `every absolute path you write to MUST start with <pdir>`. `/tmp/` se menciona solo como "common mistake to avoid" con ejemplo de patrón (`Write(/tmp/...)`, `Bash(mkdir /tmp/...)`). Sin contradicciones posibles porque es una única regla positiva.
+
+Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (8 casos totales tras PR-43): inyección condicional (3), `/tmp/` como common mistake (1), **no blacklists contradictorios** (1, pin contra regresión), regla positiva "start with" (1), bloque JSON con 4 args (1), hint paths relativos (1), escape hatch conversacional (1).
 
 ### Bug 32: Tareas que Claude "completa" con exit 0 pero sin haber hecho nada (false-succeeded genérico)
 

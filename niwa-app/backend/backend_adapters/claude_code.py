@@ -553,39 +553,47 @@ class ClaudeCodeAdapter(BackendAdapter):
         if notes:
             parts.append(f"\n## Notes\n{notes}")
 
-        # PR-38 / PR-42: if the executor pre-created a project
-        # directory for this task (no project_id yet), force Claude
-        # to write there. Bug 34: with the PR-38 wording ("If this
-        # involves creating artifacts…") Claude treated the path as
-        # a suggestion and used /tmp/ by habit. The executor's
-        # post-hook safety net only rescues files written INSIDE the
-        # pre-created dir, so writes to /tmp/ leak. We harden the
-        # instruction: uppercase the rule, blacklist alternative
-        # paths, and give a concrete example of the tool call. Claude
-        # respects imperative rules with examples much more reliably
-        # than conditional prose.
+        # PR-38 / PR-42 / PR-43: if the executor pre-created a
+        # project directory for this task (no project_id yet),
+        # force Claude to write there.
+        #
+        # Evolution: PR-38 wording was too soft ("if this involves
+        # creating artifacts…") and Claude defaulted to /tmp/.
+        # PR-42 added imperative language + a blacklist of common
+        # paths (/tmp/, /home/, /root/…). That broke in prod because
+        # ``_auto_projects_root = <NIWA_HOME>/data/projects/`` — when
+        # the installer ran as root, ``NIWA_HOME=/root/.niwa`` and
+        # every project_directory STARTS WITH /root/. The blacklist
+        # then contradicted the main rule ("write under /root/.niwa/
+        # …" + "never write under /root/…"). Claude resolved the
+        # ambiguity by writing to /tmp/ which at least violated only
+        # one of the conflicting rules.
+        #
+        # PR-43: drop the fixed blacklist. State the rule positively
+        # ("paths must start with <pdir>") and mention /tmp/ only as
+        # a common habit to avoid — not as a blanket ban that can
+        # collide with the project_directory itself.
         pdir = task.get("project_directory")
         if pdir and not task.get("project_id"):
             parts.append(
                 "\n## WORKING DIRECTORY — STRICT RULE\n"
                 f"A fresh directory has been prepared for this task:\n\n"
                 f"    {pdir}\n\n"
-                "Your shell is already `cd`'d there, so **relative paths "
-                "just work**. Prefer relative paths.\n\n"
-                "**Every file you create MUST live under:**\n"
-                f"    {pdir}\n\n"
-                "**FORBIDDEN paths — never write here, even if it seems "
-                "convenient:**\n"
-                "  - `/tmp/...` (the post-hook can't find files there)\n"
-                "  - `/home/...`\n"
-                "  - `/root/...`\n"
-                "  - `/var/...`, `/opt/...`, or any other absolute path\n"
-                "    outside the directory above.\n\n"
-                "If you catch yourself about to write `/tmp/<anything>`, "
-                "stop and use the working directory instead.\n\n"
+                "Your shell is already `cd`'d there — "
+                "**relative paths just work**. Prefer them.\n\n"
+                "**THE RULE:** every absolute path you write to MUST "
+                f"start with `{pdir}`. Anything else is out of scope "
+                "for this task and will be lost — the post-hook that "
+                "registers your work as a Niwa project only looks "
+                "inside that directory.\n\n"
+                "Common mistake to avoid: defaulting to `/tmp/<name>/`. "
+                "If you catch yourself about to call "
+                "`Write(/tmp/...)` or `Bash(mkdir /tmp/...)`, stop "
+                "and use the working directory instead.\n\n"
                 "## REGISTER THE PROJECT\n"
-                "Before writing any file, call the `project_create` MCP "
-                "tool so it shows up in the Niwa UI. Exact arguments:\n\n"
+                "Before writing any file, call the `project_create` "
+                "MCP tool so it shows up in the Niwa UI. Exact "
+                "arguments:\n\n"
                 "```json\n"
                 "{\n"
                 f'  "name": {title!r},\n'
@@ -595,10 +603,11 @@ class ClaudeCodeAdapter(BackendAdapter):
                 "}\n"
                 "```\n\n"
                 "If this task is purely conversational (a question, a "
-                "review, a summary) and you will NOT create files, you "
-                "may skip `project_create` entirely. But if you create "
-                "even one file, both rules above apply: register the "
-                "project AND write inside the working directory."
+                "review, a summary) and you will NOT create files, "
+                "you may skip `project_create` entirely. But if you "
+                "create even one file, both rules above apply: "
+                "register the project AND write inside the working "
+                "directory."
             )
 
         return "\n\n".join(parts) if parts else "Complete the assigned task."

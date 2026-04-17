@@ -409,33 +409,88 @@ class TestAdapterPromptInjection:
         # Claude can pick something sensible even on the first try.
         assert "Build my blog" in prompt
 
-    # PR-42 — Bug 34: the PR-38 prompt was too soft ("if this
-    # involves creating artifacts…") and Claude used /tmp/ anyway.
-    # The hardened prompt must: (1) use uppercase imperative, (2)
-    # explicitly blacklist the paths Claude defaults to, (3) give a
-    # concrete tool-call example in JSON so there's no ambiguity.
-    # These tests pin the three guardrails in the adapter source —
-    # dropping any of them would revert to the Bug 34 behaviour.
+    # PR-42 / PR-43 — Bug 34: the PR-38 prompt was too soft; the
+    # PR-42 blacklist of fixed paths (/tmp/, /home/, /root/…) bit
+    # back in prod because project_directory in a sudo install sits
+    # under /root/.niwa/ — blacklist and main rule contradicted each
+    # other and Claude evaded both by going to /tmp/. PR-43 states
+    # the rule positively ("paths must start with pdir") and keeps
+    # /tmp/ only as a common-mistake example.
 
-    def test_prompt_blacklists_tmp_and_common_paths(self):
+    def test_prompt_mentions_tmp_as_common_mistake(self):
+        """The /tmp/ mention stays as an example of what Claude
+        defaults to — removing it would lose the specific warning
+        that catches the most common failure mode."""
         adapter = self._load_adapter()
         task = {
             "title": "x", "project_id": None,
-            "project_directory": "/opt/niwa/data/projects/p-abc",
+            "project_directory": "/root/.niwa/data/projects/p-abc",
         }
         prompt = adapter._build_prompt(task)
-        # The blacklist must name the paths Claude was reaching for.
         assert "/tmp/" in prompt, (
-            "The prompt must explicitly forbid /tmp/ — that's the "
-            "path Claude defaulted to in Bug 34 even though a "
-            "project_directory was provided."
+            "Keep /tmp/ as the named common mistake Claude falls "
+            "into — without that specificity the warning is vague."
         )
-        assert "/home/" in prompt
-        assert "/root/" in prompt
-        # Uppercase imperative vs the old conditional prose.
-        assert "FORBIDDEN" in prompt or "STRICT" in prompt, (
-            "The instruction must be imperative, not conditional. "
-            "Claude treated the PR-38 wording as a suggestion."
+        assert "STRICT" in prompt, (
+            "The instruction must read as imperative, not "
+            "conditional — Claude treated the PR-38 wording as a "
+            "suggestion."
+        )
+
+    def test_prompt_has_no_contradictory_blacklist(self):
+        """The PR-42 blacklist of /root/, /home/, /var/, /opt/
+        contradicted the main rule whenever ``project_directory``
+        started with one of those prefixes. In a sudo install
+        ``project_directory`` sits under ``/root/.niwa/``, so the
+        blacklist said "never write to /root/" while the main rule
+        said "MUST write under /root/.niwa/<slug>/". Claude resolved
+        the ambiguity by going to /tmp/. PR-43 drops those fixed
+        blacklists entirely."""
+        adapter = self._load_adapter()
+        task = {
+            "title": "x", "project_id": None,
+            "project_directory": "/root/.niwa/data/projects/p-abc",
+        }
+        prompt = adapter._build_prompt(task)
+        # /root/ MUST NOT appear as a standalone blacklist entry
+        # that would contradict the main rule.
+        assert "`/root/...`" not in prompt, (
+            "PR-43 removed the fixed /root/ blacklist — it "
+            "contradicted project_directory in sudo installs. "
+            "Use a positive rule instead: 'must start with <pdir>'."
+        )
+        # Same for the other fixed prefixes that could overlap with
+        # a legitimate project_directory.
+        assert "`/home/...`" not in prompt
+        assert "`/var/...`" not in prompt
+        assert "`/opt/...`" not in prompt
+
+    def test_prompt_states_positive_start_rule(self):
+        """The replacement for the blacklist: a positive rule that
+        says exactly which prefix all paths must start with. This
+        works regardless of where ``_auto_projects_root`` lives
+        (/root/.niwa/, /opt/niwa/, /home/niwa/…)."""
+        adapter = self._load_adapter()
+        pdir = "/root/.niwa/data/projects/blog-abc"
+        task = {
+            "title": "x", "project_id": None,
+            "project_directory": pdir,
+        }
+        prompt = adapter._build_prompt(task)
+        # The pdir appears both as the target and framed as "must
+        # start with". Any rewrite that drops the "must start with"
+        # framing reintroduces the ambiguity.
+        assert "start with" in prompt.lower(), (
+            "State the rule positively: 'every path MUST start "
+            "with <pdir>' — that's unambiguous even when pdir "
+            "shares a prefix with a previously-blacklisted path."
+        )
+        # And the pdir itself must appear in the rule body (not
+        # just in the task description).
+        assert prompt.count(pdir) >= 2, (
+            "pdir should appear at least twice: as the target dir "
+            "and as the prefix in the 'must start with' rule. "
+            "Once isn't enough to anchor the rule."
         )
 
     def test_prompt_includes_concrete_tool_call_example(self):
