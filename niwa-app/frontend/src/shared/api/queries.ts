@@ -36,6 +36,7 @@ import type {
   BackendProfilePatch,
   CapabilityProfileResponse,
   CapabilityProfilePatch,
+  Deployment,
 } from '../types';
 
 // ── Tasks ──
@@ -736,6 +737,42 @@ export function useDeleteProject() {
   return useMutation({
     mutationFn: (slug: string) => apiDelete<{ ok: boolean }>(`projects/${slug}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); },
+  });
+}
+
+// ── Deployments (PR-47) ──
+export function useDeployments() {
+  return useQuery({
+    queryKey: ['deployments'],
+    queryFn: () => api<{ deployments: Deployment[] }>('deployments'),
+  });
+}
+
+export function useDeployProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) =>
+      apiPost<{ ok: boolean; url: string; slug: string; directory: string; status: string }>(
+        `projects/${key}/deploy`,
+        {},
+      ),
+    onSuccess: (_data, key) => {
+      qc.invalidateQueries({ queryKey: ['deployments'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['project', key] });
+    },
+  });
+}
+
+export function useUndeployProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => apiPost<{ ok: boolean }>(`projects/${key}/undeploy`, {}),
+    onSuccess: (_data, key) => {
+      qc.invalidateQueries({ queryKey: ['deployments'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      qc.invalidateQueries({ queryKey: ['project', key] });
+    },
   });
 }
 

@@ -15,21 +15,29 @@ import {
   Progress,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
+import { notifications } from '@mantine/notifications';
 import {
   IconArrowLeft,
   IconUpload,
   IconFile,
   IconX,
+  IconCloudUpload,
+  IconExternalLink,
 } from '@tabler/icons-react';
 import {
   useProject,
   useProjectUploads,
   useUploadFile,
 } from '../hooks/useProjects';
-import { useTasks } from '../../../shared/api/queries';
+import {
+  useTasks,
+  useDeployments,
+  useDeployProject,
+  useUndeployProject,
+} from '../../../shared/api/queries';
 import { FileTree } from './FileTree';
 import { CapabilitiesTab } from './CapabilitiesTab';
-import type { Task } from '../../../shared/types';
+import type { Task, Project, Deployment } from '../../../shared/types';
 
 function TaskRow({ task }: { task: Task }) {
   const statusColor: Record<string, string> = {
@@ -140,6 +148,7 @@ export function ProjectDetail() {
                 {project.done_tasks} de {project.total_tasks} tareas completadas ({progressPct}%)
               </Text>
             </Card>
+            <DeployCard project={project} />
           </SimpleGrid>
         </Tabs.Panel>
 
@@ -225,4 +234,111 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function DeployCard({ project }: { project: Project }) {
+  const deployments = useDeployments();
+  const deploy = useDeployProject();
+  const undeploy = useUndeployProject();
+  const deployment: Deployment | undefined = deployments.data?.deployments.find(
+    (d) => d.project_id === project.id,
+  );
+
+  const hasDirectory = Boolean(project.directory);
+  const isActive = deployment?.status === 'active';
+
+  async function handleDeploy() {
+    try {
+      const result = await deploy.mutateAsync(project.slug);
+      notifications.show({
+        title: 'Proyecto desplegado',
+        message: result.url,
+        color: 'green',
+      });
+    } catch (err) {
+      notifications.show({
+        title: 'Error al desplegar',
+        message: err instanceof Error ? err.message : 'Falló el deploy',
+        color: 'red',
+      });
+    }
+  }
+
+  async function handleUndeploy() {
+    try {
+      await undeploy.mutateAsync(project.slug);
+      notifications.show({
+        title: 'Proyecto despublicado',
+        message: project.name,
+        color: 'yellow',
+      });
+    } catch (err) {
+      notifications.show({
+        title: 'Error al despublicar',
+        message: err instanceof Error ? err.message : 'Falló el undeploy',
+        color: 'red',
+      });
+    }
+  }
+
+  return (
+    <Card withBorder>
+      <Group justify="space-between" mb="xs">
+        <Text fw={500}>Hosting</Text>
+        {isActive && (
+          <Badge color="green" variant="light">
+            activo
+          </Badge>
+        )}
+      </Group>
+      {!hasDirectory ? (
+        <Text size="sm" c="dimmed">
+          Este proyecto no tiene directorio asignado. Asigna uno en Editar
+          proyecto antes de hacer deploy.
+        </Text>
+      ) : isActive && deployment?.url ? (
+        <Stack gap="xs">
+          <Group gap="xs">
+            <Text size="sm" c="dimmed">
+              URL pública:
+            </Text>
+            <Text
+              component="a"
+              href={deployment.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              c="brand"
+              style={{ wordBreak: 'break-all' }}
+            >
+              {deployment.url} <IconExternalLink size={12} />
+            </Text>
+          </Group>
+          <Button
+            variant="light"
+            color="red"
+            size="compact-sm"
+            loading={undeploy.isPending}
+            onClick={handleUndeploy}
+          >
+            Despublicar
+          </Button>
+        </Stack>
+      ) : (
+        <Stack gap="xs">
+          <Text size="sm" c="dimmed">
+            Publica los archivos de este proyecto como sitio estático.
+          </Text>
+          <Button
+            leftSection={<IconCloudUpload size={16} />}
+            size="compact-sm"
+            loading={deploy.isPending}
+            onClick={handleDeploy}
+          >
+            Deploy
+          </Button>
+        </Stack>
+      )}
+    </Card>
+  );
 }

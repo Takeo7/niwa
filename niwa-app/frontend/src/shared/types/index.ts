@@ -58,6 +58,17 @@ export interface Project {
   updated_at: string;
 }
 
+export interface Deployment {
+  id: string;
+  project_id: string;
+  slug: string;
+  directory: string;
+  url: string | null;
+  status: string;
+  deployed_at: string;
+  updated_at: string;
+}
+
 export interface TreeNode {
   name: string;
   path?: string;
