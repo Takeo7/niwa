@@ -2986,15 +2986,50 @@ def cmd_update(args) -> None:
 
     print("\U0001f504 Updating Niwa...")
 
-    # 1. Git pull
-    print("  \u2192 Pulling latest code...")
-    result = subprocess.run(["git", "pull", "origin", "main"], cwd=str(repo_dir),
-                          capture_output=True, text=True)
+    # PR-58a: guard against dirty repo. Pulling on top of local
+    # modifications used to silently fall through (``Continuing with
+    # current code``) — now we abort with an actionable message. The
+    # operator decides: stash, reset, or abandon the update.
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=str(repo_dir),
+        capture_output=True, text=True, timeout=10,
+    )
+    if (porcelain.stdout or "").strip():
+        print("  \u274c El repositorio tiene cambios locales sin commitear.")
+        print("  No actualizo para evitar mezclar ramas o perder trabajo.")
+        print(f"  Inspecciona con: git -C {repo_dir} status")
+        print( "  Y elige:")
+        print( "    - git stash         (guardar cambios aparte)")
+        print( "    - git checkout .    (descartar cambios sin stage)")
+        print( "    - git reset --hard  (descartar TODO)")
+        print( "  Después vuelve a ejecutar `niwa update`.")
+        sys.exit(1)
+
+    # 1. Detect current branch dynamically — no more hardcoded ``main``
+    # (PR-58a). Previously ``git pull origin main`` mixed release
+    # lines when the install tracked ``v0.2``.
+    branch_result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(repo_dir),
+        capture_output=True, text=True, timeout=10,
+    )
+    current_branch = (branch_result.stdout or "").strip()
+    if not current_branch or current_branch == "HEAD":
+        print("  \u274c No se pudo determinar la rama actual.")
+        print("  El repo parece estar en detached HEAD. Haz checkout de una")
+        print("  rama (p. ej. `git checkout v0.2`) antes de actualizar.")
+        sys.exit(1)
+
+    # 2. Git pull
+    print(f"  \u2192 Pulling latest code (branch: {current_branch})...")
+    result = subprocess.run(
+        ["git", "pull", "origin", current_branch], cwd=str(repo_dir),
+        capture_output=True, text=True,
+    )
     if result.returncode != 0:
-        print(f"  \u26a0\ufe0f  Git pull failed: {result.stderr[:200]}")
-        print("  Continuing with current code...")
-    else:
-        print(f"  \u2713 {result.stdout.strip()}")
+        print(f"  \u274c Git pull failed: {result.stderr[:300]}")
+        print("  Resuelve el problema y vuelve a ejecutar `niwa update`.")
+        sys.exit(1)
+    print(f"  \u2713 {result.stdout.strip()}")
 
     # 2. Copy updated files (preserve secrets/config)
     print("  \u2192 Updating executor...")

@@ -939,14 +939,13 @@ export function useUpdateCapabilityProfile(projectKey: string | undefined) {
 
 // ── System ──
 export function useSystemUpdate() {
+  // PR-58a: the endpoint no longer runs update — it returns an
+  // action intent describing what the operator must run on the host.
+  // The UI surfaces the command with a copy-to-clipboard button.
   return useMutation({
     mutationFn: () =>
-      apiPost<{
-        ok: boolean;
-        message: string;
-        manual_steps?: string[];
-        needs_restart?: boolean;
-        pull?: string;
-      }>('system/update', {}),
+      apiPost<import('../types').SystemUpdateIntent>(
+        'system/update', {},
+      ),
   });
 }

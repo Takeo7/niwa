@@ -222,7 +222,36 @@ export type Settings = Record<string, string>;
 // ── Version ──
 export interface VersionInfo {
   version: string;
+  name?: string;
+  // PR-58a: enriched fields for the update UX.
+  branch?: string | null;
+  commit?: string | null;
+  commit_short?: string | null;
+  latest_remote_commit?: string | null;
+  needs_update?: boolean;
+  schema_version?: number | null;
+  repo_dirty?: boolean;
+  last_backup_path?: string | null;
+  last_backup_at?: string | null;
+  needs_restart?: boolean;
   [key: string]: unknown;
+}
+
+// PR-58a: the UI no longer executes update. The endpoint returns an
+// ``action_required='run_cli'`` intent describing which command the
+// operator should run on the host. The UI renders the command with
+// a copy-to-clipboard button.
+export interface SystemUpdateIntent {
+  ok: boolean;
+  action_required?: 'run_cli';
+  command?: string;
+  current_commit?: string | null;
+  current_commit_short?: string | null;
+  branch?: string | null;
+  latest_remote_commit?: string | null;
+  needs_update?: boolean;
+  repo_dirty?: boolean;
+  message?: string;
 }
 
 // ── Dashboard ──
