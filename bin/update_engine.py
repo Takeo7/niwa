@@ -316,27 +316,131 @@ def _read_app_port(ctx: _Ctx) -> Optional[int]:
     return 8080
 
 
+def _read_schema_version(ctx: _Ctx) -> Optional[int]:
+    """Read ``MAX(version)`` from the schema_version table. Returns
+    ``None`` if the DB doesn't exist or the table hasn't been
+    created yet — both are benign on fresh installs."""
+    env_db = os.environ.get("NIWA_DB_PATH", "")
+    db_path = Path(env_db) if env_db else (ctx.install_dir / "data" / "niwa.sqlite3")
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+            return row[0] if row and row[0] is not None else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _app_container_is_up(ctx: _Ctx) -> bool:
+    """Return True if ``docker compose ps`` reports the app container
+    as running. False on any failure/unreachable docker — the caller
+    interprets False as "not confidently up" and can combine with
+    HTTP /health to decide."""
+    compose_file = ctx.install_dir / "docker-compose.yml"
+    if not compose_file.exists():
+        return True  # nothing to check — assume OK (bare metal dev)
+    try:
+        r = _run(
+            ctx, "docker", "compose", "-f", str(compose_file),
+            "ps", "--format", "json", "app", timeout=15,
+        )
+        if r.returncode != 0:
+            return False
+        # ``docker compose ps --format json`` prints one JSON object
+        # per line. We want "State": "running" (or "Up") for the
+        # ``app`` service.
+        for raw in (r.stdout or "").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                entry = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            state = (
+                entry.get("State")
+                or entry.get("state")
+                or entry.get("Status")
+                or ""
+            ).lower()
+            if "running" in state or state == "up":
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _default_health_check(ctx: _Ctx) -> bool:
-    """Wait for the app to respond to ``/health``. Retries with a
-    short backoff for up to ~60s total — the container restart
-    alone can take 20s on a slow disk.
+    """Post-update smoke: wait for /health, verify schema_version
+    advanced (only if it was set before), and confirm the app
+    container is actually Up.
+
+    Returns False at the first step that fails so auto-revert kicks
+    in. The three signals together catch more failure modes than
+    any one of them alone:
+
+      * /health alone: passes even if migrations failed silently
+        or the container is in a degraded auto-restart loop.
+      * schema_version alone: no signal if the DB wasn't migrated.
+      * docker ps alone: passes even if the app is crashlooping
+        inside the container.
+
+    ``before_schema_version`` in the manifest is captured by
+    ``perform_update`` before git pull. The comparison rule (per
+    review): if before was int, after must be int AND >= before.
+    If before was None, we do NOT convert that into a revert — a
+    fresh install's first update wouldn't have a baseline.
     """
     port = _read_app_port(ctx)
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.monotonic() + 60
     attempt = 0
+    http_ok = False
     while time.monotonic() < deadline:
         attempt += 1
         try:
             with urllib.request.urlopen(url, timeout=5) as r:
                 if r.status == 200:
-                    ctx.printer(f"  ✓ health-check OK tras {attempt} intentos")
-                    return True
+                    http_ok = True
+                    break
         except (urllib.error.URLError, urllib.error.HTTPError, OSError):
             pass
         time.sleep(min(attempt, 5))
-    ctx.printer(f"  ❌ health-check falló en {url} tras {attempt} intentos")
-    return False
+    if not http_ok:
+        ctx.printer(f"  ❌ health-check: /health no respondió tras {attempt} intentos")
+        return False
+    ctx.printer(f"  ✓ /health OK tras {attempt} intentos")
+
+    # Schema version check — only if we had a baseline.
+    before = ctx.manifest.get("before_schema_version")
+    after = _read_schema_version(ctx)
+    if before is not None:
+        if after is None:
+            ctx.printer(
+                "  ❌ schema_version: antes era "
+                f"{before}, después es None — migración falló o DB inaccesible"
+            )
+            return False
+        if after < before:
+            ctx.printer(
+                f"  ❌ schema_version retrocedió: {before} → {after}"
+            )
+            return False
+        ctx.printer(f"  ✓ schema_version: {before} → {after}")
+    else:
+        # Sin baseline — registrar lo que vemos pero no bloquear.
+        ctx.printer(f"  ✓ schema_version post-update: {after} (sin baseline)")
+
+    # Docker container check.
+    if not _app_container_is_up(ctx):
+        ctx.printer("  ❌ docker compose ps: container app no está 'running'")
+        return False
+    ctx.printer("  ✓ docker compose ps: app Up")
+    return True
 
 
 def _get_db_path(ctx: _Ctx) -> Path:
@@ -687,6 +791,7 @@ def perform_update(
         "branch": None,
         "before_commit": None,
         "after_commit": None,
+        "before_schema_version": None,
         "backup_path": None,
         "components_updated": [],
         "needs_restart": False,
@@ -712,6 +817,11 @@ def perform_update(
     ctx.manifest["branch"] = branch
 
     ctx.manifest["before_commit"] = _git(ctx, "rev-parse", "HEAD")
+    # PR final 2: baseline for the post-update schema_version check
+    # in the default health-check. Read BEFORE backup so a bad
+    # backup that corrupts the DB still leaves us with a valid
+    # comparison target.
+    ctx.manifest["before_schema_version"] = _read_schema_version(ctx)
 
     if not _perform_backup(ctx):
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
