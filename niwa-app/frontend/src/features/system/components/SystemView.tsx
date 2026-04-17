@@ -8,6 +8,7 @@ import {
   IconPalette,
   IconCloudUpload,
   IconBrandGithub,
+  IconRefresh,
 } from '@tabler/icons-react';
 import { ServicesPanel } from './ServicesPanel';
 import { AgentsPanel } from './AgentsPanel';
@@ -17,6 +18,7 @@ import { LogsPanel } from './LogsPanel';
 import { StylesPanel } from './StylesPanel';
 import { DeploymentsPanel } from './DeploymentsPanel';
 import { GithubPanel } from './GithubPanel';
+import { UpdatePanel } from './UpdatePanel';
 
 export function SystemView() {
   return (
@@ -70,6 +72,12 @@ export function SystemView() {
           >
             GitHub
           </Tabs.Tab>
+          <Tabs.Tab
+            value="update"
+            leftSection={<IconRefresh size={16} />}
+          >
+            Actualizar
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="services" pt="md">
@@ -95,6 +103,9 @@ export function SystemView() {
         </Tabs.Panel>
         <Tabs.Panel value="github" pt="md">
           <GithubPanel />
+        </Tabs.Panel>
+        <Tabs.Panel value="update" pt="md">
+          <UpdatePanel />
         </Tabs.Panel>
       </Tabs>
     </Stack>
