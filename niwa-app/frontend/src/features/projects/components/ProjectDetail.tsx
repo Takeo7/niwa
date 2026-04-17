@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Title,
@@ -13,6 +13,9 @@ import {
   Card,
   SimpleGrid,
   Progress,
+  Modal,
+  TextInput,
+  Textarea,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
 import { notifications } from '@mantine/notifications';
@@ -23,11 +26,14 @@ import {
   IconX,
   IconCloudUpload,
   IconExternalLink,
+  IconPlus,
+  IconEdit,
 } from '@tabler/icons-react';
 import {
   useProject,
   useProjectUploads,
   useUploadFile,
+  useUpdateProject,
 } from '../hooks/useProjects';
 import {
   useTasks,
@@ -37,9 +43,11 @@ import {
 } from '../../../shared/api/queries';
 import { FileTree } from './FileTree';
 import { CapabilitiesTab } from './CapabilitiesTab';
+import { TaskForm } from '../../tasks/components/TaskForm';
 import type { Task, Project, Deployment } from '../../../shared/types';
 
 function TaskRow({ task }: { task: Task }) {
+  const navigate = useNavigate();
   const statusColor: Record<string, string> = {
     pendiente: 'yellow',
     en_progreso: 'blue',
@@ -48,7 +56,15 @@ function TaskRow({ task }: { task: Task }) {
     hecha: 'green',
   };
   return (
-    <Group justify="space-between" py={4}>
+    <Group
+      justify="space-between"
+      py={4}
+      px="xs"
+      style={{ cursor: 'pointer', borderRadius: 4 }}
+      onClick={() => navigate(`/tasks/${task.id}`)}
+      role="link"
+      aria-label={`Abrir tarea ${task.title}`}
+    >
       <Text size="sm" lineClamp={1} style={{ flex: 1 }}>
         {task.title}
       </Text>
@@ -67,6 +83,9 @@ export function ProjectDetail() {
   const { data: uploads } = useProjectUploads(slug);
   const uploadFile = useUploadFile(slug || '');
   const [activeTab, setActiveTab] = useState<string | null>('overview');
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [focusDirectory, setFocusDirectory] = useState(false);
 
   if (isLoading) {
     return (
@@ -105,6 +124,24 @@ export function ProjectDetail() {
       <Group justify="space-between">
         <Title order={3}>{project.name}</Title>
         <Group gap="xs">
+          <Button
+            size="compact-sm"
+            variant="light"
+            leftSection={<IconEdit size={14} />}
+            onClick={() => {
+              setFocusDirectory(false);
+              setEditOpen(true);
+            }}
+          >
+            Editar
+          </Button>
+          <Button
+            size="compact-sm"
+            leftSection={<IconPlus size={14} />}
+            onClick={() => setTaskFormOpen(true)}
+          >
+            Nueva tarea
+          </Button>
           <Badge color="blue" variant="light">
             {project.open_tasks} abiertas
           </Badge>
@@ -148,7 +185,13 @@ export function ProjectDetail() {
                 {project.done_tasks} de {project.total_tasks} tareas completadas ({progressPct}%)
               </Text>
             </Card>
-            <DeployCard project={project} />
+            <DeployCard
+              project={project}
+              onConfigure={() => {
+                setFocusDirectory(true);
+                setEditOpen(true);
+              }}
+            />
           </SimpleGrid>
         </Tabs.Panel>
 
@@ -226,6 +269,18 @@ export function ProjectDetail() {
           </Stack>
         </Tabs.Panel>
       </Tabs>
+
+      <TaskForm
+        opened={taskFormOpen}
+        onClose={() => setTaskFormOpen(false)}
+        initialProjectId={project.id}
+      />
+      <EditProjectModal
+        opened={editOpen}
+        onClose={() => setEditOpen(false)}
+        project={project}
+        focusDirectory={focusDirectory}
+      />
     </Stack>
   );
 }
@@ -236,7 +291,100 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function DeployCard({ project }: { project: Project }) {
+function EditProjectModal({
+  opened,
+  onClose,
+  project,
+  focusDirectory,
+}: {
+  opened: boolean;
+  onClose: () => void;
+  project: Project;
+  focusDirectory: boolean;
+}) {
+  const updateProject = useUpdateProject();
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description || '');
+  const [directory, setDirectory] = useState(project.directory || '');
+
+  useEffect(() => {
+    if (opened) {
+      setName(project.name);
+      setDescription(project.description || '');
+      setDirectory(project.directory || '');
+    }
+  }, [opened, project]);
+
+  async function handleSave() {
+    try {
+      await updateProject.mutateAsync({
+        slug: project.slug,
+        name,
+        description,
+        directory: directory.trim() || undefined,
+      });
+      notifications.show({
+        title: 'Proyecto actualizado',
+        message: name,
+        color: 'green',
+      });
+      onClose();
+    } catch (err) {
+      notifications.show({
+        title: 'Error al guardar',
+        message: err instanceof Error ? err.message : 'Fallo desconocido',
+        color: 'red',
+      });
+    }
+  }
+
+  return (
+    <Modal opened={opened} onClose={onClose} title="Editar proyecto">
+      <Stack gap="sm">
+        <TextInput
+          label="Nombre"
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          required
+        />
+        <Textarea
+          label="Descripción"
+          value={description}
+          onChange={(e) => setDescription(e.currentTarget.value)}
+          minRows={3}
+        />
+        <TextInput
+          label="Directorio"
+          value={directory}
+          onChange={(e) => setDirectory(e.currentTarget.value)}
+          placeholder="/home/niwa/projects/<slug>"
+          description="Ruta absoluta donde Claude y el executor trabajarán sobre el proyecto. Déjalo vacío para autogenerar."
+          autoFocus={focusDirectory}
+        />
+        <Group justify="flex-end" mt="sm">
+          <Button variant="subtle" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleSave}
+            loading={updateProject.isPending}
+            disabled={!name.trim()}
+          >
+            Guardar
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+function DeployCard({
+  project,
+  onConfigure,
+}: {
+  project: Project;
+  onConfigure: () => void;
+}) {
   const deployments = useDeployments();
   const deploy = useDeployProject();
   const undeploy = useUndeployProject();
@@ -292,10 +440,20 @@ function DeployCard({ project }: { project: Project }) {
         )}
       </Group>
       {!hasDirectory ? (
-        <Text size="sm" c="dimmed">
-          Este proyecto no tiene directorio asignado. Asigna uno en Editar
-          proyecto antes de hacer deploy.
-        </Text>
+        <Stack gap="xs">
+          <Text size="sm" c="dimmed">
+            Este proyecto no tiene directorio asignado. Asigna uno para
+            poder desplegar.
+          </Text>
+          <Button
+            variant="light"
+            size="compact-sm"
+            leftSection={<IconEdit size={14} />}
+            onClick={onConfigure}
+          >
+            Configurar directorio
+          </Button>
+        </Stack>
       ) : isActive && deployment?.url ? (
         <Stack gap="xs">
           <Group gap="xs">

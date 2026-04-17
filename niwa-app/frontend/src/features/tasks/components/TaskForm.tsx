@@ -21,6 +21,9 @@ interface Props {
   task?: Task | null;
   /** Pre-select this status when creating (e.g. kanban column "+"). */
   initialStatus?: string;
+  /** Pre-select this project when creating (e.g. "Nueva tarea" desde
+   * la vista de un proyecto). Only applies in create mode. */
+  initialProjectId?: string | null;
 }
 
 const STATUS_OPTIONS = [
@@ -46,7 +49,13 @@ const AREA_OPTIONS = [
   { value: 'sistema', label: 'Sistema' },
 ];
 
-export function TaskForm({ opened, onClose, task, initialStatus }: Props) {
+export function TaskForm({
+  opened,
+  onClose,
+  task,
+  initialStatus,
+  initialProjectId,
+}: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState('pendiente');
@@ -83,13 +92,13 @@ export function TaskForm({ opened, onClose, task, initialStatus }: Props) {
       setDescription('');
       setStatus(initialStatus || 'pendiente');
       setPriority('media');
-      setProjectId(null);
+      setProjectId(initialProjectId || null);
       setDueDate(null);
       setStartDate(null);
       setArea(null);
       setUrgent(false);
     }
-  }, [task, opened, initialStatus, isEditing]);
+  }, [task, opened, initialStatus, initialProjectId, isEditing]);
 
   const projectOptions = (projects || []).map((p) => ({
     value: String(p.id),
