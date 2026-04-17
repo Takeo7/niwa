@@ -1100,6 +1100,11 @@ def _prepare_backend_env(profile: dict) -> dict | None:
     For ``claude_code``: injects ``ANTHROPIC_API_KEY`` and
     ``CLAUDE_CODE_OAUTH_TOKEN`` from executor globals.
 
+    Additionally, for any v0.2 backend, injects the stored GitHub PAT
+    as ``GITHUB_TOKEN`` + ``GH_TOKEN`` + ``GIT_ASKPASS`` (PR-50) so
+    ``git clone``/``git push`` work transparently. No-op if the admin
+    hasn't connected GitHub yet.
+
     Returns None if no credentials are available (caller decides
     whether that's fatal).
     """
