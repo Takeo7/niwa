@@ -2506,6 +2506,24 @@ def _latest_remote_commit(repo: Path, branch: str, ttl: float = 60.0) -> Optiona
     return sha
 
 
+def _read_last_update_entry() -> Optional[dict]:
+    """Read the last entry from the update-log.json written by the
+    engine (PR-58b2). Returns ``None`` if the log is missing or
+    corrupt — both are benign on a fresh install."""
+    install_dir = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
+    log_path = install_dir / "data" / "update-log.json"
+    if not log_path.exists():
+        return None
+    try:
+        entries = json.loads(log_path.read_text()) or []
+        if not isinstance(entries, list) or not entries:
+            return None
+        last = entries[-1]
+        return last if isinstance(last, dict) else None
+    except Exception:
+        return None
+
+
 def _find_last_backup() -> tuple[Optional[str], Optional[str]]:
     """Return ``(path, iso_mtime)`` of the most recent backup, or
     ``(None, None)`` if none."""
@@ -2577,6 +2595,8 @@ def _collect_version_info() -> dict:
         commit and latest_remote and commit != latest_remote
     )
 
+    last_update = _read_last_update_entry()
+
     return {
         "version": NIWA_VERSION,
         "name": "Niwa",
@@ -2590,6 +2610,11 @@ def _collect_version_info() -> dict:
         "last_backup_path": last_backup_path,
         "last_backup_at": last_backup_at,
         "needs_restart": False,
+        # PR-58b2: surface the most recent update attempt so the UI
+        # can show a banner like "última actualización: hace 2h,
+        # revertida por health-check fallido". ``None`` on a fresh
+        # install that hasn't run ``niwa update`` yet.
+        "last_update": last_update,
     }
 
 
