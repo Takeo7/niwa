@@ -1041,9 +1041,10 @@ class ClaudeCodeAdapter(BackendAdapter):
             else:
                 outcome = "failure"
                 if conn and stderr_output:
+                    from backend_adapters.base import scrub_secrets
                     runs_service.record_event(
                         run_id, "error", conn,
-                        message=stderr_output[:2000],
+                        message=scrub_secrets(stderr_output[:2000]),
                     )
 
             # Finish run

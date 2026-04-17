@@ -82,3 +82,40 @@ class BackendAdapter(ABC):
 
         Returns a dict suitable for ``backend_runs.observed_usage_signals_json``.
         """
+
+
+# ── Secret scrubbing (shared across adapters, PR-50) ──────────────────
+
+import re as _re
+
+# GitHub PAT formats that may appear in subprocess output after PR-50
+# started injecting ``GITHUB_TOKEN`` into the env:
+#
+#   - classic PATs:       ``ghp_`` + 36 alphanumerics
+#   - fine-grained PATs:  ``github_pat_`` + (22-char + ``_`` + 59-char block)
+#   - legacy OAuth grants: ``gho_``, ``ghu_``, ``ghs_``, ``ghr_`` + 36 chars
+#
+# If a subprocess ever echoes one (a git error, a URL with embedded
+# credentials, a ``curl -v`` log) it would otherwise land in
+# ``backend_run_events.message`` and surface in the UI / DB dump.
+_SECRET_PATTERNS = [
+    _re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    _re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),
+    _re.compile(r"gh[osur]_[A-Za-z0-9]{20,}"),
+]
+
+
+def scrub_secrets(text: str) -> str:
+    """Replace known-secret patterns with ``<redacted>``.
+
+    Conservative: only matches well-defined GitHub PAT prefixes. Not a
+    DLP tool — its job is to prevent our own injected credentials from
+    leaking back through event logs, not to catch every possible
+    secret.
+    """
+    if not text:
+        return text
+    out = text
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub("<redacted>", out)
+    return out
