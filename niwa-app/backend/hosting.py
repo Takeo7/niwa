@@ -157,18 +157,68 @@ def _detect_public_ip(timeout: float = 3.0):
     """Best-effort public IP detection. Returns None if no echo service
     answers. Used by the hosting wizard to tell the user which IP to put
     in their wildcard DNS record."""
+    import ipaddress
     import urllib.request
     for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "niwa/0.2"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 ip = r.read().decode().strip()
-                # Crude sanity check: digits + dots, v4 only for now.
-                if ip and all(c.isdigit() or c == "." for c in ip) and ip.count(".") == 3:
-                    return ip
+                try:
+                    ipaddress.IPv4Address(ip)
+                except ValueError:
+                    continue
+                return ip
         except Exception:
             continue
     return None
+
+
+def _is_public_hostname(hostname: str) -> bool:
+    """Reject hostnames that would let the ``/api/hosting/status`` probe
+    reach internal networks (SSRF defense-in-depth).
+
+    Even though the endpoint is admin-only, the stored ``svc.hosting.domain``
+    is free-form text. Rejecting localhost / RFC1918 / link-local / loopback
+    keeps the server from being used as a probe against its own cloud
+    metadata endpoint or an internal service if an admin typo happens.
+
+    The check requires a syntactic FQDN (contains a ``.`` and is not a bare
+    IP) and that *all* resolved A records are public IPs.
+    """
+    import ipaddress
+    h = (hostname or "").strip().lower()
+    if not h or "." not in h:
+        return False
+    # Reject raw IPs (they bypass the FQDN contract anyway).
+    try:
+        ipaddress.ip_address(h)
+        return False
+    except ValueError:
+        pass
+    if h in {"localhost", "localhost.localdomain"}:
+        return False
+    ips = _resolve_a_records(h)
+    if not ips:
+        return True  # Unresolvable is fine — we just won't probe successfully.
+    for ip_str in ips:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        # is_reserved is intentionally excluded: TEST-NET-3 (203.0.113.0/24)
+        # is marked reserved but is the IETF-standard address for tests.
+        # Link-local covers 169.254.169.254 (AWS metadata) which is what
+        # actually matters for SSRF defense.
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
 
 
 def _resolve_a_records(hostname: str):
@@ -259,24 +309,31 @@ def get_status() -> dict:
             "host": probe_sub,
             "ips": _resolve_a_records(probe_sub),
         }
-        # Probe HTTPS first (Cloudflare proxy default), then plain HTTP.
-        tried: list[str] = []
-        for scheme in ("https", "http"):
-            url = f"{scheme}://{domain}/"
-            tried.append(url)
-            probe = _http_probe(url)
-            if probe["ok"]:
-                result["http"] = {
-                    "tried": tried,
-                    "ok": True,
-                    "status": probe["status"],
-                    "url": url,
-                    "error": None,
-                }
-                break
+        # SSRF defense-in-depth: only HTTP-probe domains whose A records
+        # are public IPs. We still return DNS info either way so the
+        # wizard can tell the user what's wrong.
+        if _is_public_hostname(domain):
+            # Probe HTTPS first (Cloudflare proxy default), then plain HTTP.
+            tried: list[str] = []
+            probe: dict | None = None
+            for scheme in ("https", "http"):
+                url = f"{scheme}://{domain}/"
+                tried.append(url)
+                probe = _http_probe(url)
+                if probe["ok"]:
+                    result["http"] = {
+                        "tried": tried,
+                        "ok": True,
+                        "status": probe["status"],
+                        "url": url,
+                        "error": None,
+                    }
+                    break
+            else:
+                result["http"]["tried"] = tried
+                result["http"]["error"] = probe["error"] if probe else None
         else:
-            result["http"]["tried"] = tried
-            result["http"]["error"] = probe["error"] if tried else None
+            result["http"]["error"] = "private_or_invalid_host"
         if public_ip:
             result["suggested_records"] = [
                 {"type": "A", "name": "@", "value": public_ip, "proxied": True},

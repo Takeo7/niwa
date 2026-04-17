@@ -254,7 +254,7 @@ function Step3Domain({
         <Badge mr="xs" size="sm">
           3
         </Badge>
-        Dice aquí tu dominio
+        Escribe aquí tu dominio
       </Text>
       <Group gap="xs">
         <TextInput

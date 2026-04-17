@@ -135,14 +135,14 @@ def test_status_without_domain_returns_empty_shape(server, monkeypatch):
 def test_status_with_domain_and_mocks(server, monkeypatch):
     h = server["hosting"]
     _set_setting(server["app"], "svc.hosting.domain", "example.com")
-    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: "203.0.113.10")
+    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: "1.2.3.4")
     monkeypatch.setattr(h, "_port_listening", lambda host, p, timeout=2.0: True)
 
     def _fake_dns(host):
         if host == "example.com":
-            return ["203.0.113.10"]
+            return ["1.2.3.4"]
         if host == "niwa-probe.example.com":
-            return ["203.0.113.10"]
+            return ["1.2.3.4"]
         return []
 
     monkeypatch.setattr(h, "_resolve_a_records", _fake_dns)
@@ -157,27 +157,27 @@ def test_status_with_domain_and_mocks(server, monkeypatch):
     status, out = _get(server["base"], "/api/hosting/status")
     assert status == 200, out
     assert out["domain"] == "example.com"
-    assert out["public_ip"] == "203.0.113.10"
+    assert out["public_ip"] == "1.2.3.4"
     assert out["caddy_listening"] is True
-    assert out["dns"] == {"host": "example.com", "ips": ["203.0.113.10"]}
+    assert out["dns"] == {"host": "example.com", "ips": ["1.2.3.4"]}
     assert out["wildcard"] == {
         "host": "niwa-probe.example.com",
-        "ips": ["203.0.113.10"],
+        "ips": ["1.2.3.4"],
     }
     assert out["http"]["ok"] is True
     assert out["http"]["status"] == 200
     assert out["http"]["url"] == "https://example.com/"
     # The suggested records must both point to the detected public IP.
     assert out["suggested_records"] == [
-        {"type": "A", "name": "@", "value": "203.0.113.10", "proxied": True},
-        {"type": "A", "name": "*", "value": "203.0.113.10", "proxied": True},
+        {"type": "A", "name": "@", "value": "1.2.3.4", "proxied": True},
+        {"type": "A", "name": "*", "value": "1.2.3.4", "proxied": True},
     ]
 
 
 def test_status_dns_failures_degrade_gracefully(server, monkeypatch):
     h = server["hosting"]
     _set_setting(server["app"], "svc.hosting.domain", "bogus.example")
-    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: "203.0.113.10")
+    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: "1.2.3.4")
     monkeypatch.setattr(h, "_port_listening", lambda host, p, timeout=2.0: False)
     monkeypatch.setattr(h, "_resolve_a_records", lambda host: [])
     monkeypatch.setattr(
@@ -196,6 +196,56 @@ def test_status_dns_failures_degrade_gracefully(server, monkeypatch):
     ]
     # Still suggests the records so the user can fix DNS.
     assert len(out["suggested_records"]) == 2
+
+
+def test_status_refuses_to_http_probe_private_ips(server, monkeypatch):
+    """SSRF defense: if the configured domain resolves to a private /
+    loopback / link-local IP, the HTTP probe is skipped and the status
+    surfaces ``error='private_or_invalid_host'``. Prevents an admin from
+    using the endpoint to probe internal services (metadata endpoints,
+    RFC1918, etc.).
+    """
+    h = server["hosting"]
+    _set_setting(server["app"], "svc.hosting.domain", "internal.example.com")
+    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: "1.2.3.4")
+    monkeypatch.setattr(h, "_port_listening", lambda host, p, timeout=2.0: False)
+    # Resolves to a private RFC1918 address — MUST be rejected.
+    monkeypatch.setattr(h, "_resolve_a_records", lambda host: ["10.0.0.5"])
+
+    probe_called = {"n": 0}
+
+    def _should_not_be_called(url, timeout=5.0):
+        probe_called["n"] += 1
+        return {"ok": True, "status": 200, "error": None}
+
+    monkeypatch.setattr(h, "_http_probe", _should_not_be_called)
+    status, out = _get(server["base"], "/api/hosting/status")
+    assert status == 200
+    assert probe_called["n"] == 0
+    assert out["http"]["ok"] is False
+    assert out["http"]["error"] == "private_or_invalid_host"
+    # DNS info is still returned so the wizard can explain the failure.
+    assert out["dns"]["ips"] == ["10.0.0.5"]
+
+
+def test_status_refuses_bare_ip_as_domain(server, monkeypatch):
+    """A bare IP address as ``svc.hosting.domain`` is never a legitimate
+    hosting domain — reject."""
+    h = server["hosting"]
+    _set_setting(server["app"], "svc.hosting.domain", "8.8.8.8")
+    monkeypatch.setattr(h, "_detect_public_ip", lambda timeout=3.0: None)
+    monkeypatch.setattr(h, "_port_listening", lambda host, p, timeout=2.0: False)
+    monkeypatch.setattr(h, "_resolve_a_records", lambda host: [])
+    probe_called = {"n": 0}
+    monkeypatch.setattr(
+        h, "_http_probe",
+        lambda url, timeout=5.0: (probe_called.__setitem__("n", probe_called["n"] + 1)
+                                  or {"ok": True, "status": 200, "error": None}),
+    )
+    status, out = _get(server["base"], "/api/hosting/status")
+    assert status == 200
+    assert probe_called["n"] == 0
+    assert out["http"]["error"] == "private_or_invalid_host"
 
 
 def test_status_tolerates_public_ip_detection_failure(server, monkeypatch):
