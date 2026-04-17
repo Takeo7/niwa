@@ -408,3 +408,86 @@ class TestAdapterPromptInjection:
         # The task title should appear as the name suggestion so
         # Claude can pick something sensible even on the first try.
         assert "Build my blog" in prompt
+
+    # PR-42 — Bug 34: the PR-38 prompt was too soft ("if this
+    # involves creating artifacts…") and Claude used /tmp/ anyway.
+    # The hardened prompt must: (1) use uppercase imperative, (2)
+    # explicitly blacklist the paths Claude defaults to, (3) give a
+    # concrete tool-call example in JSON so there's no ambiguity.
+    # These tests pin the three guardrails in the adapter source —
+    # dropping any of them would revert to the Bug 34 behaviour.
+
+    def test_prompt_blacklists_tmp_and_common_paths(self):
+        adapter = self._load_adapter()
+        task = {
+            "title": "x", "project_id": None,
+            "project_directory": "/opt/niwa/data/projects/p-abc",
+        }
+        prompt = adapter._build_prompt(task)
+        # The blacklist must name the paths Claude was reaching for.
+        assert "/tmp/" in prompt, (
+            "The prompt must explicitly forbid /tmp/ — that's the "
+            "path Claude defaulted to in Bug 34 even though a "
+            "project_directory was provided."
+        )
+        assert "/home/" in prompt
+        assert "/root/" in prompt
+        # Uppercase imperative vs the old conditional prose.
+        assert "FORBIDDEN" in prompt or "STRICT" in prompt, (
+            "The instruction must be imperative, not conditional. "
+            "Claude treated the PR-38 wording as a suggestion."
+        )
+
+    def test_prompt_includes_concrete_tool_call_example(self):
+        """A literal JSON example of the `project_create` arguments
+        eliminates ambiguity about what Claude should pass. Without
+        an example, Claude sometimes guesses the schema."""
+        adapter = self._load_adapter()
+        task = {
+            "title": "Build a blog",
+            "project_id": None,
+            "project_directory": "/opt/niwa/data/projects/blog-xyz",
+        }
+        prompt = adapter._build_prompt(task)
+        # Look for a fenced json block that contains all four args.
+        assert "```json" in prompt
+        # The fenced block should include the four keys.
+        assert '"name"' in prompt
+        assert '"area"' in prompt
+        assert '"directory"' in prompt
+        assert '"description"' in prompt
+
+    def test_prompt_tells_claude_relative_paths_work(self):
+        """The PR-42 prompt tells Claude `cwd` is already the project
+        dir, so relative paths "just work". Without this hint Claude
+        defaults to absolute paths and misses the project dir."""
+        adapter = self._load_adapter()
+        task = {
+            "title": "x", "project_id": None,
+            "project_directory": "/opt/niwa/data/projects/p-abc",
+        }
+        prompt = adapter._build_prompt(task)
+        assert "relative" in prompt.lower(), (
+            "Tell Claude that relative paths resolve to the project "
+            "dir. Absolute paths were the Bug 34 footgun."
+        )
+
+    def test_prompt_preserves_conversational_escape_hatch(self):
+        """A task that is purely conversational ('resume this',
+        'explain how X works') should be allowed to skip
+        project_create without tripping the rule. The prompt must
+        keep that escape hatch — otherwise the adapter becomes too
+        rigid for non-artifact tasks."""
+        adapter = self._load_adapter()
+        task = {
+            "title": "resume lo del informe anual",
+            "project_id": None,
+            "project_directory": "/opt/niwa/data/projects/informe-xyz",
+        }
+        prompt = adapter._build_prompt(task)
+        assert "conversational" in prompt.lower() or \
+               "skip" in prompt.lower(), (
+            "The prompt must let conversational tasks off the hook — "
+            "forcing project_create on a 'summarise X' would be "
+            "noisy and create empty project rows."
+        )
