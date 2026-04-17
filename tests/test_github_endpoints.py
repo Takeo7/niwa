@@ -215,6 +215,55 @@ def test_delete_token_clears_row(server, monkeypatch):
     assert gh.get_pat() is None
 
 
+def test_post_token_forbidden_returns_403_and_does_not_persist(server, monkeypatch):
+    """GitHub 403 (rate limit or IP block) must NOT persist the token
+    and must surface a distinguishable status code to the UI."""
+    gh = server["gh"]
+    monkeypatch.setattr(
+        gh,
+        "_api_get",
+        lambda path, token, timeout=10.0: (
+            403,
+            {"message": "API rate limit exceeded"},
+            {},
+        ),
+    )
+    status, out = _request(
+        server["base"], "/api/github/token", method="POST",
+        body={"token": "ghp_throttled"},
+    )
+    assert status == 403
+    assert out["error"] == "forbidden"
+    _, state = _request(server["base"], "/api/github/status")
+    assert state["connected"] is False
+    assert gh.get_pat() is None
+
+
+def test_db_blob_is_not_plaintext(server, monkeypatch):
+    """Defense-in-depth pin: the row in ``github_tokens.token_encrypted``
+    MUST NOT contain the PAT literally, even in base64/hex/URL-encoded
+    form. Guards against a regression that reverts obfuscation."""
+    import sqlite3
+    gh = server["gh"]
+    monkeypatch.setattr(
+        gh, "_api_get",
+        lambda path, token, timeout=10.0: (200, {"login": "takeo7"}, {}),
+    )
+    _request(
+        server["base"], "/api/github/token", method="POST",
+        body={"token": "ghp_sensitive_SECRET_VALUE"},
+    )
+    with sqlite3.connect(server["db_path"]) as c:
+        row = c.execute(
+            "SELECT token_encrypted FROM github_tokens WHERE id = 1"
+        ).fetchone()
+    assert row is not None
+    blob = row[0]
+    assert "ghp_sensitive_SECRET_VALUE" not in blob
+    # And the token still round-trips correctly.
+    assert gh.get_pat() == "ghp_sensitive_SECRET_VALUE"
+
+
 def test_fine_grained_pat_missing_scopes_header_yields_empty_list(server, monkeypatch):
     """Fine-grained PATs don't return ``X-OAuth-Scopes``. The adapter
     must not explode and must persist an empty scopes list."""
