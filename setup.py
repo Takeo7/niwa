@@ -1372,7 +1372,12 @@ def execute_install(cfg: WizardConfig) -> None:
         "PLATFORM_RESTART_WHITELIST": ",".join(cfg.restart_whitelist),
         "NIWA_APP_USERNAME": cfg.username,
         "NIWA_APP_PASSWORD": cfg.password,
-        "NIWA_APP_SESSION_SECRET": generate_token(),
+        # PR-60: if the quick-install resolver already placed a value
+        # here (reinstall preserves the previous session secret by
+        # default), honour it — rotating it invalidates active logins.
+        "NIWA_APP_SESSION_SECRET": cfg.tokens.get(
+            "NIWA_APP_SESSION_SECRET", generate_token(),
+        ),
         "NIWA_APP_PUBLIC_BASE_URL": f"http://{'0.0.0.0' if cfg.bind_host == '0.0.0.0' else 'localhost'}:{cfg.app_port}",
         "NIWA_APP_AUTH_REQUIRED": "1",
         "NIWA_REGISTERED_CLAUDE": "1" if cfg.register_claude else "0",
@@ -2644,6 +2649,23 @@ def cmd_install(args) -> None:
     execute_install(cfg)
 
 
+def _load_existing_mcp_env(niwa_home: Path) -> Optional[dict]:
+    """Return the parsed ``secrets/mcp.env`` of an existing install, or
+    ``None`` on fresh install / missing file / parse error (PR-60).
+
+    Used by ``_resolve_quick_config`` to preserve secrets across a
+    same-mode reinstall so the admin's login and wired integrations
+    don't break every time the operator re-runs ``niwa install``.
+    """
+    try:
+        env_path = niwa_home / "secrets" / "mcp.env"
+        if not env_path.exists():
+            return None
+        return _read_env_file(env_path)
+    except Exception:
+        return None
+
+
 def _find_install_dir(provided: Optional[str] = None) -> Optional[Path]:
     """Locate an existing niwa install. Tries common locations."""
     if provided:
@@ -3403,21 +3425,51 @@ def build_quick_config(args) -> WizardConfig:
     # --- Restart whitelist: empty by default, operator edits post-install ---
     cfg.restart_whitelist = []
 
-    # --- Tokens ---
-    cfg.tokens["NIWA_LOCAL_TOKEN"] = generate_token()
-    cfg.tokens["NIWA_REMOTE_TOKEN"] = generate_token()
-    cfg.tokens["MCP_GATEWAY_AUTH_TOKEN"] = cfg.tokens["NIWA_LOCAL_TOKEN"]
+    # --- Tokens + credentials (PR-60: preserve by default on reinstall) ---
+    #
+    # Reinstall same-mode used to rotate tokens + admin password
+    # unconditionally. That breaks any client that had the old
+    # credentials wired (OpenClaw, admin's saved login). The contract
+    # is now: preserve by default, rotate only when the operator asks
+    # with ``--rotate-secrets`` or passes ``--admin-password`` (explicit
+    # wins).
+    existing = _load_existing_mcp_env(cfg.niwa_home)
+    rotate = bool(getattr(args, "rotate_secrets", False))
+
+    if existing and not rotate:
+        cfg.tokens["NIWA_LOCAL_TOKEN"] = existing.get(
+            "NIWA_LOCAL_TOKEN", generate_token())
+        cfg.tokens["NIWA_REMOTE_TOKEN"] = existing.get(
+            "NIWA_REMOTE_TOKEN", generate_token())
+        cfg.tokens["MCP_GATEWAY_AUTH_TOKEN"] = existing.get(
+            "MCP_GATEWAY_AUTH_TOKEN", cfg.tokens["NIWA_LOCAL_TOKEN"])
+    else:
+        cfg.tokens["NIWA_LOCAL_TOKEN"] = generate_token()
+        cfg.tokens["NIWA_REMOTE_TOKEN"] = generate_token()
+        cfg.tokens["MCP_GATEWAY_AUTH_TOKEN"] = cfg.tokens["NIWA_LOCAL_TOKEN"]
 
     # --- App web UI credentials ---
-    cfg.username = (getattr(args, "admin_user", None) or "niwa")
+    cfg.username = (getattr(args, "admin_user", None)
+                    or (existing.get("NIWA_APP_USERNAME") if existing and not rotate else None)
+                    or "niwa")
     provided_pw = getattr(args, "admin_password", None)
     if provided_pw:
         cfg.password = provided_pw
+    elif existing and not rotate and existing.get("NIWA_APP_PASSWORD"):
+        # Keep the existing password so the admin's login still works.
+        cfg.password = existing["NIWA_APP_PASSWORD"]
     else:
         # Auto-generate a readable password. Printed at the end of the
         # install. Never written to logs, only to secrets/mcp.env and
         # displayed once in the summary.
         cfg.password = generate_token()[:24]
+
+    # Session secret: must preserve too or every active login gets
+    # invalidated on reinstall.
+    if existing and not rotate and existing.get("NIWA_APP_SESSION_SECRET"):
+        cfg.tokens["NIWA_APP_SESSION_SECRET"] = existing["NIWA_APP_SESSION_SECRET"]
+    else:
+        cfg.tokens["NIWA_APP_SESSION_SECRET"] = generate_token()
 
     # --- Executor: enabled by default, claude provider ---
     cfg.executor_enabled = True
@@ -3568,14 +3620,21 @@ def cmd_install_quick(args) -> int:
         err(mode_mismatch)
         return 2
 
-    # Inform the operator when a same-mode reinstall will rotate secrets.
+    # Inform the operator about what a same-mode reinstall will do.
     existing_mode = detect_existing_quick_mode(cfg.niwa_home)
     if existing_mode == cfg.quick_mode:
-        warn(
-            f"Existing {existing_mode}-mode install detected at {cfg.niwa_home}. "
-            "This re-run will rotate tokens and the admin password "
-            "(DB data is preserved)."
-        )
+        if getattr(args, "rotate_secrets", False):
+            warn(
+                f"Existing {existing_mode}-mode install detected at {cfg.niwa_home}. "
+                "--rotate-secrets given — tokens, admin password and session secret WILL rotate "
+                "(DB data is preserved)."
+            )
+        else:
+            info(
+                f"Existing {existing_mode}-mode install detected at {cfg.niwa_home}. "
+                "Preserving tokens, admin password and session secret "
+                "(pass --rotate-secrets to force rotation)."
+            )
 
     print_quick_plan(cfg)
 
@@ -3792,6 +3851,14 @@ def main():
                            help="Niwa web UI username (default: niwa). Quick install only.")
     p_install.add_argument("--admin-password",
                            help="Niwa web UI password. If omitted, one is auto-generated.")
+    p_install.add_argument(
+        "--rotate-secrets", action="store_true",
+        help=(
+            "Force rotation of tokens + admin password + session secret "
+            "on reinstall. Default (PR-60): preserve existing secrets "
+            "so the admin's login and wired integrations don't break."
+        ),
+    )
     p_install.add_argument("--instance",
                            help="Instance name (default: niwa). Quick install only.")
     p_install.add_argument("--dir",
