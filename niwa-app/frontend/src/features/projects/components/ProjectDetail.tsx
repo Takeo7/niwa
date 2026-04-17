@@ -55,14 +55,22 @@ function TaskRow({ task }: { task: Task }) {
     revision: 'grape',
     hecha: 'green',
   };
+  const open = () => navigate(`/tasks/${task.id}`);
   return (
     <Group
       justify="space-between"
       py={4}
       px="xs"
       style={{ cursor: 'pointer', borderRadius: 4 }}
-      onClick={() => navigate(`/tasks/${task.id}`)}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          open();
+        }
+      }}
       role="link"
+      tabIndex={0}
       aria-label={`Abrir tarea ${task.title}`}
     >
       <Text size="sm" lineClamp={1} style={{ flex: 1 }}>
