@@ -5,7 +5,7 @@ Cada entrada: fecha, PR donde se encontró, descripción, ubicación, severidad.
 > **Nota 2026-04-18**: tres entradas previamente marcadas **ARREGLADO**
 > se han reabierto tras observar regresiones en producción:
 >
-> - **Bug 32** — "ARREGLADO en PR final 6" → **ARREGLADO PARCIAL**. El fix cubre 0 tool_use pero no el caso "1 tool_use + pregunta final".
+> - **Bug 32** — **ARREGLADO en PR-B1** tras ARREGLADO PARCIAL en PR final 6. El gate añade el discriminador "result_text termina en `?`" que cubre el caso "N tool_use + pregunta final" observado en prod. Queda pendiente verificación e2e con Claude CLI real (scope PR-D1).
 > - **Bug 34** — "ARREGLADO en PR-43/45" → **RECAÍDO**. Claude sigue escribiendo a `/tmp/` en el flow auto-project (sin `project_id`).
 > - **Feature 1** — "ARREGLADO en PR-38" → **ARREGLADO PARCIAL**. Safety net colapsa cuando Bug 34 está activo; los proyectos quedan invisibles en la UI.
 >
@@ -603,7 +603,10 @@ Tests actuales (`tests/test_auto_project.py::TestAdapterPromptInjection`, 8 caso
 
 **Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:826-870` — la lógica de outcome solo chequeaba exit code + permission_denials + is_error.
 **Severidad:** **media** (no siempre dispara, pero cuando lo hace es confuso para el usuario).
-**Estado:** **ARREGLADO PARCIAL en PR final 6** — el fix cubre el caso exacto observado (0 tool_use + end_turn + source!='chat') pero **NO** el caso de hoy **2026-04-18**: tarea ejecutiva donde Claude invoca 1 tool_use (ej. `mkdir /tmp/foo`) y **luego** termina con una pregunta en el texto final. Ejemplo observado: "Crea un proyecto test-mirror" → Claude hizo `Bash mkdir /tmp/test-mirror` + `result="Proyecto creado en /tmp/test-mirror. ¿Qué tipo quieres inicializar?"`. `tool_use_count=1` ⇒ el filtro de PR final 6 no dispara ⇒ task marcada `hecha`. **Regresión pendiente de fix (candidato PR final 7)**: afinar el discriminador — no es `tool_use_count`, es **"si el último assistant event antes de `stop_reason=end_turn` es texto (no tool_use), Claude terminó hablando, no actuando"**. Más robusto y cubre el caso cruzado.
+**Estado:** **ARREGLADO en PR-B1** (tras ARREGLADO PARCIAL en PR final 6). PR final 6 cubrió 0 tool_use + end_turn + source!='chat'; PR-B1 añade el discriminador "`result_text.rstrip(trivial).endswith('?')`" que OR-ea con el contador. Casos cubiertos:
+  - 0 tool_use + texto (PR final 6).
+  - N tool_use + pregunta final (PR-B1, regresión observada 2026-04-18: `Bash mkdir /tmp/test-mirror` + `result="Proyecto creado. ¿Qué tipo quieres inicializar?"`).
+  - Chat-origin tasks siguen exentas. Tests nuevos en `tests/test_claude_adapter_clarification.py`: `test_executive_one_tool_plus_question_needs_clarification`, `test_executive_n_tools_plus_statement_stays_success` (guard), `test_chat_source_with_tool_and_question_stays_success` (guard). Pendiente: verificación e2e con Claude CLI real — scope PR-D1.
 
 Opción (b) original sigue vigente para el 90% de los casos, y fue la decisión correcta con la info que teníamos.
 
