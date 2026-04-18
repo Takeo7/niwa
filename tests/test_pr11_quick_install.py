@@ -120,10 +120,14 @@ class TestCredentialDetection:
         # Token value MUST NOT appear in detail — only the env var name.
         assert "sk-redacted" not in out["detail"]
 
-    def test_claude_api_key_fallback(self, monkeypatch):
+    def test_claude_api_key_fallback(self, monkeypatch, tmp_path):
         monkeypatch.setattr(setup, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-val")
+        # Isolate from a real ~/.claude.json on the test host — without
+        # this, the new precedence (CLI session > API key) would make
+        # any real home dir leak into the result.
+        monkeypatch.setattr(setup.Path, "home", classmethod(lambda cls: tmp_path))
         out = setup.detect_claude_credentials()
         assert out["source"] == "env:ANTHROPIC_API_KEY"
         assert "secret-val" not in out["detail"]
@@ -174,6 +178,88 @@ class TestCredentialDetection:
         out = setup.detect_codex_credentials()
         assert out["authenticated"] is True
         assert str(codex_home) in out["detail"]
+
+    # ── PR-A4: precedence subscription > CLI session > API key ────────
+    def test_claude_config_file_wins_over_api_key(
+        self, monkeypatch, tmp_path
+    ):
+        """CLI login (~/.claude.json) must beat a raw API key in env.
+
+        Rationale: the installer promises "auth prioritises
+        subscriptions" (MVP-ROADMAP §1.3). An API key left in the
+        shell must not silently shadow a real CLI session.
+        """
+        monkeypatch.setattr(
+            setup, "which",
+            lambda name: "/usr/bin/claude" if name == "claude" else None,
+        )
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-lose")
+        monkeypatch.setattr(
+            setup.Path, "home", classmethod(lambda cls: tmp_path)
+        )
+        (tmp_path / ".claude.json").write_text("{}")
+        out = setup.detect_claude_credentials()
+        assert out["authenticated"] is True
+        assert out["source"] == "~/.claude.json"
+        assert "sk-should-lose" not in out["detail"]
+
+    def test_claude_setup_token_wins_over_config_and_api_key(
+        self, monkeypatch, tmp_path
+    ):
+        """Setup-token (subscription) beats both CLI session and API key."""
+        monkeypatch.setattr(
+            setup, "which",
+            lambda name: "/usr/bin/claude" if name == "claude" else None,
+        )
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-redacted")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-lose")
+        monkeypatch.setattr(
+            setup.Path, "home", classmethod(lambda cls: tmp_path)
+        )
+        (tmp_path / ".claude.json").write_text("{}")
+        out = setup.detect_claude_credentials()
+        assert out["source"] == "env:CLAUDE_CODE_OAUTH_TOKEN"
+        assert "tok-redacted" not in out["detail"]
+        assert "sk-should-lose" not in out["detail"]
+
+    def test_codex_auth_json_wins_over_api_key(
+        self, monkeypatch, tmp_path
+    ):
+        """ChatGPT Plus/Pro OAuth (auth.json) beats a raw OPENAI_API_KEY."""
+        monkeypatch.setattr(
+            setup, "which",
+            lambda name: "/usr/bin/codex" if name == "codex" else None,
+        )
+        monkeypatch.delenv("OPENAI_ACCESS_TOKEN", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-should-lose")
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text("{}")
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        out = setup.detect_codex_credentials()
+        assert out["authenticated"] is True
+        assert str(codex_home) in out["detail"]
+        assert "sk-should-lose" not in out["detail"]
+
+    def test_codex_auth_json_wins_over_access_token(
+        self, monkeypatch, tmp_path
+    ):
+        """Persistent subscription auth.json beats a CLI-session env token."""
+        monkeypatch.setattr(
+            setup, "which",
+            lambda name: "/usr/bin/codex" if name == "codex" else None,
+        )
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "oat-session")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text("{}")
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        out = setup.detect_codex_credentials()
+        assert out["authenticated"] is True
+        assert str(codex_home) in out["detail"]
+        assert "oat-session" not in out["detail"]
 
     def test_openclaw_missing(self, monkeypatch):
         monkeypatch.setattr(setup, "which", lambda _: None)

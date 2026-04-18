@@ -3318,19 +3318,16 @@ def detect_claude_credentials() -> dict:
             "source": "",
             "detail": "claude CLI not in PATH — Claude backend will be unavailable",
         }
+    # Precedence: subscription > CLI session > API key (MVP-ROADMAP §1.3).
+    # CLAUDE_CODE_OAUTH_TOKEN is the setup-token pasted from Claude
+    # Pro/Max (subscription); ~/.claude.json is the persisted CLI
+    # login; ANTHROPIC_API_KEY is the pay-per-call fallback.
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return {
             "cli": True,
             "authenticated": True,
             "source": "env:CLAUDE_CODE_OAUTH_TOKEN",
             "detail": "claude auth: CLAUDE_CODE_OAUTH_TOKEN present",
-        }
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return {
-            "cli": True,
-            "authenticated": True,
-            "source": "env:ANTHROPIC_API_KEY",
-            "detail": "claude auth: ANTHROPIC_API_KEY present",
         }
     cfg_file = Path.home() / ".claude.json"
     if cfg_file.is_file():
@@ -3339,6 +3336,13 @@ def detect_claude_credentials() -> dict:
             "authenticated": True,
             "source": "~/.claude.json",
             "detail": "claude auth: ~/.claude.json present",
+        }
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": "env:ANTHROPIC_API_KEY",
+            "detail": "claude auth: ANTHROPIC_API_KEY present",
         }
     return {
         "cli": True,
@@ -3363,6 +3367,18 @@ def detect_codex_credentials() -> dict:
             "source": "",
             "detail": "codex CLI not in PATH — Codex backend will be unavailable",
         }
+    # Precedence: subscription > CLI session > API key (MVP-ROADMAP §1.3).
+    # ~/.codex/auth.json holds ChatGPT Plus/Pro OAuth (subscription);
+    # OPENAI_ACCESS_TOKEN is an ephemeral CLI-session env token;
+    # OPENAI_API_KEY is the pay-per-call fallback.
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    if (codex_home / "auth.json").is_file():
+        return {
+            "cli": True,
+            "authenticated": True,
+            "source": f"{codex_home}/auth.json",
+            "detail": f"codex auth: {codex_home}/auth.json present",
+        }
     if os.environ.get("OPENAI_ACCESS_TOKEN"):
         return {
             "cli": True,
@@ -3376,14 +3392,6 @@ def detect_codex_credentials() -> dict:
             "authenticated": True,
             "source": "env:OPENAI_API_KEY",
             "detail": "codex auth: OPENAI_API_KEY present",
-        }
-    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-    if (codex_home / "auth.json").is_file():
-        return {
-            "cli": True,
-            "authenticated": True,
-            "source": f"{codex_home}/auth.json",
-            "detail": f"codex auth: {codex_home}/auth.json present",
         }
     return {
         "cli": True,
