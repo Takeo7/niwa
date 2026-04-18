@@ -1409,6 +1409,13 @@ _TRANSIENT_ERROR_CODES = frozenset({
     "subprocess_error",
 })
 
+# Bug 32 fix: sentinel que el adapter usa para señalizar al dispatcher
+# que la tarea necesita clarificación (Claude solo habló, no ejecutó).
+# Usamos un prefijo en el output en vez de cambiar la firma
+# (bool, str) de toda la cadena _execute_task*. El dispatcher lo
+# detecta en _handle_task_result y enruta a waiting_input.
+_CLARIFICATION_SENTINEL = "__NIWA_CLARIFICATION__\n"
+
 
 def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
     """Execute a task through the v0.2 routing pipeline.
@@ -1782,6 +1789,26 @@ def _execute_task_v02_body(
                     f"{str(result)[:300]}"
                 )
 
+            # Bug 32 fix: clarification — Claude salió exit 0 pero
+            # solo habló (sin tool_use) en una tarea ejecutiva. La
+            # tarea queda a la espera de input del usuario, NO se
+            # marca como hecha ni se retryea. Signalizamos al caller
+            # con el prefijo ``__NIWA_CLARIFICATION__`` en el output
+            # para evitar cambiar la firma (bool, str) de todo el
+            # pipeline — el top-level dispatcher lo detecta y
+            # enruta a waiting_input.
+            if adapter_status == "needs_clarification":
+                log.info(
+                    "task %s: adapter %s needs clarification — "
+                    "no tool_use calls emitted, transitioning "
+                    "task to waiting_input",
+                    task_id, profile["slug"],
+                )
+                return True, (
+                    _CLARIFICATION_SENTINEL
+                    + (result.get("result_text", "") or "")
+                )
+
             # PR-35: pass the human-readable result text as output
             # so _finish_task stores it in task_events and the UI
             # can show what Claude actually did. Before this, the
@@ -1913,6 +1940,31 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
 def _handle_task_result(task_id: str, success: bool, output: str, was_retry: bool, task_row) -> tuple[bool, int]:
     """Process a completed task result. Returns (task_done, failure_delta)."""
     if success:
+        # Bug 32 fix: si el adapter señalizó clarification (Claude salió
+        # exit 0 pero solo habló en una tarea ejecutiva), transicionar
+        # la task a waiting_input en vez de hecha. El texto tras el
+        # sentinel es la respuesta exacta de Claude y se guarda como
+        # output/comment para que el usuario vea qué se le preguntó.
+        if output.startswith(_CLARIFICATION_SENTINEL):
+            claude_text = output[len(_CLARIFICATION_SENTINEL):]
+            _finish_task(task_id, "waiting_input", claude_text)
+            _record_event(
+                task_id, "comment",
+                {
+                    "author": "executor",
+                    "kind": "warning",
+                    "message": (
+                        "Claude respondió sin ejecutar nada — "
+                        "la tarea queda a la espera de que aclares "
+                        "la especificación. Respuesta de Claude:\n\n"
+                        f"{claude_text[:1500]}"
+                    ),
+                },
+            )
+            log.info(
+                "task %s: waiting_input — needs clarification", task_id,
+            )
+            return True, 0  # neither success nor failure for counter
         _finish_task(task_id, "hecha", output)
         _record_event(task_id, "completed", {"executor": "niwa-executor"})
         log.info("task %s done", task_id)

@@ -877,6 +877,10 @@ class ClaudeCodeAdapter(BackendAdapter):
             # Stream stdout line by line
             session_handle = None
             raw_lines: list[str] = []
+            # Bug 32 fix: track productive tool calls during the run.
+            # An executive task that ends with zero tool_use events
+            # means Claude only talked — needs clarification, not "done".
+            tool_use_count = 0
 
             for raw_line in proc.stdout:
                 line = raw_line.decode("utf-8", errors="replace").strip()
@@ -897,6 +901,8 @@ class ClaudeCodeAdapter(BackendAdapter):
 
                 # Classify and record event
                 event_type, message, payload = self._classify_event(msg)
+                if event_type == "tool_use":
+                    tool_use_count += 1
                 if event_type and conn:
                     runs_service.record_event(
                         run_id, event_type, conn,
@@ -998,6 +1004,7 @@ class ClaudeCodeAdapter(BackendAdapter):
             # reason instead of a misleading "hecha" with no output.
             error_code = None
             result_text = ""  # Human-readable output from Claude
+            stop_reason: str | None = None
             if exit_code == 0:
                 outcome = "success"
                 # Check stream-json result event for is_error or
@@ -1014,6 +1021,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                         # this the task shows "[v02] Backend
                         # claude_code completed: {...}" — useless.
                         result_text = m.get("result", "") or ""
+                        stop_reason = m.get("stop_reason")
                         perm_denials = m.get("permission_denials") or []
                         if perm_denials:
                             outcome = "failure"
@@ -1041,6 +1049,41 @@ class ClaudeCodeAdapter(BackendAdapter):
                         break
                     except (json.JSONDecodeError, ValueError):
                         continue
+
+                # Bug 32 fix — false-succeeded detection.
+                # If Claude exited cleanly (no is_error, no permission
+                # denials) but emitted ZERO tool_use events and ended
+                # with stop_reason=end_turn, it just talked instead
+                # of acting. For chat-origin tasks that's legitimate
+                # (the user asked a question). For executive tasks
+                # (source != 'chat') it means Claude needs more info.
+                # Mark the task as waiting_input with the full result
+                # text surfaced to the user so they see WHAT Claude
+                # asked, not just "falta info".
+                if (outcome == "success"
+                        and tool_use_count == 0
+                        and stop_reason == "end_turn"):
+                    task_source = (task.get("source") or "").strip().lower()
+                    if task_source and task_source != "chat":
+                        outcome = "needs_clarification"
+                        error_code = "clarification_required"
+                        if conn:
+                            runs_service.record_event(
+                                run_id, "error", conn,
+                                message=(
+                                    "Claude respondió sin ejecutar ninguna "
+                                    "acción (0 tool_use). Probablemente "
+                                    "falta información en la tarea. "
+                                    "Respuesta de Claude:\n\n"
+                                    f"{str(result_text)[:1500]}"
+                                ),
+                                payload_json=json.dumps({
+                                    "error_code": "clarification_required",
+                                    "result_text": str(result_text)[:2000],
+                                    "tool_use_count": tool_use_count,
+                                    "stop_reason": stop_reason,
+                                }),
+                            )
             else:
                 outcome = "failure"
                 if conn and stderr_output:
@@ -1059,14 +1102,19 @@ class ClaudeCodeAdapter(BackendAdapter):
                     observed_usage_signals_json=usage_json,
                 )
 
+            status_map = {
+                "success": "succeeded",
+                "needs_clarification": "needs_clarification",
+            }
             return {
-                "status": "succeeded" if outcome == "success" else "failed",
+                "status": status_map.get(outcome, "failed"),
                 "outcome": outcome,
                 "exit_code": exit_code,
                 "error_code": error_code,
                 "session_handle": session_handle,
                 "usage": usage,
                 "result_text": result_text,
+                "tool_use_count": tool_use_count,
             }
 
         except Exception as exc:

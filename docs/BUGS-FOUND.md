@@ -576,9 +576,23 @@ Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (8 casos total
 
 **Descripción:** PR-33/34 detectan `permission_denials` del stream-json y marcan el run como `failed`. Pero si Claude sale con exit 0 sin permission denials pero su output dice "no pude hacerlo" (p.ej., por rate limit, por no entender la tarea, por error de otro tipo), el run se marca `succeeded` y la tarea como `hecha` — falso positivo. El usuario ve "completada" sin trabajo real.
 
-**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:826-870` — la lógica de outcome solo chequea exit code + permission_denials + is_error.
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:826-870` — la lógica de outcome solo chequeaba exit code + permission_denials + is_error.
 **Severidad:** **media** (no siempre dispara, pero cuando lo hace es confuso para el usuario).
-**PR futuro donde se arreglará:** pendiente de asignar. Opciones: (a) heurística sobre el result text (buscar patrones "no pude", "error", etc. — frágil). (b) Chequear que al menos una tool_use con Write/Edit/Bash fue exitosa (más robusto). (c) Dejar que el usuario rechace la tarea manualmente y documente el caso — lo menos invasivo.
+**Estado:** **ARREGLADO en PR final 6** — opción (b) del menú original + crossed con intención de tarea (sugerido por GPT). Observado en prod: usuario lanzó "Crea un proyecto test-mirror" y Claude respondió pidiendo clarificación ("¿Qué tipo? ¿Dónde?") sin invocar ninguna tool; la task se marcó como `hecha` igualmente.
+
+El fix detecta false-succeeded en tres lugares:
+
+1. **Adapter (`claude_code.py`)** — durante el streaming se cuenta `tool_use_count`. Al terminar, si `exit_code==0`, `is_error=false`, `permission_denials=[]`, `stop_reason=='end_turn'`, **`tool_use_count==0`** Y **`task.source != 'chat'`** (tarea ejecutiva, no conversacional), el outcome es `needs_clarification` con `error_code='clarification_required'`. Se registra un `backend_run_event` tipo `error` con el `result_text` completo de Claude (la pregunta) en el `payload_json`.
+
+2. **Runs service (`runs_service.py`)** — nuevo mapping en `finish_run`: `needs_clarification → status='waiting_input'`. El run queda en un estado accionable, no terminal-success.
+
+3. **Executor (`task-executor.py`)** — el adapter señaliza clarification con el prefijo `__NIWA_CLARIFICATION__\n` en el output. `_handle_task_result` detecta el sentinel y transiciona la task a `waiting_input` (ya existía desde migración 013) con el texto de Claude como output + event `comment` explícito. Retorna `(True, 0)` para NO incrementar el contador de fallos ni disparar retry.
+
+4. **Frontend (`TaskDetailsTab.tsx`)** — nuevo banner amarillo (`IconHelp`) cuando `last_run.error_code == 'clarification_required'` y `task.status == 'waiting_input'`. Muestra la pregunta exacta de Claude (tomada de `task.executor_output`) dentro de un Paper con fondo amarillo, más un hint: "Edita la tarea con los detalles que te pide y vuelve a lanzarla". El banner rojo del PR-39 se suprime cuando el error es clarification (no es un fallo, es espera de input).
+
+Discriminador "conversacional vs ejecutiva" via `tasks.source`: `chat` → text-only OK; otros (`niwa-app`, `mcp:tasks`, `routine`) → exigir acción observable. No hace falta migration — `source` ya existía.
+
+Tests: `tests/test_claude_adapter_clarification.py` (7 casos: detección, run.status=waiting_input, persistencia del event, chat no-regresión, happy path con tool_use, permission_denied prioridad, is_error prioridad) + `tests/test_task_executor_clarification.py` (3 casos: sentinel→waiting_input, output plano→hecha, failure path preservado) + `TaskDetailsTab.test.tsx` (2 casos adicionales: banner visible con clarification_required, banner suprimido si status=hecha).
 
 ### Feature 1: Auto-registro de proyectos post-tarea
 
