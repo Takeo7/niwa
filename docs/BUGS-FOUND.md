@@ -2,6 +2,15 @@
 
 Cada entrada: fecha, PR donde se encontró, descripción, ubicación, severidad.
 
+> **Nota 2026-04-18**: tres entradas previamente marcadas **ARREGLADO**
+> se han reabierto tras observar regresiones en producción:
+>
+> - **Bug 32** — "ARREGLADO en PR final 6" → **ARREGLADO PARCIAL**. El fix cubre 0 tool_use pero no el caso "1 tool_use + pregunta final".
+> - **Bug 34** — "ARREGLADO en PR-43/45" → **RECAÍDO**. Claude sigue escribiendo a `/tmp/` en el flow auto-project (sin `project_id`).
+> - **Feature 1** — "ARREGLADO en PR-38" → **ARREGLADO PARCIAL**. Safety net colapsa cuando Bug 34 está activo; los proyectos quedan invisibles en la UI.
+>
+> Mantener estas entradas visibles hasta que haya un PR que demuestre el fix end-to-end en prod, no solo en tests unitarios (los tests de strings pasan; Claude en prod no respeta las strings). Ver cada entrada individual para detalles.
+
 Formato sugerido:
 
 ```
@@ -562,15 +571,31 @@ La UX complementaria: el help del campo `svc.llm.anthropic.setup_token` (Sistema
 
 **Severidad:** **alta UX** (PR-38 prometía "usuario ve su proyecto en Proyectos"; el prompt suave hace que no cumpla la promesa).
 
-**Estado:** **ARREGLADO en PR-43** (primer intento PR-42 insuficiente — ver debajo).
+**Estado:** **RECAÍDO — reabierto 2026-04-18** tras observar 2 runs en producción con el mismo síntoma original. La entrada anterior "ARREGLADO en PR-43/45" **no se sostiene en prod**.
 
-Historia:
+Observaciones de 2026-04-18 (misma instalación, mismo Claude CLI 2.1.97, mismo día, post PR-45 y post PR final 5/6):
 
-1. **PR-42 — intento 1: prompt imperativo con blacklist.** Añadía `## WORKING DIRECTORY — STRICT RULE` + blacklist fijo de `/tmp/`, `/home/`, `/root/`, `/var/`, `/opt/`. Verificado en VPS: Claude SIGUIÓ escribiendo a `/tmp/`. Causa raíz descubierta: en installs con `sudo`, `_auto_projects_root = /root/.niwa/data/projects/`. Cuando el executor mutaba `task_dict["project_directory"] = "/root/.niwa/data/projects/<slug>/"`, el prompt decía simultáneamente "MUST live under /root/.niwa/data/projects/<slug>/" Y "FORBIDDEN: /root/...". Contradicción interna. Claude, siendo razonable, evitó ambas reglas escribiendo a `/tmp/` donde al menos violaba solo una (el blacklist del /tmp/ menciona "post-hook can't find files there", menos fuerte que "MUST live under"). Insight importante: **Claude SÍ respeta instrucciones claras cuando no son contradictorias** — el usuario lo confirmó empíricamente con prompts directos al CLI.
+| # | Task | project_id | cwd esperado | cwd real | Trabajo |
+|---|---|---|---|---|---|
+| 1 | "Crea un proyecto test-mirror" | null (auto) | `/home/niwa/projects/test-mirror-*` | `/tmp/test-mirror` ❌ | mkdir + pregunta |
+| 2 | "Hazme una web con botón..." | null (auto) | `/home/niwa/projects/metamorfosis-*` | `/tmp/metamorfosis` ❌ | web completa |
+| 3 | misma web pero con `project_id` preexistente | `<id>` | `/home/niwa/projects/nueva-web` | `/home/niwa/projects/nueva-web` ✅ | web completa |
 
-2. **PR-43 — intento 2: regla positiva única.** Se elimina el blacklist fijo. La regla es: `every absolute path you write to MUST start with <pdir>`. `/tmp/` se menciona solo como "common mistake to avoid" con ejemplo de patrón (`Write(/tmp/...)`, `Bash(mkdir /tmp/...)`). Sin contradicciones posibles porque es una única regla positiva.
+**Patrón**: el bug **solo aparece en tareas sin `project_id` (flow auto-project PR-38)**. Cuando la tarea apunta a un proyecto ya creado, `_resolve_project_dir(project_id)` devuelve el path real y Claude lo respeta. PR-43/45 funciona para ese camino; **no funciona para el camino auto-project**.
 
-Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (8 casos totales tras PR-43): inyección condicional (3), `/tmp/` como common mistake (1), **no blacklists contradictorios** (1, pin contra regresión), regla positiva "start with" (1), bloque JSON con 4 args (1), hint paths relativos (1), escape hatch conversacional (1).
+**Hipótesis del root cause** (sin logs confirmatorios todavía):
+
+- **C (más probable)**: el código de capas 1-4 funciona — `_auto_project_prepare` inyecta `task_dict["project_directory"]`, `_resolve_cwd` lo resuelve, `--append-system-prompt` lleva la regla PR-45. Pero con `project_id=null` solo hay **una** señal (cwd subprocess + system prompt), mientras que con `project_id` hay **dos** (cwd + `artifact_root` en el `run` dict). Claude respeta más cuando la señal es doble. El `run.artifact_root` se construye SOLO si hay `project_id` (`task-executor.py:1643`).
+- **A/B** (menos probables): `_auto_project_prepare` falló silenciosamente (OSError capturado) o `_resolve_cwd` hizo `Path(pdir).is_dir()==False` y cayó a `os.getcwd()`. Consistente con observación lateral: los cwds de sesiones Claude en `~/.claude/projects/` del host incluyen `-`, `-root-niwa`, `-home-niwa` — **ninguno con slug auto-project**.
+
+Historia previa (no desechar, contexto del bug):
+
+1. **PR-42 — intento 1: prompt imperativo con blacklist.** Añadía `## WORKING DIRECTORY — STRICT RULE` + blacklist fijo de `/tmp/`, `/home/`, `/root/`, `/var/`, `/opt/`. Verificado en VPS: Claude SIGUIÓ escribiendo a `/tmp/`. Causa raíz descubierta: en installs con `sudo`, `_auto_projects_root = /root/.niwa/data/projects/`. Cuando el executor mutaba `task_dict["project_directory"] = "/root/.niwa/data/projects/<slug>/"`, el prompt decía simultáneamente "MUST live under /root/.niwa/data/projects/<slug>/" Y "FORBIDDEN: /root/...". Contradicción interna. Claude, siendo razonable, evitó ambas reglas escribiendo a `/tmp/` donde al menos violaba solo una.
+2. **PR-43 — intento 2: regla positiva única.** Se elimina el blacklist fijo. La regla es: `every absolute path you write to MUST start with <pdir>`. `/tmp/` se menciona solo como "common mistake to avoid".
+3. **PR-45 — intento 3: mover al system prompt.** Las reglas pasan de `_build_prompt` (USER) a `_build_system_prompt` vía `--append-system-prompt` (SYSTEM). Teoría: system prompt tiene más peso. Funcionó en tests aislados pero los 2 runs de hoy muestran que **no es suficiente en prod**.
+4. **PR final 7 (pendiente)**: reforzar la señal en auto-project propagando `project_directory` al `run.artifact_root` para que Claude reciba la misma doble-señal que en tareas con `project_id`. Un diff candidato está bosquejado en `task-executor.py:1643` — usar `task_dict.get("project_directory")` además de `project_id` para construir el `artifact_root` del run.
+
+Tests actuales (`tests/test_auto_project.py::TestAdapterPromptInjection`, 8 casos) pinean el contenido del prompt pero **no ejercen el flow completo con Claude real**. Por eso la regresión pasó los tests en CI: los tests son sobre strings, el bug es sobre adherencia del modelo a esos strings en prod.
 
 ### Bug 32: Tareas que Claude "completa" con exit 0 pero sin haber hecho nada (false-succeeded genérico)
 
@@ -578,7 +603,9 @@ Tests en `tests/test_auto_project.py::TestAdapterPromptInjection` (8 casos total
 
 **Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py:826-870` — la lógica de outcome solo chequeaba exit code + permission_denials + is_error.
 **Severidad:** **media** (no siempre dispara, pero cuando lo hace es confuso para el usuario).
-**Estado:** **ARREGLADO en PR final 6** — opción (b) del menú original + crossed con intención de tarea (sugerido por GPT). Observado en prod: usuario lanzó "Crea un proyecto test-mirror" y Claude respondió pidiendo clarificación ("¿Qué tipo? ¿Dónde?") sin invocar ninguna tool; la task se marcó como `hecha` igualmente.
+**Estado:** **ARREGLADO PARCIAL en PR final 6** — el fix cubre el caso exacto observado (0 tool_use + end_turn + source!='chat') pero **NO** el caso de hoy **2026-04-18**: tarea ejecutiva donde Claude invoca 1 tool_use (ej. `mkdir /tmp/foo`) y **luego** termina con una pregunta en el texto final. Ejemplo observado: "Crea un proyecto test-mirror" → Claude hizo `Bash mkdir /tmp/test-mirror` + `result="Proyecto creado en /tmp/test-mirror. ¿Qué tipo quieres inicializar?"`. `tool_use_count=1` ⇒ el filtro de PR final 6 no dispara ⇒ task marcada `hecha`. **Regresión pendiente de fix (candidato PR final 7)**: afinar el discriminador — no es `tool_use_count`, es **"si el último assistant event antes de `stop_reason=end_turn` es texto (no tool_use), Claude terminó hablando, no actuando"**. Más robusto y cubre el caso cruzado.
+
+Opción (b) original sigue vigente para el 90% de los casos, y fue la decisión correcta con la info que teníamos.
 
 El fix detecta false-succeeded en tres lugares:
 
@@ -600,17 +627,30 @@ Tests: `tests/test_claude_adapter_clarification.py` (7 casos: detección, run.st
 
 **Ubicación:** gap entre `bin/task-executor.py` (ejecuta Claude) y `niwa-app/backend/app.py` (gestiona proyectos).
 **Severidad:** **alta UX** (el usuario espera ver su proyecto creado; dice "hecha" pero no hay proyecto visible).
-**Estado:** **ARREGLADO en PR-38** (híbrido de las opciones (b) + (c) del menú original).
+**Estado:** **ARREGLADO PARCIAL en PR-38 — safety net colapsa cuando Bug 34 está activo** (reabierto 2026-04-18 junto con Bug 34).
 
-Dos capas complementarias:
+El híbrido (a) + (b) + (c) asume que Claude escribe dentro del `project_directory` inyectado. Cuando Bug 34 está activo y Claude escribe a `/tmp/*` (ver Bug 34 recaído más arriba), el flow se degrada:
+
+- Pre-hook crea `/home/niwa/projects/<slug>-<uuid>/` ✅
+- Claude escribe a `/tmp/<slug>/index.html` ❌ (Bug 34)
+- Post-hook `_auto_project_has_files(project_dir)` retorna `False` — el dir del pre-hook está vacío ❌
+- Post-hook hace `rmtree` del dir vacío + NO registra proyecto ❌
+- `task.project_id` queda `NULL` ❌
+- **El proyecto existe en `/tmp/<slug>/` pero es invisible en la UI de Niwa** ❌
+
+Observado en prod 2026-04-18 con la task "metamorfosis": Claude escribió un `index.html` funcional en `/tmp/metamorfosis/`, la task se marcó `hecha`, pero "Proyectos" sigue vacío. El usuario ve "completada" sin forma de encontrar el proyecto.
+
+**Fix dependiente de Bug 34**: una vez que Bug 34 esté arreglado de raíz (Claude siempre escribe en `project_directory`), el safety net de PR-38 vuelve a ser correcto sin cambios. Si decides mantener el fallback a `/tmp/` tolerable, habría que **detectar el dir real donde Claude escribió** (quizás mirando los eventos `tool_use` con paths absolutos en el stream-json) y recuperarlo como proyecto. Esto es un refuerzo defensivo, no la solución canónica.
+
+Dos capas complementarias del diseño original (siguen siendo correctas, solo asumen Bug 34 no activo):
 
 1. **Pre-hook (`_auto_project_prepare`)** en `bin/task-executor.py`: cuando la tarea no tiene `project_id`, el executor genera `<slug>-<uuid6>`, hace `mkdir -p <NIWA_HOME>/data/projects/<slug>-<uuid6>/`, e inyecta el path en `task_dict["project_directory"]`. El adapter Claude Code ya lo lee como `cwd`. `_sanitize_slug` cierra path traversal (regex `[^a-z0-9-]+` → `-`, strip, cap a 40, fallback `task`).
 
-2. **Prompt injection** en `ClaudeCodeAdapter._build_prompt`: cuando `project_directory` está set y `project_id` es null, el prompt incluye los args exactos para invocar el MCP tool `project_create` (que ya existía en `servers/tasks-mcp/server.py:689`). Si es una tarea conversacional, Claude puede saltárselo.
+2. **Prompt injection** en `ClaudeCodeAdapter._build_prompt` / `_build_system_prompt` (PR-45): cuando `project_directory` está set y `project_id` es null, el system prompt incluye los args exactos para invocar el MCP tool `project_create`. Si es una tarea conversacional, Claude puede saltárselo.
 
-3. **Post-hook safety net (`_auto_project_finalize`)** dentro de `try/finally` del wrapper `_execute_task_v02`: tras `adapter.start()`, si el directorio tiene ≥1 fichero regular y no existe fila `projects` con ese `directory`, inserta una automáticamente. En cualquier caso (fila nueva o existente), `UPDATE tasks SET project_id=? WHERE id=? AND project_id IS NULL` (nunca roba tareas con proyecto explícito). Si no hay ficheros (conversacional), `rmtree` del directorio vacío.
+3. **Post-hook safety net (`_auto_project_finalize`)** dentro de `try/finally` del wrapper `_execute_task_v02`: tras `adapter.start()`, si el directorio tiene ≥1 fichero regular y no existe fila `projects` con ese `directory`, inserta una automáticamente. En cualquier caso (fila nueva o existente), `UPDATE tasks SET project_id=? WHERE id=? AND project_id IS NULL` (nunca roba tareas con proyecto explícito). Si no hay ficheros (conversacional), `rmtree` del directorio vacío. **Punto débil**: no cubre el caso "Claude escribió pero no en este dir".
 
-Container/host path mismatch evitado: todo el mkdir vive en el host (executor), el MCP container no necesita crear directorios. Tests en `tests/test_auto_project.py` (16 casos): slug sanitization incluyendo path traversal, prepare no-op con project_id, unique slug por call, finalize empty cleanup, finalize inserts + associates, finalize reuses existing row (Claude llamó tool), finalize never steals explicit project_id, adapter prompt injection condicional.
+Container/host path mismatch evitado: todo el mkdir vive en el host (executor), el MCP container no necesita crear directorios. Tests en `tests/test_auto_project.py` (16 casos): slug sanitization incluyendo path traversal, prepare no-op con project_id, unique slug por call, finalize empty cleanup, finalize inserts + associates, finalize reuses existing row (Claude llamó tool), finalize never steals explicit project_id, adapter prompt injection condicional. **Los tests validan el happy path; el caso "Claude escribió a otro dir" no está ejercido.**
 
 ### Feature 2: Toggle "modo sin restricciones" en UI (Sistema → Agentes)
 
