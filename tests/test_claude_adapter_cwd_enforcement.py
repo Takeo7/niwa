@@ -141,9 +141,20 @@ class TestResolveCwd:
 
 
 class _AdapterCase:
-    """Shared setup — one db per test, fresh adapter."""
+    """Shared setup — one db per test, fresh adapter.
+
+    ``test_bug24_bug25_cleanup.py::TestArtifactRootMkdirFailure``
+    replaces ``sys.modules['runs_service']`` with a ``MagicMock`` and
+    does not restore it (preexisting leak, also hits
+    ``test_claude_adapter_clarification``). We defensively reload the
+    real module so this suite stays green under the full-suite run.
+    """
 
     def setup_method(self):
+        sys.modules.pop("runs_service", None)
+        import importlib
+        global runs_service
+        runs_service = importlib.import_module("runs_service")
         self.db_fd, self.db_path, self.conn = _make_db()
         self.task_id, self.profile_id, self.rd_id = _seed(self.conn)
         self.tmpdir = tempfile.mkdtemp(prefix="niwa-cwd-test-")
