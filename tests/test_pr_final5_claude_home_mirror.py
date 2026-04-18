@@ -195,13 +195,13 @@ def test_mirror_hides_credentials_json(executor):
 def test_mirror_with_no_real_claude_dir_still_sets_home(executor, tmp_path):
     """Fresh install: el user niwa nunca ejecutó ``claude setup-token``
     ni Niwa instaló un ``.claude/``. El mirror debe dar un HOME tmp
-    válido (con ``.claude/`` vacío, sin credentials.json) — comportamiento
-    idéntico al PR final 4 original para installs limpias."""
+    válido. Con el bootstrap de PR final 5 bis, ``projects/`` ya
+    está symlinkado (write-through al host) aunque el user no tenga
+    nada más. Sin credentials.json, sin ``.claude.json``."""
     mod = executor["mod"]
     user_home = tmp_path / "empty_user_home"
     user_home.mkdir()
     # Redirect Path.home to an EMPTY home.
-    import types
     mod.Path.home = classmethod(lambda cls: user_home)
 
     mod.LLM_SETUP_TOKEN = "sk-ant-oat01-VALID"
@@ -209,9 +209,52 @@ def test_mirror_with_no_real_claude_dir_still_sets_home(executor, tmp_path):
     env = mod._prepare_backend_env({"slug": "claude_code"})
     h = Path(env["HOME"])
     assert (h / ".claude").is_dir()
-    assert list((h / ".claude").iterdir()) == []  # empty
+    # Bootstrap garantiza projects/ en el host y lo symlinka al tmp.
+    assert (h / ".claude" / "projects").is_dir()
+    assert (user_home / ".claude" / "projects").is_dir()
     assert not (h / ".claude" / ".credentials.json").exists()
     assert not (h / ".claude.json").exists()
+
+
+def test_mirror_bootstraps_projects_dir_on_first_run(executor):
+    """PR final 5 bis — regresión del P1 de GPT: antes del primer run
+    de Claude, ``~/.claude/projects/`` puede no existir aunque
+    ``~/.claude/`` sí (p.ej. el user tiene settings.json pero jamás
+    invocó claude).
+
+    Sin bootstrap, Claude escribiría el jsonl a ``tmp_home/.claude/
+    projects/`` como dir real y el cleanup del tmp lo mataría, rompiendo
+    ``--resume`` para la primera tarea. El bootstrap garantiza que el
+    dir exista en el host y se symlinka → write-through."""
+    mod = executor["mod"]
+    user_home = executor["user_home"]
+    # .claude/ exists with some state, but NO projects/ subdir yet.
+    (user_home / ".claude" / "settings.json").write_text('{}')
+    assert not (user_home / ".claude" / "projects").exists()
+
+    mod.LLM_SETUP_TOKEN = "sk-ant-oat01-VALID"
+    mod.LLM_API_KEY = None
+    env = mod._prepare_backend_env({"slug": "claude_code"})
+    tmp_home = Path(env["HOME"])
+
+    # Bootstrap creó el dir en el host real.
+    real_projects = user_home / ".claude" / "projects"
+    assert real_projects.is_dir()
+    # Y el tmp lo ve (vía symlink del loop).
+    tmp_projects = tmp_home / ".claude" / "projects"
+    assert tmp_projects.is_dir()
+
+    # Write-through contract: escribir una sesión nueva vía el tmp
+    # acaba en el home real, sobrevive al cleanup.
+    (tmp_projects / "-home-user-niwa").mkdir()
+    session = tmp_projects / "-home-user-niwa" / "first-run.jsonl"
+    session.write_text('{"role":"user","content":"hola"}\n')
+    persisted = real_projects / "-home-user-niwa" / "first-run.jsonl"
+    assert persisted.is_file()
+    assert persisted.read_text() == '{"role":"user","content":"hola"}\n'
+
+    # El trick de credentials.json sigue intacto.
+    assert not (tmp_home / ".claude" / ".credentials.json").exists()
 
 
 def test_mirror_without_setup_token_does_not_create_home(executor):

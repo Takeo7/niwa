@@ -1201,10 +1201,28 @@ def _mirror_claude_home(real_home: Path, tmp_home: Path) -> None:
     If ``real_home/.claude/`` doesn't exist (fresh install, no user
     config yet), we still create an empty ``tmp_home/.claude/`` so
     the CLI has a consistent layout.
+
+    PR final 5 bis — first-run bootstrap: we also ensure
+    ``real_home/.claude/projects/`` exists BEFORE the symlink loop.
+    Without this, the first-ever Claude run through Niwa would write
+    its session jsonl to ``tmp_home/.claude/projects/`` (a real dir,
+    not a symlink, since nothing existed to mirror), and the file
+    would evaporate on tmp cleanup — breaking ``--resume`` for that
+    first task. The mkdir is idempotent: subsequent runs find it
+    already there and the loop symlinks it like any other entry.
     """
     tmp_claude_dir = tmp_home / ".claude"
     tmp_claude_dir.mkdir(exist_ok=True)
     real_claude_dir = real_home / ".claude"
+    # Ensure projects/ survives the first-ever run. parents=True also
+    # covers the case where real_home/.claude itself didn't exist.
+    try:
+        (real_claude_dir / "projects").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log.warning(
+            "claude-home mirror: could not bootstrap %s/projects",
+            real_claude_dir,
+        )
     if real_claude_dir.is_dir():
         for entry in real_claude_dir.iterdir():
             if entry.name == ".credentials.json":
