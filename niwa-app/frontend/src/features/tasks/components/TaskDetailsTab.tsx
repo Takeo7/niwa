@@ -23,6 +23,7 @@ import {
   IconPlus,
   IconPlayerStop,
   IconAlertTriangle,
+  IconHelp,
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -135,8 +136,17 @@ export function TaskDetailsTab() {
   // failure is often exactly why they're blocked).
   const lastRun = task.last_run ?? null;
   const terminalStatuses = new Set(['hecha', 'archivada']);
+  // Bug 32 fix: clarification_required es una ruta distinta del fallo
+  // genérico. Claude respondió pidiendo info → se muestra un banner
+  // amarillo (no rojo) con la pregunta exacta, para que el user sepa
+  // qué aclarar antes de volver a encolar la tarea.
+  const isClarification =
+    lastRun?.error_code === 'clarification_required';
+  const showClarificationBanner =
+    isClarification && task.status === 'waiting_input';
   const showFailureBanner =
-    lastRun !== null
+    !isClarification
+    && lastRun !== null
     && (lastRun.outcome === 'failure' || Boolean(lastRun.error_code))
     && !terminalStatuses.has(task.status);
 
@@ -144,6 +154,37 @@ export function TaskDetailsTab() {
 
   return (
     <Stack gap="md">
+      {showClarificationBanner && (
+        <Alert
+          variant="light"
+          color="yellow"
+          icon={<IconHelp size={18} />}
+          title="Claude necesita más información"
+        >
+          <Stack gap={4}>
+            <Text size="sm">
+              Claude respondió sin ejecutar ninguna acción. Probablemente
+              falta especificación en la tarea.
+              {task.executor_output && (
+                <>
+                  {' '}Su respuesta:
+                </>
+              )}
+            </Text>
+            {task.executor_output && (
+              <Paper p="sm" radius="sm" withBorder bg="yellow.0">
+                <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                  {task.executor_output}
+                </Text>
+              </Paper>
+            )}
+            <Text size="xs" c="dimmed">
+              Edita la tarea con los detalles que te pide y vuelve a
+              lanzarla desde el menú de estado (pendiente → en_progreso).
+            </Text>
+          </Stack>
+        </Alert>
+      )}
       {showFailureBanner && lastRun && (
         <Alert
           variant="light"

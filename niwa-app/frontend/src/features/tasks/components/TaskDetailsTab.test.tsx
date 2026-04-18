@@ -223,6 +223,54 @@ describe('TaskDetailsTab — Resultado markdown', () => {
     expect(screen.queryByText('La última ejecución falló')).toBeNull();
   });
 
+  // ── Bug 32 fix: clarification banner ──────────────────────────
+
+  it('shows clarification banner when error_code is clarification_required', () => {
+    const task = makeTask({
+      status: 'waiting_input',
+      executor_output: '¿Qué tipo de proyecto? Node.js / Python?',
+      last_run: {
+        id: 'r-1',
+        status: 'waiting_input',
+        outcome: 'needs_clarification',
+        error_code: 'clarification_required',
+        finished_at: '2026-04-16T00:00:00Z',
+        relation_type: null,
+        backend_profile_slug: 'claude_code',
+        backend_profile_display_name: 'Claude Code',
+      },
+    });
+    render(wrap(task));
+    // Yellow banner, not red.
+    expect(screen.getByText('Claude necesita más información')).toBeTruthy();
+    // La pregunta de Claude se muestra al usuario (aparece en el
+    // banner amarillo Y en la sección Resultado, ambas copias son
+    // legítimas — la primera como highlight, la segunda como archivo).
+    expect(
+      screen.getAllByText('¿Qué tipo de proyecto? Node.js / Python?')
+    ).toHaveLength(2);
+    // El banner rojo NO debe aparecer.
+    expect(screen.queryByText('La última ejecución falló')).toBeNull();
+  });
+
+  it('hides clarification banner when task status is not waiting_input', () => {
+    const task = makeTask({
+      status: 'hecha',  // fallback rescued
+      last_run: {
+        id: 'r-1',
+        status: 'waiting_input',
+        outcome: 'needs_clarification',
+        error_code: 'clarification_required',
+        finished_at: '2026-04-16T00:00:00Z',
+        relation_type: null,
+        backend_profile_slug: 'claude_code',
+        backend_profile_display_name: 'Claude Code',
+      },
+    });
+    render(wrap(task));
+    expect(screen.queryByText('Claude necesita más información')).toBeNull();
+  });
+
   it('escapes raw HTML in markdown (no script injection)', () => {
     // react-markdown 9.x without rehype-raw must NOT inject raw HTML.
     // The <script> string should appear as literal text, never as a real

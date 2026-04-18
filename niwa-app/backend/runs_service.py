@@ -135,6 +135,10 @@ def finish_run(run_id: str, outcome: str, conn, *,
         "failure": "failed",
         "cancelled": "cancelled",
         "timed_out": "timed_out",
+        # Bug 32 fix: Claude sale exit 0 y responde solo con texto
+        # (sin tool_use) en tareas ejecutivas → la task queda a la
+        # espera de que el user aclare la especificación.
+        "needs_clarification": "waiting_input",
     }
     new_status = outcome_to_status.get(outcome)
     if new_status is None:
