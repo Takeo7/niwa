@@ -701,13 +701,85 @@ class ClaudeCodeAdapter(BackendAdapter):
 
     @staticmethod
     def _resolve_cwd(task: dict, artifact_root: str | None) -> str:
-        """Determine the working directory for the subprocess."""
+        """Determine the working directory for the subprocess.
+
+        Bug 34 fix (PR-B2): when ``project_directory`` is set the
+        executor has published a hard contract — that path IS the cwd.
+        A missing directory is created on the spot rather than silently
+        falling back to ``os.getcwd()`` (which made Claude default to
+        `/tmp/` and the auto-project registry collapse).
+        """
         project_dir = task.get("project_directory")
-        if project_dir and Path(project_dir).is_dir():
-            return project_dir
+        if project_dir:
+            p = Path(project_dir)
+            p.mkdir(parents=True, exist_ok=True)
+            return str(p)
         if artifact_root and Path(artifact_root).is_dir():
             return artifact_root
         return os.getcwd()
+
+    @staticmethod
+    def _collect_artifacts_outside_cwd(raw_lines: list[str],
+                                       cwd: str) -> list[str]:
+        """Scan recorded stream-json lines for write operations whose
+        target path escapes ``cwd``.
+
+        Only the Write/Edit family is considered. Bash commands and
+        Read are out of scope (documented in PR-B2 brief): the first
+        would require a shell parser, the second is a legitimate input
+        operation.
+
+        Relative ``file_path`` values are treated as rooted at ``cwd``
+        (Claude resolves them that way) and never flagged.
+        """
+        write_tools = {"write", "edit", "multiedit", "notebookedit"}
+        try:
+            cwd_resolved = Path(cwd).resolve(strict=False)
+        except OSError:
+            return []
+        offenders: list[str] = []
+        seen: set[str] = set()
+        for line in raw_lines:
+            try:
+                msg = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("type") != "tool_use":
+                continue
+            name = str(msg.get("name") or msg.get("tool") or "").lower()
+            if name not in write_tools:
+                continue
+            tool_input = msg.get("input") or {}
+            if not isinstance(tool_input, dict):
+                continue
+            raw_path = (
+                tool_input.get("file_path")
+                or tool_input.get("notebook_path")
+                or tool_input.get("path")
+                or ""
+            )
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            # Relative paths are anchored to cwd by Claude; safe.
+            if not os.path.isabs(raw_path):
+                continue
+            try:
+                resolved = Path(raw_path).resolve(strict=False)
+            except OSError:
+                continue
+            if resolved == cwd_resolved:
+                continue
+            try:
+                resolved.relative_to(cwd_resolved)
+                continue  # inside cwd
+            except ValueError:
+                pass
+            if raw_path not in seen:
+                seen.add(raw_path)
+                offenders.append(raw_path)
+        return offenders
 
     @staticmethod
     def _classify_artifact_type(suffix: str) -> str:
@@ -1115,6 +1187,51 @@ class ClaudeCodeAdapter(BackendAdapter):
                                     "tool_use_count": tool_use_count,
                                     "stop_reason": stop_reason,
                                     "ends_with_question": ends_with_q,
+                                }),
+                            )
+
+                # Bug 34 fix (PR-B2) — artifacts outside cwd gate.
+                # If Claude still wrote files outside the declared
+                # project_directory despite the system prompt rules,
+                # surface it as clarification rather than letting the
+                # task close as "hecha" with invisible artifacts. Only
+                # runs still considered successful reach this branch;
+                # earlier failure reasons take precedence. The gate is
+                # restricted to tasks that carry a project_directory
+                # contract — without one, ``cwd`` is a fallback
+                # (``os.getcwd()`` or ``artifact_root``) and absolute
+                # writes elsewhere are not a policy violation.
+                if outcome == "success" and task.get("project_directory"):
+                    offenders = self._collect_artifacts_outside_cwd(
+                        raw_lines, cwd,
+                    )
+                    if offenders:
+                        outcome = "needs_clarification"
+                        error_code = "artifacts_outside_cwd"
+                        listed = "\n".join(f"- {p}" for p in offenders[:10])
+                        extra = (
+                            f"\n… y {len(offenders) - 10} más."
+                            if len(offenders) > 10 else ""
+                        )
+                        result_text = (
+                            "Claude escribió artefactos fuera del "
+                            f"directorio de trabajo (`{cwd}`). Esos "
+                            "ficheros no quedan registrados en el "
+                            "proyecto y no son visibles en la UI. "
+                            "Paths infractores:\n\n"
+                            f"{listed}{extra}\n\n"
+                            "Revisa la tarea (p.ej., indica rutas "
+                            "relativas o un project_directory "
+                            "explícito) y vuelve a lanzarla."
+                        )
+                        if conn:
+                            runs_service.record_event(
+                                run_id, "error", conn,
+                                message=result_text[:2000],
+                                payload_json=json.dumps({
+                                    "error_code": "artifacts_outside_cwd",
+                                    "offending_paths": offenders,
+                                    "cwd": cwd,
                                 }),
                             )
             else:
