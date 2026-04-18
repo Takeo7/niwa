@@ -120,10 +120,14 @@ class TestCredentialDetection:
         # Token value MUST NOT appear in detail — only the env var name.
         assert "sk-redacted" not in out["detail"]
 
-    def test_claude_api_key_fallback(self, monkeypatch):
+    def test_claude_api_key_fallback(self, monkeypatch, tmp_path):
         monkeypatch.setattr(setup, "which", lambda name: "/usr/bin/claude" if name == "claude" else None)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-val")
+        # Isolate from a real ~/.claude.json on the test host — without
+        # this, the new precedence (CLI session > API key) would make
+        # any real home dir leak into the result.
+        monkeypatch.setattr(setup.Path, "home", classmethod(lambda cls: tmp_path))
         out = setup.detect_claude_credentials()
         assert out["source"] == "env:ANTHROPIC_API_KEY"
         assert "secret-val" not in out["detail"]
