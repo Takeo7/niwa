@@ -6,7 +6,7 @@ Cada entrada: fecha, PR donde se encontró, descripción, ubicación, severidad.
 > se han reabierto tras observar regresiones en producción:
 >
 > - **Bug 32** — **ARREGLADO en PR-B1** tras ARREGLADO PARCIAL en PR final 6. El gate añade el discriminador "result_text termina en `?`" que cubre el caso "N tool_use + pregunta final" observado en prod. Queda pendiente verificación e2e con Claude CLI real (scope PR-D1).
-> - **Bug 34** — "ARREGLADO en PR-43/45" → **RECAÍDO**. Claude sigue escribiendo a `/tmp/` en el flow auto-project (sin `project_id`).
+> - **Bug 34** — **ARREGLADO en PR-B2** tras recaída de PR-43/45. `_resolve_cwd` ahora `mkdir(parents=True, exist_ok=True)` el `project_directory` y lo fuerza como `cwd` del `subprocess.Popen` (contrato duro, sin fallback silencioso a `os.getcwd()`). Además, el adapter escanea tool_use Write/Edit/MultiEdit/NotebookEdit post-run y, si hay `file_path` absoluto fuera del `cwd`, degrada el outcome a `needs_clarification` con `error_code='artifacts_outside_cwd'`. Queda pendiente verificación e2e con Claude CLI real (scope PR-D1).
 > - **Feature 1** — "ARREGLADO en PR-38" → **ARREGLADO PARCIAL**. Safety net colapsa cuando Bug 34 está activo; los proyectos quedan invisibles en la UI.
 >
 > Mantener estas entradas visibles hasta que haya un PR que demuestre el fix end-to-end en prod, no solo en tests unitarios (los tests de strings pasan; Claude en prod no respeta las strings). Ver cada entrada individual para detalles.
@@ -571,7 +571,16 @@ La UX complementaria: el help del campo `svc.llm.anthropic.setup_token` (Sistema
 
 **Severidad:** **alta UX** (PR-38 prometía "usuario ve su proyecto en Proyectos"; el prompt suave hace que no cumpla la promesa).
 
-**Estado:** **RECAÍDO — reabierto 2026-04-18** tras observar 2 runs en producción con el mismo síntoma original. La entrada anterior "ARREGLADO en PR-43/45" **no se sostiene en prod**.
+**Estado:** **ARREGLADO en PR-B2** tras recaída de PR-43/45. Fix aplicado en dos gates dentro de `ClaudeCodeAdapter`:
+
+1. **Pre-run**: `_resolve_cwd` promueve `project_directory` a contrato duro — `mkdir(parents=True, exist_ok=True)` y siempre se usa como `cwd` del `subprocess.Popen`. Se elimina el fallback silencioso a `os.getcwd()` cuando el path no existe como dir.
+2. **Post-run**: nuevo helper `_collect_artifacts_outside_cwd(raw_lines, cwd)` escanea los eventos `tool_use` recogidos y busca operaciones Write/Edit/MultiEdit/NotebookEdit cuyo `file_path` / `notebook_path` / `path` sea absoluto y no descendiente del `cwd`. Si se detecta al menos uno y `task.project_directory` estaba set, se degrada `outcome → needs_clarification` con `error_code='artifacts_outside_cwd'`. El `result_text` generado lista los paths infractores y se persiste un `backend_run_event` tipo `error` con `payload_json={error_code, offending_paths, cwd}`.
+
+Precedencia preservada: `permission_denied`, `is_error` y `clarification_required` (PR-B1) siguen ganando sobre el nuevo gate.
+
+Tests: `tests/test_claude_adapter_cwd_enforcement.py` (13 casos: mkdir idempotente, fallback sin project_directory, Write dentro/fuera, Edit fuera, mix, path relativo, Bash ignorado, Read ignorado, permission_denied precedencia, persistencia en DB). Queda pendiente verificación e2e con Claude CLI real (scope PR-D1).
+
+Estado histórico:
 
 Observaciones de 2026-04-18 (misma instalación, mismo Claude CLI 2.1.97, mismo día, post PR-45 y post PR final 5/6):
 
