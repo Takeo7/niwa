@@ -280,6 +280,105 @@ class TestHappyPathWithTools(_AdapterCase):
         assert result["status"] == "succeeded"
         assert result["tool_use_count"] == 1
 
+    def test_executive_n_tools_plus_statement_stays_success(self):
+        """Guard anti-regresión: N tool_use + texto final SIN `?`
+        sigue siendo success. Solo la pregunta al final marca
+        clarification (PR-B1)."""
+        stream = [
+            {"type": "system", "subtype": "init", "session_id": "s1"},
+            {"type": "tool_use", "name": "Write",
+             "input": {"path": "/tmp/a.txt"}},
+            {"type": "tool_result", "content": "ok"},
+            {"type": "tool_use", "name": "Write",
+             "input": {"path": "/tmp/b.txt"}},
+            {"type": "tool_result", "content": "ok"},
+            {
+                "type": "result",
+                "session_id": "s1",
+                "result": "Files written successfully.",
+                "stop_reason": "end_turn",
+                "is_error": False,
+                "permission_denials": [],
+            },
+        ]
+        result = self._start(stream, task_source="niwa-app")
+        assert result["outcome"] == "success"
+        assert result["status"] == "succeeded"
+        assert result["tool_use_count"] == 2
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 3b. PR-B1: 1+ tool_use + pregunta final → needs_clarification
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestClarificationOnTrailingQuestion(_AdapterCase):
+    """Bug 32 regresión (2026-04-18): Claude ejecuta 1 tool_use y
+    termina con pregunta. tool_use_count==1 no dispara el filtro
+    original; el sufijo `?` en result_text lo cubre."""
+
+    def test_executive_one_tool_plus_question_needs_clarification(self):
+        """Caso observado en prod: `mkdir /tmp/test-mirror` + texto
+        final con pregunta → needs_clarification, no hecha."""
+        claude_question = (
+            "Proyecto creado en /tmp/test-mirror. "
+            "¿Qué tipo quieres inicializar?"
+        )
+        stream = [
+            {"type": "system", "subtype": "init", "session_id": "s1"},
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "mkdir /tmp/test-mirror"}},
+            {"type": "tool_result", "content": "ok"},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": claude_question}
+            ]}},
+            {
+                "type": "result",
+                "session_id": "s1",
+                "result": claude_question,
+                "stop_reason": "end_turn",
+                "is_error": False,
+                "permission_denials": [],
+            },
+        ]
+        result = self._start(stream, task_source="niwa-app")
+        assert result["outcome"] == "needs_clarification"
+        assert result["status"] == "needs_clarification"
+        assert result["error_code"] == "clarification_required"
+        assert result["tool_use_count"] == 1
+        assert "Qué tipo quieres" in result["result_text"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 3c. PR-B1: chat source + tool_use + pregunta sigue siendo success
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestChatWithToolAndQuestionNoFalsePositive(_AdapterCase):
+
+    def test_chat_source_with_tool_and_question_stays_success(self):
+        """El guard source!='chat' sigue cubriendo conversación: si
+        el usuario está chateando, Claude puede ejecutar algo y
+        terminar preguntando sin penalización."""
+        stream = [
+            {"type": "system", "subtype": "init", "session_id": "s1"},
+            {"type": "tool_use", "name": "Read",
+             "input": {"path": "/tmp/foo"}},
+            {"type": "tool_result", "content": "contents"},
+            {
+                "type": "result",
+                "session_id": "s1",
+                "result": "Leído. ¿Quieres que lo edite?",
+                "stop_reason": "end_turn",
+                "is_error": False,
+                "permission_denials": [],
+            },
+        ]
+        result = self._start(stream, task_source="chat")
+        assert result["outcome"] == "success"
+        assert result["status"] == "succeeded"
+        assert result["tool_use_count"] == 1
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. is_error and permission_denied retain priority
