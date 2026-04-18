@@ -308,6 +308,43 @@ class TestBuildQuickConfig:
         assert cfg.username == "sam"
         assert cfg.password == "mypass"
 
+    def test_password_auto_generated_flag_true_on_fresh(
+        self, tmp_path, monkeypatch
+    ):
+        """Fresh install (no existing env, no --admin-password) → flag True."""
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        monkeypatch.setattr(setup, "_load_existing_mcp_env", lambda _p: None)
+        args = _Args(mode="core", dir=str(tmp_path / "niwa"))
+        cfg = setup.build_quick_config(args)
+        assert cfg.password_auto_generated is True
+        assert len(cfg.password) >= 16
+
+    def test_password_auto_generated_flag_false_on_explicit(
+        self, tmp_path, monkeypatch
+    ):
+        """--admin-password supplied → operator already knows it; flag False."""
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        monkeypatch.setattr(setup, "_load_existing_mcp_env", lambda _p: None)
+        args = _Args(mode="core", dir=str(tmp_path / "niwa"),
+                     admin_password="mypass")
+        cfg = setup.build_quick_config(args)
+        assert cfg.password_auto_generated is False
+        assert cfg.password == "mypass"
+
+    def test_password_auto_generated_flag_false_on_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        """Reinstall reuses NIWA_APP_PASSWORD from secrets/mcp.env → flag False."""
+        monkeypatch.setattr(setup, "which", lambda _: None)
+        monkeypatch.setattr(
+            setup, "_load_existing_mcp_env",
+            lambda _p: {"NIWA_APP_PASSWORD": "preserved123", "NIWA_APP_USERNAME": "niwa"},
+        )
+        args = _Args(mode="core", dir=str(tmp_path / "niwa"))
+        cfg = setup.build_quick_config(args)
+        assert cfg.password == "preserved123"
+        assert cfg.password_auto_generated is False
+
     def test_workspace_honours_cli_flag(self, tmp_path, monkeypatch):
         monkeypatch.setattr(setup, "which", lambda _: None)
         ws = tmp_path / "my-ws"

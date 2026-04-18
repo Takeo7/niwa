@@ -614,6 +614,11 @@ class WizardConfig:
         self.tokens: dict[str, str] = {}
         self.username: str = "arturo"
         self.password: str = ""
+        # True when ``build_quick_config`` generated a fresh random password
+        # this run. Drives whether ``quick_install`` prints the password in
+        # clear at the end (first-time install) vs. just points to
+        # ``secrets/mcp.env`` (preserved or operator-supplied).
+        self.password_auto_generated: bool = False
         self.register_claude: bool = False
         self.register_openclaw: bool = False
         self.mode: str = "local-only"  # or "remote"
@@ -3568,14 +3573,17 @@ def build_quick_config(args) -> WizardConfig:
     provided_pw = getattr(args, "admin_password", None)
     if provided_pw:
         cfg.password = provided_pw
+        cfg.password_auto_generated = False
     elif existing and not rotate and existing.get("NIWA_APP_PASSWORD"):
         # Keep the existing password so the admin's login still works.
         cfg.password = existing["NIWA_APP_PASSWORD"]
+        cfg.password_auto_generated = False
     else:
         # Auto-generate a readable password. Printed at the end of the
         # install. Never written to logs, only to secrets/mcp.env and
         # displayed once in the summary.
         cfg.password = generate_token()[:24]
+        cfg.password_auto_generated = True
 
     # Session secret: must preserve too or every active login gets
     # invalidated on reinstall.
@@ -3778,6 +3786,19 @@ def cmd_install_quick(args) -> int:
 
     print()
     ok(f"Quick install ({cfg.quick_mode}) completed — smoke: PASS in {smoke['duration_ms']}ms")
+    # PR-A1: surface admin login so a fresh installer knows how to sign
+    # in. Print the password in clear only when it was just generated;
+    # on reinstall-preserve or --admin-password point the operator at
+    # secrets/mcp.env so we don't echo a value they either already know
+    # or already have on file.
+    secrets_path = cfg.niwa_home / "secrets" / "mcp.env"
+    print()
+    if cfg.password_auto_generated:
+        info(f"Admin login:   user={cfg.username}  password={cfg.password}")
+        info(f"               (stored in {secrets_path} — rotate with --rotate-secrets)")
+    else:
+        info(f"Admin login:   user={cfg.username}  "
+             f"(password preserved; see {secrets_path})")
     # PR final 1: surface the canonical update/restore commands so
     # the operator knows exactly what to type.
     print()
