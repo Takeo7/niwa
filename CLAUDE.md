@@ -14,10 +14,65 @@ supervisor. Scope cerrado: un brief, una rama, un PR, un merge.
 
 ## Cómo arrancar
 
-En cada sesión nueva el usuario te invoca con `/pr-next`. Ese
-comando te dice el flujo completo. Si te invoca sin `/pr-next` con
-una tarea concreta (un bug, una pregunta), haz esa tarea sin
-pretender que es un PR del roadmap.
+El usuario puede invocarte de dos formas equivalentes:
+
+- **Slash command** (solo en terminal): `/pr-next`.
+- **Frase natural** (funciona en cualquier interfaz, incluida Claude
+  Code web): *"siguiente PR"*, *"pr next"*, *"ejecuta el próximo PR"*,
+  *"empezamos con el siguiente"*, *"arranca el PR que toque"*, o
+  cualquier variación clara de "quiero que ejecutes un PR del
+  roadmap".
+
+Ambos disparan **el mismo flujo**, descrito en la sección "Flujo de
+sesión de PR" abajo. Si el usuario te invoca sin ninguna de esas
+frases y te pide una tarea concreta (un bug puntual, una pregunta,
+una exploración), haz esa tarea sin pretender que es un PR del
+roadmap.
+
+## Flujo de sesión de PR (auto-contenido, no depende del slash command)
+
+Cuando el usuario te dispara con `/pr-next` o con una frase
+equivalente, ejecutas estos pasos **en este orden**:
+
+### Paso 1 — descubre qué PR te toca
+1. Lee `docs/MVP-ROADMAP.md` completo (§1, §2, §4, §6).
+2. Lista PRs del repo con `mcp__github__list_pull_requests`
+   (state=all). Filtra títulos que empiecen por `PR-`. Para cada PR
+   del roadmap marca: `merged | open | none`.
+3. El PR que te toca = primer PR del orden en §6 con estado `none`.
+   Si no hay ninguno, dilo y para.
+4. Declara en chat: "Me toca **PR-NN — <título>**. Hito <X>.
+   Esfuerzo <S/M/L>. Depende de: <lista>."
+
+### Paso 2 — prepara rama y brief
+5. Checkout a `claude/pr-<NN>-<slug>`. Si existe remoto, `git pull`;
+   si no, crea desde la rama por defecto actualizada.
+6. Si `docs/plans/PR-<NN>-<slug>.md` **no existe**: escríbelo con
+   `docs/plans/_TEMPLATE.md`, commitea SOLO el brief con mensaje
+   `plan: brief for PR-<NN>`, push, y **PARA**. Di: "Brief escrito,
+   espero tu 'ok' antes de tocar código."
+7. Si el brief **ya existe**: léelo, resume en 3 líneas qué vas a
+   hacer, espera "ok".
+
+### Paso 3 — implementa (solo tras "ok" del humano)
+8. Si el brief declara tests nuevos: escríbelos primero, confirma
+   que fallan por el motivo esperado, commit `test: failing cases
+   for <feature>`.
+9. Implementa hasta que los tests pasen.
+10. Corre `pytest -q` completo. No puedes regresar ningún test
+    verde del baseline (ver regla 4 abajo).
+11. Invoca el subagente `codex-reviewer` sobre tu diff (`git diff
+    origin/<default>...HEAD`) salvo que el brief marque esfuerzo
+    `S`. Pega sus comentarios como `🤖 Codex review` en el PR.
+
+### Paso 4 — abre el PR y termina
+12. `mcp__github__create_pull_request`. Título `PR-<NN>: <título>`
+    (máx. 70 chars). Body: link al brief, diff de pytest vs
+    baseline, bloque `🤖 Codex review` con resolución.
+13. `mcp__github__subscribe_pr_activity` para responder a reviews y
+    CI sin que el humano te empuje.
+14. Di "PR abierto: <URL>. Esperando review." y **termina la
+    sesión**. No empieces el siguiente PR.
 
 ## Documentos de referencia (léelos cuando aplique)
 
