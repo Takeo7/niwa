@@ -1177,6 +1177,59 @@ def _get_routing_mode() -> str:
 
 # ── Credential helpers for v0.2 adapters ──────────────────────────
 
+def _mirror_claude_home(real_home: Path, tmp_home: Path) -> None:
+    """Populate ``tmp_home`` so the Claude CLI finds everything it
+    needs EXCEPT ``.credentials.json`` (PR final 5).
+
+    Strategy: create ``tmp_home/.claude/`` and symlink each entry from
+    ``real_home/.claude/`` into it, skipping the stale credentials.
+    Also symlink ``real_home/.claude.json`` (user-scope MCP config)
+    so ``claude mcp list`` sees the servers Niwa registered at
+    install time.
+
+    Preserved by the mirror:
+      - ``projects/`` (session history for ``--resume``; new sessions
+        written back to the real dir because symlink).
+      - ``settings.json`` (user preferences).
+      - ``mcp_servers.json`` and any other state files.
+      - ``.claude.json`` sibling (MCP user-scope registrations).
+
+    Hidden by the mirror:
+      - ``.credentials.json``. Its absence makes the CLI fall back
+        to ``CLAUDE_CODE_OAUTH_TOKEN`` env var cleanly.
+
+    If ``real_home/.claude/`` doesn't exist (fresh install, no user
+    config yet), we still create an empty ``tmp_home/.claude/`` so
+    the CLI has a consistent layout.
+    """
+    tmp_claude_dir = tmp_home / ".claude"
+    tmp_claude_dir.mkdir(exist_ok=True)
+    real_claude_dir = real_home / ".claude"
+    if real_claude_dir.is_dir():
+        for entry in real_claude_dir.iterdir():
+            if entry.name == ".credentials.json":
+                continue  # THE exclusion that makes this whole thing work
+            link = tmp_claude_dir / entry.name
+            try:
+                link.symlink_to(entry)
+            except OSError:
+                # Best-effort: if symlink fails (perms, existing file),
+                # log and continue — the cli just won't see that piece.
+                log.warning(
+                    "claude-home mirror: could not symlink %s → %s",
+                    entry, link,
+                )
+    # ``~/.claude.json`` is a sibling file, not inside the .claude dir.
+    real_claude_json = real_home / ".claude.json"
+    if real_claude_json.is_file():
+        try:
+            (tmp_home / ".claude.json").symlink_to(real_claude_json)
+        except OSError:
+            log.warning(
+                "claude-home mirror: could not symlink ~/.claude.json",
+            )
+
+
 def _prepare_backend_env(profile: dict) -> dict | None:
     """Build extra env vars for the subprocess of a v0.2 adapter.
 
@@ -1222,22 +1275,46 @@ def _prepare_backend_env(profile: dict) -> dict | None:
             extra["ANTHROPIC_API_KEY"] = LLM_API_KEY
         if LLM_SETUP_TOKEN:
             extra["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
-            # PR final 4 — Bug 33 fix: the Claude CLI 2.1.97 prefers
-            # ``~/.claude/.credentials.json`` over the env var. If the
-            # host's credentials.json is stale/expired, the CLI exits
-            # 1 silently (or 401s) even with a valid
-            # CLAUDE_CODE_OAUTH_TOKEN. Isolate the subprocess from the
-            # host's Claude config by pointing HOME at an empty tmp
-            # dir — the CLI finds no credentials.json and falls back
-            # to the env var cleanly. We do NOT touch the host's real
-            # ``/home/niwa/.claude/.credentials.json``; that remains
-            # the operator's property for ``claude -p`` standalone.
+            # PR final 4 + PR final 5 — Bug 33 fix with surgical
+            # isolation.
             #
-            # The tmp dir is tracked in the caller's cleanup list
-            # (wrapper's ``finally``) via the presence of ``HOME`` in
-            # extra_env.
+            # The Claude CLI 2.1.97 prefers ``$HOME/.claude/
+            # .credentials.json`` over the env var. If the host's
+            # credentials.json is stale, the CLI exits 1 silently or
+            # 401s even with a valid CLAUDE_CODE_OAUTH_TOKEN.
+            #
+            # PR final 4 pointed HOME at an empty tmp dir, which fixed
+            # auth but BROKE two real contracts:
+            #
+            #   1. ``--resume`` — Claude persists sessions in
+            #      ``$HOME/.claude/projects/<cwd>/<uuid>.jsonl``. An
+            #      empty HOME = no previous sessions = resume dead.
+            #   2. User-scope MCP + settings — Niwa registers its MCP
+            #      servers via ``claude mcp add --scope user`` (lives
+            #      in ``~/.claude.json``) plus ``settings.json`` in
+            #      ``~/.claude/``. An empty HOME hides both, so tools
+            #      like ``project_create`` disappear.
+            #
+            # PR final 5 fix: build a HOME tmp dir whose ``.claude/``
+            # is a *symlink farm* mirroring the real user's
+            # ``~/.claude/`` entry-by-entry, SKIPPING only
+            # ``.credentials.json``. Also symlink the sibling
+            # ``~/.claude.json`` (MCP user-scope config). The CLI
+            # sees:
+            #
+            #   - projects/ → real (resume still works + new sessions
+            #     written back to the real dir).
+            #   - settings.json → real.
+            #   - mcp_servers.json / other state → real.
+            #   - .credentials.json → ABSENT (our trick). Falls back
+            #     to the env var.
+            #
+            # We never touch the host's real ``.credentials.json``;
+            # ``claude -p`` run by the operator standalone still sees
+            # it unchanged.
             import tempfile as _tempfile
             claude_home = _tempfile.mkdtemp(prefix="niwa-claude-home-")
+            _mirror_claude_home(Path.home(), Path(claude_home))
             extra["HOME"] = claude_home
         # Claude can also work with env vars already set in the
         # process, so empty extra is acceptable — return {} not None.

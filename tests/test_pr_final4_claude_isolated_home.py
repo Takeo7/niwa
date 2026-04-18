@@ -77,8 +77,12 @@ def test_claude_code_with_setup_token_gets_isolated_home(executor, monkeypatch):
     home = Path(env["HOME"])
     assert home.is_dir()
     assert home.name.startswith("niwa-claude-home-")
-    # Empty — no leftover credentials.json from another run.
-    assert list(home.iterdir()) == []
+    # Contrato PR final 5: el HOME tmp tiene un ``.claude/`` (mirror del
+    # real vía symlinks, o vacío si no hay real). Lo único que NO debe
+    # haber es credentials.json — ese es el trick que fuerza al CLI a
+    # caer al env var.
+    assert (home / ".claude").is_dir()
+    assert not (home / ".claude" / ".credentials.json").exists()
     # The env var is also there for completeness (belt + braces).
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-VALID"
 
