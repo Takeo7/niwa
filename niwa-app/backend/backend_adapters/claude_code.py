@@ -89,6 +89,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+# Trailing characters to strip before checking for a question suffix.
+# Covers common markdown closers (backticks, emphasis, quotes) so a
+# question wrapped in code/italics/quotes still counts.
+_QUESTION_STRIP_CHARS = " \t\r\n`*_\"'"
+
+
+def _result_ends_with_question(text: str) -> bool:
+    """True when the final non-trivial character of ``text`` is ``?``.
+
+    Used by Bug 32 detection (PR-B1): when Claude executes tool_use
+    and ends with a trailing question, the task needs clarification
+    even though ``tool_use_count > 0``. Spanish uses ``¿…?``; the
+    closing mark is the same ``?``.
+    """
+    if not text:
+        return False
+    stripped = text.rstrip(_QUESTION_STRIP_CHARS)
+    return stripped.endswith("?")
+
+
 class ClaudeCodeAdapter(BackendAdapter):
     """Adapter for the Claude Code CLI backend.
 
@@ -1051,29 +1071,41 @@ class ClaudeCodeAdapter(BackendAdapter):
                         continue
 
                 # Bug 32 fix — false-succeeded detection.
-                # If Claude exited cleanly (no is_error, no permission
-                # denials) but emitted ZERO tool_use events and ended
-                # with stop_reason=end_turn, it just talked instead
-                # of acting. For chat-origin tasks that's legitimate
-                # (the user asked a question). For executive tasks
-                # (source != 'chat') it means Claude needs more info.
-                # Mark the task as waiting_input with the full result
-                # text surfaced to the user so they see WHAT Claude
-                # asked, not just "falta info".
-                if (outcome == "success"
-                        and tool_use_count == 0
-                        and stop_reason == "end_turn"):
+                # Two complementary signals mark a task as waiting on
+                # the human instead of "hecha":
+                #   (a) zero tool_use events + end_turn: Claude just
+                #       talked (PR final 6 case).
+                #   (b) end_turn + result_text ends with '?': Claude
+                #       may have executed partial work but finished
+                #       asking a question (PR-B1 regression case:
+                #       `mkdir /tmp/foo` then "¿qué tipo quieres?").
+                # Chat-origin tasks are excluded — there, answering
+                # with a question is legitimate.
+                if outcome == "success" and stop_reason == "end_turn":
                     task_source = (task.get("source") or "").strip().lower()
-                    if task_source and task_source != "chat":
+                    ends_with_q = _result_ends_with_question(result_text)
+                    if (task_source and task_source != "chat"
+                            and (tool_use_count == 0 or ends_with_q)):
                         outcome = "needs_clarification"
                         error_code = "clarification_required"
                         if conn:
+                            if tool_use_count == 0:
+                                reason_msg = (
+                                    "Claude respondió sin ejecutar ninguna "
+                                    "acción (0 tool_use). Probablemente "
+                                    "falta información en la tarea."
+                                )
+                            else:
+                                reason_msg = (
+                                    "Claude ejecutó "
+                                    f"{tool_use_count} acción(es) y "
+                                    "terminó con una pregunta. Falta "
+                                    "información para completar la tarea."
+                                )
                             runs_service.record_event(
                                 run_id, "error", conn,
                                 message=(
-                                    "Claude respondió sin ejecutar ninguna "
-                                    "acción (0 tool_use). Probablemente "
-                                    "falta información en la tarea. "
+                                    f"{reason_msg} "
                                     "Respuesta de Claude:\n\n"
                                     f"{str(result_text)[:1500]}"
                                 ),
@@ -1082,6 +1114,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                                     "result_text": str(result_text)[:2000],
                                     "tool_use_count": tool_use_count,
                                     "stop_reason": stop_reason,
+                                    "ends_with_question": ends_with_q,
                                 }),
                             )
             else:
