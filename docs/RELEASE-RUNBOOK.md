@@ -135,6 +135,20 @@ volver al commit previo con `niwa restore --from=...`.
 
 ## 4. Recovery de un update fallido
 
+### 4.0 — Claude empieza a fallar con 401 o exit 0 silencioso
+
+No es un fallo de update; pasa cuando el OAuth token de Anthropic
+caduca. Flujo correcto (PR final 4):
+
+1. Obtén un token nuevo en tu máquina local: `claude setup-token`.
+2. En la UI: **Sistema → Servicios → Anthropic → Setup Token** → pégalo → Guardar.
+3. Reintenta la tarea desde el detalle (botón "Reintentar").
+
+El executor lo usa en un HOME aislado, por lo que el fichero
+`/home/niwa/.claude/.credentials.json` del host (si existía) deja de
+interferir. NO hace falta `rm credentials.json` ni reiniciar
+servicios.
+
 ### 4.a — Auto-revert disparado
 
 Si el health-check post-update falla, el motor revierte solo: `git reset

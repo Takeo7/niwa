@@ -1222,6 +1222,23 @@ def _prepare_backend_env(profile: dict) -> dict | None:
             extra["ANTHROPIC_API_KEY"] = LLM_API_KEY
         if LLM_SETUP_TOKEN:
             extra["CLAUDE_CODE_OAUTH_TOKEN"] = LLM_SETUP_TOKEN
+            # PR final 4 — Bug 33 fix: the Claude CLI 2.1.97 prefers
+            # ``~/.claude/.credentials.json`` over the env var. If the
+            # host's credentials.json is stale/expired, the CLI exits
+            # 1 silently (or 401s) even with a valid
+            # CLAUDE_CODE_OAUTH_TOKEN. Isolate the subprocess from the
+            # host's Claude config by pointing HOME at an empty tmp
+            # dir — the CLI finds no credentials.json and falls back
+            # to the env var cleanly. We do NOT touch the host's real
+            # ``/home/niwa/.claude/.credentials.json``; that remains
+            # the operator's property for ``claude -p`` standalone.
+            #
+            # The tmp dir is tracked in the caller's cleanup list
+            # (wrapper's ``finally``) via the presence of ``HOME`` in
+            # extra_env.
+            import tempfile as _tempfile
+            claude_home = _tempfile.mkdtemp(prefix="niwa-claude-home-")
+            extra["HOME"] = claude_home
         # Claude can also work with env vars already set in the
         # process, so empty extra is acceptable — return {} not None.
 
@@ -1566,6 +1583,18 @@ def _execute_task_v02_body(
         # under /tmp on repeated codex tasks.
         if extra_env and "CODEX_HOME" in extra_env:
             codex_tmpdirs.append(extra_env["CODEX_HOME"])
+        # PR final 4: same cleanup contract for the Claude isolated
+        # HOME. The list is named ``codex_tmpdirs`` for historical
+        # reasons (PR-41) but semantically holds "adapter tmp dirs
+        # to rmtree on exit" — no need to rename the variable for
+        # this addition.
+        if (
+            extra_env
+            and profile["slug"] == "claude_code"
+            and "HOME" in extra_env
+            and Path(extra_env["HOME"]).name.startswith("niwa-claude-home-")
+        ):
+            codex_tmpdirs.append(extra_env["HOME"])
         if extra_env is None:
             # No credentials available — fail this run, do NOT escalate.
             # queued → failed directly (run never started).

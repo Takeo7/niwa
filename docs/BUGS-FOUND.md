@@ -541,9 +541,11 @@ Tests en `tests/test_cookie_secure.py` (9 casos): las 3 señales, override '0' n
 
 **Severidad:** **media UX** (confunde al operador: exit silencioso sin pista de por qué falló).
 
-**Workaround operacional:** asegurar que `/home/niwa/.claude/.credentials.json` es válido (copiar desde `/root/.claude/` tras `claude setup-token` o regenerarlo). La env var `CLAUDE_CODE_OAUTH_TOKEN` SOLA no basta mientras exista el fichero caducado.
+**Workaround operacional (histórico):** asegurar que `/home/niwa/.claude/.credentials.json` es válido (copiar desde `/root/.claude/` tras `claude setup-token` o regenerarlo). La env var `CLAUDE_CODE_OAUTH_TOKEN` SOLA no basta mientras exista el fichero caducado.
 
-**PR futuro donde se arreglará:** pendiente de asignar. Fix candidato: el adapter detecta "stream completó 0 eventos y exit 0" y reporta `error_code='auth_silent'` con mensaje explicando la causa probable (`.credentials.json` caducado) en el banner de PR-39. ~30 LOC en `_execute`.
+**Estado:** **ARREGLADO en PR final 4** vía aislamiento de HOME. Cuando el slug es `claude_code` y hay `LLM_SETUP_TOKEN` disponible, `_prepare_backend_env` crea un tmpdir `niwa-claude-home-<rand>/` y lo inyecta como `HOME` en el env del subprocess. El CLI busca credentials en `$HOME/.claude/.credentials.json` → no existe en el tmpdir → cae al env var `CLAUDE_CODE_OAUTH_TOKEN` sin ambigüedad. Ventajas frente a escribir credentials.json: (a) no se reverse-engineerea el formato propietario del fichero, (b) no se toca `/home/niwa/.claude/.credentials.json` del host (sigue siendo del operador para `claude -p` standalone), (c) zero race con otro proceso que lea/escriba ese fichero. El tmpdir se limpia en el mismo `finally` del wrapper que ya gestiona `CODEX_HOME` desde PR-41. Tests en `tests/test_pr_final4_claude_isolated_home.py` (6 casos): happy path con token, sin token no-op, api_key sólo no-op, codex no afectado, cleanup pattern pineado, dirs distintos por call.
+
+La UX complementaria: el help del campo `svc.llm.anthropic.setup_token` (Sistema → Servicios → Anthropic) ahora explica que pegar un setup-token fresco ahí arregla 401s sin tocar el host — el executor lo usa en el HOME aislado.
 
 ### Bug 34: Claude ignora `WORKING DIRECTORY` del prompt PR-38 y usa `/tmp/` por costumbre
 

@@ -1553,7 +1553,14 @@ SERVICES_REGISTRY = [
              "help": "Obtén tu API key en https://console.anthropic.com/settings/keys",
              "show_when": {"field": "svc.llm.anthropic.auth_method", "value": "api_key"}},
             {"key": "svc.llm.anthropic.setup_token", "type": "password", "label": "Setup Token", "required": False, "sensitive": True,
-             "help": "Ejecuta 'claude setup-token' en tu terminal para obtenerlo. Formato: sk-ant-oat01-...",
+             "help": (
+                 "Ejecuta 'claude setup-token' en tu terminal para obtenerlo. "
+                 "Formato: sk-ant-oat01-... "
+                 "Si Claude empieza a fallar con 401 en una tarea, pega aquí un "
+                 "setup-token fresco y reintenta — el executor lo usa en un HOME "
+                 "aislado, por lo que no entra en conflicto con credenciales "
+                 "viejas del CLI host."
+             ),
              "show_when": {"field": "svc.llm.anthropic.auth_method", "value": "setup_token"}},
             {"key": "svc.llm.anthropic.default_model", "type": "select", "label": "Modelo por defecto", "options": [
                 {"value": "claude-haiku-4-5", "label": "Claude Haiku 4.5 (rápido, económico)"},
