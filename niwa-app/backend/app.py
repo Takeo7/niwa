@@ -912,7 +912,28 @@ def _run_migrations():
     """Apply pending SQL migrations from db/migrations/."""
     import glob
     c = db_conn()
-    # Create version table
+
+    # Fresh-DB bootstrap: if the target DB has no user tables yet,
+    # apply schema.sql first so historical migrations that assume an
+    # existing schema (e.g. 005 indexing ``settings``) don't fail.
+    # Mirrors the fresh-install order in setup.py (schema.sql → then
+    # migrations) and keeps module-import-time runs safe against empty
+    # DBs created by test fixtures via NIWA_DB_PATH.
+    has_user_tables = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' AND name != 'schema_version' "
+        "LIMIT 1"
+    ).fetchone() is not None
+    if not has_user_tables:
+        try:
+            c.executescript(SCHEMA_PATH.read_text(encoding='utf-8'))
+            c.commit()
+        except Exception as e:
+            raise SystemExit(
+                f"FATAL: failed to bootstrap schema.sql on empty DB: {e}"
+            )
+
+    # Create version table (may already exist from schema.sql above)
     c.execute("""
         CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY,
