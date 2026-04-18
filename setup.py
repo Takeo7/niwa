@@ -326,6 +326,68 @@ def detect_docker() -> dict:
         return {"available": False, "error": str(e)}
 
 
+def _offer_docker_install(non_interactive: bool = False) -> Optional[dict]:
+    """Offer to install Docker when it is missing.
+
+    Returns the ``detect_docker()`` dict if Docker ends up available,
+    or ``None`` if the caller should fall back to the manual hint +
+    exit path. The function is silent when:
+
+      * ``non_interactive`` is True (``--yes`` quick install) — the
+        user has not authorised a network+root install.
+      * The platform is ``other`` — no supported command.
+      * macOS without ``brew`` — refuses to auto-install brew itself.
+    """
+    plat = _platform_key()
+    if non_interactive:
+        return None
+    if plat == "linux":
+        cmd = ["sh", "-c", "curl -fsSL https://get.docker.com | sh"]
+        question = (
+            "Docker is not installed. Install it now via "
+            "'curl -fsSL https://get.docker.com | sh'? (requires sudo/root)"
+        )
+    elif plat == "macos":
+        if not which("brew"):
+            return None
+        cmd = ["brew", "install", "--cask", "docker"]
+        question = (
+            "Docker is not installed. Install Docker Desktop now via "
+            "'brew install --cask docker'?"
+        )
+    else:
+        return None
+
+    if not prompt_bool(question, default=False):
+        return None
+
+    info("Running Docker installer — this may take a few minutes...")
+    try:
+        result = subprocess.run(cmd, text=True, timeout=600)
+    except Exception as e:
+        warn(f"Docker install failed: {e}")
+        return None
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        warn("Docker installer exited with code "
+             f"{result.returncode}"
+             + (f": {stderr[:200]}" if stderr else ""))
+        if plat == "linux" and os.geteuid() != 0:
+            info("Tip: re-run the installer with sudo.")
+        return None
+
+    redetected = detect_docker()
+    if not redetected.get("available"):
+        if plat == "macos":
+            info("Docker was installed but the daemon is not running. "
+                 "Open Docker Desktop and re-run ./niwa install.")
+        else:
+            warn("Docker was installed but is still not in PATH. "
+                 "Restart your shell and re-run ./niwa install.")
+        return None
+    return redetected
+
+
 def detect_socket_path() -> Optional[str]:
     candidates = [
         Path.home() / ".orbstack" / "run" / "docker.sock",          # OrbStack (macOS)
@@ -677,11 +739,13 @@ def step_detection(cfg: WizardConfig) -> None:
     header("Step 0 — Pre-flight detection")
     docker = detect_docker()
     if not docker.get("available"):
-        err("Docker is not installed or not in PATH.")
-        print_install_hint("docker")
-        print()
-        print("  After installing, re-run ./niwa install")
-        sys.exit(1)
+        docker = _offer_docker_install(non_interactive=False) or {"available": False}
+        if not docker.get("available"):
+            err("Docker is not installed or not in PATH.")
+            print_install_hint("docker")
+            print()
+            print("  After installing, re-run ./niwa install")
+            sys.exit(1)
     ok(f"Docker: {docker['version']} ({docker.get('runtime', 'unknown')})")
 
     sock = detect_socket_path()
@@ -3495,9 +3559,16 @@ def build_quick_config(args) -> WizardConfig:
     # --- Pre-flight: docker is hard requirement ---
     docker = detect_docker()
     if not docker.get("available"):
-        err("Docker is not installed or not in PATH.")
-        print_install_hint("docker")
-        sys.exit(1)
+        # Non-interactive (--yes) callers get no prompt: installing Docker
+        # touches the network, disk (~300 MB) and requires root. Only the
+        # interactive wizard can authorise it.
+        docker = _offer_docker_install(
+            non_interactive=bool(getattr(args, "yes", False))
+        ) or {"available": False}
+        if not docker.get("available"):
+            err("Docker is not installed or not in PATH.")
+            print_install_hint("docker")
+            sys.exit(1)
     sock = detect_socket_path()
     if not sock:
         err("Could not find a Docker socket.")
