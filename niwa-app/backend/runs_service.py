@@ -4,14 +4,241 @@ Manages the lifecycle of ``backend_runs``: creation, status transitions,
 heartbeat updates, event logging, and linking (fallback / resume / retry).
 """
 
+import hashlib
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import state_machines
 
 logger = logging.getLogger(__name__)
+
+# ── Filesystem snapshot / diff (FIX-20260420) ──────────────────────
+#
+# Completion detection now cross-checks stream events against an
+# objective filesystem delta. A run that emits zero tool_use events
+# but has a non-empty diff over the project directory has clearly done
+# work (Bug 35 root cause — see brief).
+#
+# Paths ignored by default. Keeps repeated runs from flooding the diff
+# with git metadata, interpreter caches, deploy output, etc. Rooted
+# components — matched by basename or any path segment.
+_DEFAULT_SNAPSHOT_EXCLUDES: tuple[str, ...] = (
+    ".niwa",          # run-scoped logs live here (artifact_root subtree)
+    ".git",
+    ".DS_Store",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".next",
+    ".turbo",
+    "dist",
+    "build",
+)
+
+# Hard limit on files a single snapshot will hash. Above this we stop,
+# log a warning, and mark the snapshot truncated. The run is not
+# aborted — completion detection still works, just with reduced
+# confidence in the "no files changed" branch.
+SNAPSHOT_MAX_FILES = 10_000
+
+
+def _snapshot_path_excluded(rel_parts: tuple[str, ...],
+                            excludes: tuple[str, ...]) -> bool:
+    """True if any segment of *rel_parts* matches an exclude token."""
+    ex = set(excludes)
+    return any(part in ex for part in rel_parts)
+
+
+def snapshot_directory(
+    path: str | Path,
+    *,
+    excludes: tuple[str, ...] | list[str] | None = None,
+    max_files: int = SNAPSHOT_MAX_FILES,
+) -> dict:
+    """Return a ``{relative_path: sha256}`` mapping for every file
+    under *path*, plus metadata about the scan.
+
+    Deterministic: sorted by relative path. Uses forward slashes so the
+    output is stable across Windows/POSIX for the unlikely case a dev
+    machine round-trips a snapshot.
+
+    Returns a dict with shape::
+
+        {
+            "root": "<absolute resolved path>",
+            "files": {"rel/path": "<sha256 hex>", ...},
+            "truncated": bool,
+            "file_count": int,
+            "missing": bool,  # True when path does not exist / not a dir
+        }
+
+    Non-existent roots return ``missing=True`` with an empty ``files``
+    mapping — callers can diff against them safely to detect the case
+    "project directory was created during the run".
+    """
+    exc = tuple(excludes) if excludes is not None else _DEFAULT_SNAPSHOT_EXCLUDES
+    root = Path(path)
+    out: dict[str, str] = {}
+    truncated = False
+
+    try:
+        resolved = root.resolve(strict=False)
+    except OSError:
+        resolved = root
+
+    if not root.exists() or not root.is_dir():
+        return {
+            "root": str(resolved),
+            "files": {},
+            "truncated": False,
+            "file_count": 0,
+            "missing": True,
+        }
+
+    count = 0
+    # ``rglob('*')`` gives a depth-first, alphabetical iteration on
+    # POSIX — deterministic enough for the diff callers, which sort
+    # again anyway.
+    for entry in sorted(root.rglob("*")):
+        if not entry.is_file():
+            continue
+        try:
+            rel = entry.relative_to(root)
+        except ValueError:
+            # symlink escape or similar — skip silently; not our
+            # responsibility to resolve.
+            continue
+        rel_parts = rel.parts
+        if _snapshot_path_excluded(rel_parts, exc):
+            continue
+        if count >= max_files:
+            truncated = True
+            logger.warning(
+                "snapshot_directory: truncated at %d files for root=%s",
+                max_files, resolved,
+            )
+            break
+        try:
+            h = hashlib.sha256(entry.read_bytes()).hexdigest()
+        except OSError as e:
+            # Unreadable file (permissions, symlink to nowhere, special
+            # file) — log and skip. A caller that needs to know should
+            # call with the file explicitly listed.
+            logger.debug(
+                "snapshot_directory: skipping %s: %s", entry, e,
+            )
+            continue
+        # Forward-slash the key so diffs compare cleanly across
+        # platforms. pathlib gives '/' on POSIX already; this is
+        # defensive for tests that may run on Windows CI in the future.
+        key = "/".join(rel_parts)
+        out[key] = h
+        count += 1
+
+    return {
+        "root": str(resolved),
+        "files": out,
+        "truncated": truncated,
+        "file_count": count,
+        "missing": False,
+    }
+
+
+def diff_snapshots(before: dict, after: dict) -> dict:
+    """Compute added/modified/removed between two snapshots.
+
+    Accepts either the full snapshot dict returned by
+    :func:`snapshot_directory` or just the ``files`` mapping. Returns::
+
+        {
+            "added":    [relpath, ...],
+            "modified": [relpath, ...],
+            "removed":  [relpath, ...],
+        }
+
+    All lists are sorted alphabetically so the diff is deterministic
+    across runs.
+    """
+    before_files = before.get("files", before) if isinstance(before, dict) else {}
+    after_files = after.get("files", after) if isinstance(after, dict) else {}
+
+    before_keys = set(before_files.keys())
+    after_keys = set(after_files.keys())
+
+    added = sorted(after_keys - before_keys)
+    removed = sorted(before_keys - after_keys)
+    modified = sorted(
+        k for k in (before_keys & after_keys)
+        if before_files[k] != after_files[k]
+    )
+    return {"added": added, "modified": modified, "removed": removed}
+
+
+def diff_is_nonempty(diff: dict) -> bool:
+    """True when the diff contains at least one added/modified/removed entry."""
+    return bool(diff.get("added") or diff.get("modified") or diff.get("removed"))
+
+
+def register_artifacts_from_diff(
+    task_id: str,
+    run_id: str,
+    diff: dict,
+    project_directory: str | Path,
+    conn,
+    *,
+    after_snapshot: dict | None = None,
+) -> int:
+    """Persist ``artifacts`` rows for every file in *diff*.
+
+    ``artifact_type`` is set to ``added`` / ``modified`` / ``removed``.
+    When ``after_snapshot`` is provided, ``sha256`` and ``size_bytes``
+    are filled in for added/modified entries by looking at the on-disk
+    file. Removed entries carry ``size_bytes=NULL, sha256=NULL``.
+
+    Returns the number of artifacts inserted.
+    """
+    project_root = Path(project_directory)
+    after_files = (after_snapshot or {}).get("files") if after_snapshot else None
+    inserted = 0
+
+    def _stat_pair(rel: str) -> tuple[int | None, str | None]:
+        if after_files and rel in after_files:
+            sha = after_files[rel]
+        else:
+            sha = None
+        try:
+            size = (project_root / rel).stat().st_size
+        except OSError:
+            size = None
+        return size, sha
+
+    for rel in diff.get("added", []):
+        size, sha = _stat_pair(rel)
+        register_artifact(
+            task_id=task_id, run_id=run_id, artifact_type="added",
+            path=rel, conn=conn, size_bytes=size, sha256=sha,
+        )
+        inserted += 1
+    for rel in diff.get("modified", []):
+        size, sha = _stat_pair(rel)
+        register_artifact(
+            task_id=task_id, run_id=run_id, artifact_type="modified",
+            path=rel, conn=conn, size_bytes=size, sha256=sha,
+        )
+        inserted += 1
+    for rel in diff.get("removed", []):
+        register_artifact(
+            task_id=task_id, run_id=run_id, artifact_type="removed",
+            path=rel, conn=conn, size_bytes=None, sha256=None,
+        )
+        inserted += 1
+    return inserted
 
 
 def _now_iso() -> str:
