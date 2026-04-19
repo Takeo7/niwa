@@ -16,6 +16,7 @@ import {
 } from '@mantine/core';
 import {
   IconAlertTriangle,
+  IconBrandOpenai,
   IconCheck,
   IconChevronDown,
   IconChevronUp,
@@ -23,7 +24,10 @@ import {
 } from '@tabler/icons-react';
 import {
   useApplyClaudeSetupToken,
+  useOAuthStatus,
   useReadiness,
+  useRevokeOAuth,
+  useStartOAuth,
 } from '../../../shared/api/queries';
 import type { Readiness, ReadinessBackend } from '../../../shared/types';
 
@@ -122,79 +126,204 @@ export function AuthPanel() {
   };
 
   return (
+    <Stack gap="md">
+      <Card withBorder>
+        <Stack gap="sm">
+          <Group justify="space-between">
+            <Title order={5}>Claude (suscripción)</Title>
+            {statusBadge(backend)}
+          </Group>
+
+          <Text size="sm" c="dimmed">
+            Pega el token que te da <code>claude setup-token</code> en tu
+            laptop para que Niwa ejecute tareas contra tu suscripción
+            Claude Pro/Max. El token se guarda y el executor lo usa como{' '}
+            <code>CLAUDE_CODE_OAUTH_TOKEN</code>.
+          </Text>
+
+          {viaSubscription && (
+            <Alert color="teal" variant="light" icon={<IconCheck size={16} />}>
+              Niwa está autenticado vía tu suscripción Claude. Pega un
+              token nuevo solo si quieres rotarlo o si Claude empieza a
+              fallar con 401.
+            </Alert>
+          )}
+
+          <PasswordInput
+            label="Setup Token"
+            description="Formato: sk-ant-oat01-... (obtén uno con 'claude setup-token' en tu laptop)"
+            placeholder="sk-ant-oat01-..."
+            value={token}
+            onChange={(e) => setToken(e.currentTarget.value)}
+            autoComplete="off"
+          />
+
+          {errorMsg && (
+            <Alert color="red" variant="light" icon={<IconX size={16} />}>
+              {errorMsg}
+            </Alert>
+          )}
+          {successMsg && (
+            <Alert color="teal" variant="light" icon={<IconCheck size={16} />}>
+              {successMsg}
+            </Alert>
+          )}
+
+          <Group gap="xs">
+            <Button
+              size="xs"
+              onClick={handleApply}
+              loading={apply.isPending}
+              disabled={apply.isPending}
+            >
+              Aplicar token
+            </Button>
+          </Group>
+
+          <UnstyledButton onClick={() => setShowApiKeyHint((v) => !v)}>
+            <Group gap={4}>
+              <Text size="xs" c="dimmed">
+                ¿Solo tienes API key?
+              </Text>
+              {showApiKeyHint ? (
+                <IconChevronUp size={14} />
+              ) : (
+                <IconChevronDown size={14} />
+              )}
+            </Group>
+          </UnstyledButton>
+          <Collapse in={showApiKeyHint}>
+            <Text size="xs" c="dimmed">
+              Ve a la pestaña <Anchor component="span">Servicios</Anchor> →
+              Anthropic, cambia el método de autenticación a &quot;API
+              Key&quot; y pega la key. La suscripción es el camino
+              recomendado porque no gasta tokens por uso.
+            </Text>
+          </Collapse>
+        </Stack>
+      </Card>
+
+      <OpenAIAuthSection />
+    </Stack>
+  );
+}
+
+function OpenAIAuthSection() {
+  const { data: status, refetch } = useOAuthStatus('openai');
+  const startOAuth = useStartOAuth();
+  const revokeOAuth = useRevokeOAuth();
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const authenticated = !!status?.authenticated;
+
+  const handleConnect = async () => {
+    setErrorMsg(null);
+    try {
+      const result = await startOAuth.mutateAsync('openai');
+      if (result.error) {
+        setErrorMsg(result.error);
+        return;
+      }
+      if (!result.auth_url) {
+        setErrorMsg(
+          'El backend no devolvió una URL de autorización. Revisa los logs.',
+        );
+        return;
+      }
+      // Poll status until the popup completes the flow (max 2 min).
+      const interval = window.setInterval(() => {
+        refetch().then((r) => {
+          if (r.data?.authenticated) {
+            window.clearInterval(interval);
+          }
+        });
+      }, 3000);
+      window.setTimeout(() => window.clearInterval(interval), 120000);
+    } catch (e) {
+      setErrorMsg(
+        e instanceof Error ? e.message : 'Error iniciando sesión con ChatGPT.',
+      );
+    }
+  };
+
+  const handleRevoke = async () => {
+    setErrorMsg(null);
+    try {
+      await revokeOAuth.mutateAsync('openai');
+      await refetch();
+    } catch (e) {
+      setErrorMsg(
+        e instanceof Error ? e.message : 'Error al desconectar ChatGPT.',
+      );
+    }
+  };
+
+  return (
     <Card withBorder>
       <Stack gap="sm">
         <Group justify="space-between">
-          <Title order={5}>Claude (suscripción)</Title>
-          {statusBadge(backend)}
+          <Title order={5}>ChatGPT (suscripción)</Title>
+          {authenticated ? (
+            <Badge color="teal" leftSection={<IconCheck size={12} />}>
+              Conectado
+            </Badge>
+          ) : (
+            <Badge color="red" leftSection={<IconX size={12} />}>
+              No conectado
+            </Badge>
+          )}
         </Group>
 
         <Text size="sm" c="dimmed">
-          Pega el token que te da <code>claude setup-token</code> en tu
-          laptop para que Niwa ejecute tareas contra tu suscripción
-          Claude Pro/Max. El token se guarda y el executor lo usa como{' '}
-          <code>CLAUDE_CODE_OAUTH_TOKEN</code>.
+          Conecta tu suscripción ChatGPT Plus/Pro para que Codex ejecute
+          tareas contra tu cuenta. Niwa abre una ventana con el login de
+          OpenAI y guarda los tokens para refrescarlos automáticamente.
         </Text>
 
-        {viaSubscription && (
-          <Alert color="teal" variant="light" icon={<IconCheck size={16} />}>
-            Niwa está autenticado vía tu suscripción Claude. Pega un
-            token nuevo solo si quieres rotarlo o si Claude empieza a
-            fallar con 401.
-          </Alert>
+        {authenticated && status?.email && (
+          <Text size="sm">
+            Conectado como <code>{status.email}</code>.
+          </Text>
         )}
-
-        <PasswordInput
-          label="Setup Token"
-          description="Formato: sk-ant-oat01-... (obtén uno con 'claude setup-token' en tu laptop)"
-          placeholder="sk-ant-oat01-..."
-          value={token}
-          onChange={(e) => setToken(e.currentTarget.value)}
-          autoComplete="off"
-        />
 
         {errorMsg && (
           <Alert color="red" variant="light" icon={<IconX size={16} />}>
             {errorMsg}
           </Alert>
         )}
-        {successMsg && (
-          <Alert color="teal" variant="light" icon={<IconCheck size={16} />}>
-            {successMsg}
-          </Alert>
-        )}
 
         <Group gap="xs">
-          <Button
-            size="xs"
-            onClick={handleApply}
-            loading={apply.isPending}
-            disabled={apply.isPending}
-          >
-            Aplicar token
-          </Button>
+          {authenticated ? (
+            <Button
+              size="xs"
+              color="red"
+              variant="light"
+              onClick={handleRevoke}
+              loading={revokeOAuth.isPending}
+              disabled={revokeOAuth.isPending}
+            >
+              Desconectar
+            </Button>
+          ) : (
+            <Button
+              size="xs"
+              leftSection={<IconBrandOpenai size={14} />}
+              onClick={handleConnect}
+              loading={startOAuth.isPending}
+              disabled={startOAuth.isPending}
+            >
+              Conectar con ChatGPT
+            </Button>
+          )}
         </Group>
 
-        <UnstyledButton onClick={() => setShowApiKeyHint((v) => !v)}>
-          <Group gap={4}>
-            <Text size="xs" c="dimmed">
-              ¿Solo tienes API key?
-            </Text>
-            {showApiKeyHint ? (
-              <IconChevronUp size={14} />
-            ) : (
-              <IconChevronDown size={14} />
-            )}
-          </Group>
-        </UnstyledButton>
-        <Collapse in={showApiKeyHint}>
+        {!authenticated && (
           <Text size="xs" c="dimmed">
-            Ve a la pestaña <Anchor component="span">Servicios</Anchor> →
-            Anthropic, cambia el método de autenticación a &quot;API
-            Key&quot; y pega la key. La suscripción es el camino
-            recomendado porque no gasta tokens por uso.
+            Si no se abre la ventana de OpenAI, tu navegador puede haber
+            bloqueado el popup. Permite popups para este dominio e
+            inténtalo de nuevo.
           </Text>
-        </Collapse>
+        )}
       </Stack>
     </Card>
   );
