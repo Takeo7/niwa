@@ -412,6 +412,114 @@ def check_deployments_health(
     return "\n".join(lines) if lines else "no active deployments"
 
 
+# ────────────────────────── improvement routine templates ──────────────────────────
+
+# Prompt templates for action='improve'. Literal strings from
+# ``docs/MVP-ROADMAP.md §4 Hito C``; only ``{project_name}`` and
+# ``{project_directory}`` are substituted. Any ``{`` / ``}`` in the body
+# that isn't a placeholder must be doubled (none today).
+_IMPROVE_PROMPT_TEMPLATES: dict[str, str] = {
+    "functional": (
+        "Review recent commits + README of project {project_name} "
+        "({project_directory}). Propose and implement ONE small "
+        "functional improvement (max 15 min). No API breaking changes. "
+        "Output: commit + child task 'review'."
+    ),
+    "stability": (
+        "Run pytest/vitest for project {project_name} "
+        "({project_directory}). If failing, create child task "
+        "'fix <test>'. If green, run ruff/eslint --fix + typecheck. "
+        "No major dep upgrades."
+    ),
+    "security": (
+        "Run pip-audit / npm audit --audit-level=high for project "
+        "{project_name} ({project_directory}). Create one child task "
+        "per high|critical vuln. No major dep upgrades."
+    ),
+}
+
+
+def _exec_improve(
+    config: dict,
+    improvement_type: str,
+    db_conn_fn: Callable,
+) -> tuple[str, bool]:
+    """Create one ``pendiente`` task from an ``improve`` routine.
+
+    Resolves the project named by ``config['project_id']``, renders the
+    template for ``improvement_type`` with the project's name and
+    directory, and inserts a task whose ``description`` carries the
+    rendered prompt. The task source is ``routine:improve:<type>`` so
+    it is distinguishable from routine-created tasks of other kinds.
+
+    Returns ``(message, success)``; callers (``_execute_routine``) rely
+    on the tuple shape to persist ``last_status`` / ``last_error``.
+    Raises ``ValueError`` if ``improvement_type`` is outside
+    ``VALID_IMPROVEMENT_TYPES`` — the HTTP layer already blocks this at
+    routine create/update, but fail loudly if an internal caller
+    bypasses that path.
+    """
+    if improvement_type not in VALID_IMPROVEMENT_TYPES:
+        raise ValueError(
+            f"invalid improvement_type {improvement_type!r}; "
+            f"must be one of {VALID_IMPROVEMENT_TYPES}"
+        )
+
+    project_id = (config or {}).get("project_id")
+    if not project_id:
+        return ("[error] improve routine missing project_id in action_config", False)
+
+    with db_conn_fn() as conn:
+        row = conn.execute(
+            "SELECT id, name, directory FROM projects WHERE id=?",
+            (project_id,),
+        ).fetchone()
+    if not row:
+        return (f"[error] project_id not found: {project_id}", False)
+
+    project_name = row["name"]
+    project_directory = row["directory"] or "(no directory set)"
+    template = _IMPROVE_PROMPT_TEMPLATES[improvement_type]
+    description = template.format(
+        project_name=project_name,
+        project_directory=project_directory,
+    )
+    title = f"Improve {project_name} ({improvement_type})"
+
+    ts = _now_iso()
+    task_id = str(uuid.uuid4())
+    with db_conn_fn() as conn:
+        conn.execute(
+            "INSERT INTO tasks (id, title, description, area, project_id, "
+            "status, priority, source, created_at, updated_at, "
+            "assigned_to_yume, assigned_to_claude) "
+            "VALUES (?, ?, ?, 'sistema', ?, 'pendiente', 'media', ?, ?, ?, 0, 0)",
+            (
+                task_id,
+                title,
+                description,
+                project_id,
+                f"routine:improve:{improvement_type}",
+                ts, ts,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO task_events (id, task_id, type, payload_json, created_at) "
+            "VALUES (?, ?, 'created', ?, ?)",
+            (
+                str(uuid.uuid4()),
+                task_id,
+                json.dumps(
+                    {"source": f"routine:improve:{improvement_type}"},
+                    ensure_ascii=False,
+                ),
+                ts,
+            ),
+        )
+        conn.commit()
+    return (f"Task created: {task_id} (improve:{improvement_type})", True)
+
+
 def _exec_webhook(config: dict) -> str:
     """POST to a webhook URL."""
     import urllib.request
@@ -608,16 +716,19 @@ class SchedulerThread(threading.Thread):
                 if result.startswith("[error"):
                     success = False
             elif action == "improve":
-                # PR-C4 will wire this up with functional/stability/security
-                # templates and the NIWA_LLM_COMMAND_PLANNER pipeline. Until
-                # then, fail closed so an enabled 'improve' routine doesn't
-                # silently no-op.
-                improvement_type = routine.get("improvement_type") or "(none)"
-                result = (
-                    f"[error] improve action not implemented yet (PR-C4); "
-                    f"improvement_type={improvement_type}"
-                )
-                success = False
+                improvement_type = routine.get("improvement_type") or ""
+                if improvement_type not in VALID_IMPROVEMENT_TYPES:
+                    # Defensive: routine creation/update validates this,
+                    # but an older row could pre-date that check.
+                    result = (
+                        f"[error] improve routine missing/invalid "
+                        f"improvement_type={improvement_type!r}"
+                    )
+                    success = False
+                else:
+                    result, success = _exec_improve(
+                        config, improvement_type, self.db_conn_fn,
+                    )
             else:
                 result = f"Unknown action: {action}"
                 success = False
