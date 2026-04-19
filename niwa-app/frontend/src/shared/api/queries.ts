@@ -135,6 +135,30 @@ export function useRetryTask() {
   });
 }
 
+// FIX-20260420: user answers Claude on a waiting_input task. Body
+// carries the followup message; the endpoint stores it, sets the
+// resume marker, and flips the task to pendiente. React Query
+// invalidations mirror useRetryTask so the UI refreshes in place.
+export function useRespondTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, message }: { id: string; message: string }) =>
+      apiPost<{
+        ok: boolean;
+        status: string;
+        resume_from_run_id: string;
+        task_id: string;
+      }>(`tasks/${id}/respond`, { message }),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['task', id] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['kanban'] });
+      qc.invalidateQueries({ queryKey: ['runs', id] });
+      _invalidateProjectAggregates(qc);
+    },
+  });
+}
+
 export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({

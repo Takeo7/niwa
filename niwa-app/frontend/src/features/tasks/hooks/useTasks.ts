@@ -5,6 +5,7 @@ export {
   useUpdateTask,
   useDeleteTask,
   useRetryTask,
+  useRespondTask,
   useTaskAttachments,
   useUploadTaskAttachment,
   useDeleteTaskAttachment,
