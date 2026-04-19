@@ -92,6 +92,9 @@ def cron_matches(expr: str, dt: datetime) -> bool:
 
 # ────────────────────────── DB helpers ──────────────────────────
 
+VALID_ACTIONS = ("create_task", "script", "webhook", "improve")
+VALID_IMPROVEMENT_TYPES = ("functional", "stability", "security")
+
 ROUTINES_DDL = """
 CREATE TABLE IF NOT EXISTS routines (
     id TEXT PRIMARY KEY,
@@ -100,8 +103,9 @@ CREATE TABLE IF NOT EXISTS routines (
     enabled INTEGER NOT NULL DEFAULT 1,
     schedule TEXT NOT NULL,
     tz TEXT NOT NULL DEFAULT 'UTC',
-    action TEXT NOT NULL CHECK (action IN ('create_task', 'script', 'webhook')),
+    action TEXT NOT NULL CHECK (action IN ('create_task', 'script', 'webhook', 'improve')),
     action_config TEXT NOT NULL DEFAULT '{}',
+    improvement_type TEXT,
     notify_channel TEXT NOT NULL DEFAULT 'none',
     notify_config TEXT NOT NULL DEFAULT '{}',
     last_run_at TEXT,
@@ -112,6 +116,24 @@ CREATE TABLE IF NOT EXISTS routines (
     updated_at TEXT NOT NULL
 );
 """
+
+
+def _validate_routine_action(action: str, improvement_type: Optional[str]) -> None:
+    """Raise ValueError if action / improvement_type combo is invalid.
+
+    Kept here rather than duplicated in app.py so both the HTTP layer and
+    any future internal caller share the same rules. For migrated DBs the
+    pre-016 CHECK still rejects ``'improve'``; this validation fires first
+    so callers get a clean ValueError instead of an IntegrityError.
+    """
+    if action not in VALID_ACTIONS:
+        raise ValueError(f"invalid action {action!r}; must be one of {VALID_ACTIONS}")
+    if action == "improve":
+        if improvement_type not in VALID_IMPROVEMENT_TYPES:
+            raise ValueError(
+                f"action='improve' requires improvement_type in "
+                f"{VALID_IMPROVEMENT_TYPES}, got {improvement_type!r}"
+            )
 
 
 def init_routines_table(db_conn_fn: Callable) -> None:
@@ -138,13 +160,17 @@ def get_routine(db_conn_fn: Callable, routine_id: str) -> Optional[dict]:
 
 
 def create_routine(db_conn_fn: Callable, data: dict) -> str:
+    action = data.get("action")
+    improvement_type = data.get("improvement_type")
+    _validate_routine_action(action, improvement_type)
     rid = data.get("id") or str(uuid.uuid4())
     ts = _now_iso()
     with db_conn_fn() as conn:
         conn.execute(
             """INSERT INTO routines (id, name, description, enabled, schedule, tz, action,
-               action_config, notify_channel, notify_config, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               action_config, improvement_type, notify_channel, notify_config,
+               created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 rid,
                 data.get("name", "Untitled"),
@@ -152,8 +178,9 @@ def create_routine(db_conn_fn: Callable, data: dict) -> str:
                 1 if data.get("enabled", True) else 0,
                 data["schedule"],
                 data.get("tz", "UTC"),
-                data["action"],
+                action,
                 json.dumps(data.get("action_config", {}), ensure_ascii=False),
+                improvement_type,
                 data.get("notify_channel", "none"),
                 json.dumps(data.get("notify_config", {}), ensure_ascii=False),
                 ts, ts,
@@ -165,7 +192,22 @@ def create_routine(db_conn_fn: Callable, data: dict) -> str:
 
 def update_routine(db_conn_fn: Callable, routine_id: str, data: dict) -> bool:
     allowed = {"name", "description", "enabled", "schedule", "tz", "action",
-               "action_config", "notify_channel", "notify_config"}
+               "action_config", "improvement_type", "notify_channel", "notify_config"}
+    if "action" in data or "improvement_type" in data:
+        # Need the other field to validate the combination. If action is
+        # not in ``data``, read the current stored value.
+        with db_conn_fn() as conn:
+            row = conn.execute(
+                "SELECT action, improvement_type FROM routines WHERE id=?",
+                (routine_id,),
+            ).fetchone()
+        current_action = row["action"] if row else None
+        action = data.get("action", current_action)
+        improvement_type = data.get(
+            "improvement_type",
+            row["improvement_type"] if row else None,
+        )
+        _validate_routine_action(action, improvement_type)
     sets, params = [], []
     for k, v in data.items():
         if k not in allowed:
@@ -260,6 +302,103 @@ def _exec_script(config: dict, install_dir: Path) -> str:
         return f"[timeout after {timeout}s]"
     except Exception as e:
         return f"[error: {e}]"
+
+
+def check_deployments_health(
+    db_conn_fn: Callable,
+    opener: Optional[Callable] = None,
+    timeout_seconds: int = 5,
+) -> str:
+    """Probe each active deployment over HTTP and track consecutive failures.
+
+    Behaviour per deployment:
+      - 2xx/3xx response → reset ``consecutive_failures`` to 0.
+      - Otherwise (non-2xx, timeout, connection error) → increment.
+      - When the counter transitions *to* 3 (exactly), create one fix
+        task (``source='routine:product_healthcheck'``). The counter
+        then freezes at 3 until the next success; a second fix task is
+        only created after a reset→3 cycle.
+
+    ``opener`` is injectable for tests; defaults to ``urlopen``.
+    """
+    if opener is None:
+        import urllib.request
+        opener = urllib.request.urlopen
+
+    lines: list[str] = []
+    with db_conn_fn() as conn:
+        rows = conn.execute(
+            "SELECT id, project_id, slug, url, consecutive_failures "
+            "FROM deployments WHERE status='active'"
+        ).fetchall()
+        deployments = [dict(r) for r in rows]
+
+    for dep in deployments:
+        url = dep.get("url") or ""
+        prev = int(dep.get("consecutive_failures") or 0)
+        if not url:
+            lines.append(f"{dep['slug']}: skipped (no url)")
+            continue
+
+        ok = False
+        reason = ""
+        try:
+            resp = opener(url, timeout=timeout_seconds)
+            try:
+                status = getattr(resp, "status", None) or resp.getcode()
+            finally:
+                # ``urlopen`` returns a context manager-capable object;
+                # explicit close keeps the socket from lingering in tests.
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            ok = 200 <= int(status) < 400
+            reason = f"HTTP {status}"
+        except Exception as e:
+            reason = f"{type(e).__name__}: {e}"
+
+        if ok:
+            new_cf = 0
+        else:
+            # Freeze at 3 so a long-outage deployment doesn't spawn one
+            # fix task per tick.
+            new_cf = min(prev + 1, 3)
+
+        with db_conn_fn() as conn:
+            conn.execute(
+                "UPDATE deployments SET consecutive_failures=?, updated_at=? WHERE id=?",
+                (new_cf, _now_iso(), dep["id"]),
+            )
+            if prev < 3 and new_cf == 3:
+                # Transitioning into strike-out: open one fix task.
+                task_id = str(uuid.uuid4())
+                title = f"Fix deployment {dep['slug']} (3 consecutive failures)"
+                description = (
+                    f"product_healthcheck routine observed 3 consecutive "
+                    f"failures for {url!r}. Last reason: {reason}."
+                )
+                conn.execute(
+                    """INSERT INTO tasks (id, title, description, area, project_id,
+                       status, priority, source, created_at, updated_at,
+                       assigned_to_yume, assigned_to_claude)
+                       VALUES (?, ?, ?, 'sistema', ?, 'pendiente', 'alta',
+                       'routine:product_healthcheck', ?, ?, 0, 0)""",
+                    (
+                        task_id,
+                        title,
+                        description,
+                        dep.get("project_id"),
+                        _now_iso(),
+                        _now_iso(),
+                    ),
+                )
+            conn.commit()
+        lines.append(
+            f"{dep['slug']}: {reason} (failures={new_cf})"
+        )
+
+    return "\n".join(lines) if lines else "no active deployments"
 
 
 def _exec_webhook(config: dict) -> str:
@@ -448,6 +587,17 @@ class SchedulerThread(threading.Thread):
                 result = _exec_webhook(config)
                 if result.startswith("[error"):
                     success = False
+            elif action == "improve":
+                # PR-C4 will wire this up with functional/stability/security
+                # templates and the NIWA_LLM_COMMAND_PLANNER pipeline. Until
+                # then, fail closed so an enabled 'improve' routine doesn't
+                # silently no-op.
+                improvement_type = routine.get("improvement_type") or "(none)"
+                result = (
+                    f"[error] improve action not implemented yet (PR-C4); "
+                    f"improvement_type={improvement_type}"
+                )
+                success = False
             else:
                 result = f"Unknown action: {action}"
                 success = False
@@ -664,6 +814,78 @@ print(f'Processed {processed} inbox items into tasks')
             "timeout": 30,
         },
         "notify_channel": "telegram",
+    },
+    {
+        "id": "product_healthcheck",
+        "name": "Product healthcheck",
+        "description": (
+            "Every 10 minutes, HTTP-probes each active deployment. After 3 "
+            "consecutive failures, creates one fix task for that deployment "
+            "and freezes the counter until the deployment responds again."
+        ),
+        "schedule": "*/10 * * * *",
+        "enabled": True,
+        "action": "script",
+        "action_config": {
+            "command": """python3 -c "
+import sqlite3, os, uuid, urllib.request
+from datetime import datetime, timezone
+db = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')
+c = sqlite3.connect(db)
+c.row_factory = sqlite3.Row
+now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+rows = c.execute(
+    \\\"SELECT id, project_id, slug, url, consecutive_failures \\\"
+    \\\"FROM deployments WHERE status='active'\\\"
+).fetchall()
+lines = []
+for row in rows:
+    dep = dict(row)
+    url = dep.get('url') or ''
+    prev = int(dep.get('consecutive_failures') or 0)
+    if not url:
+        lines.append(f\\\"{dep['slug']}: skipped (no url)\\\")
+        continue
+    ok, reason = False, ''
+    try:
+        resp = urllib.request.urlopen(url, timeout=5)
+        try:
+            status = getattr(resp, 'status', None) or resp.getcode()
+        finally:
+            try: resp.close()
+            except Exception: pass
+        ok = 200 <= int(status) < 400
+        reason = f'HTTP {status}'
+    except Exception as e:
+        reason = f'{type(e).__name__}: {e}'
+    new_cf = 0 if ok else min(prev + 1, 3)
+    c.execute(
+        'UPDATE deployments SET consecutive_failures=?, updated_at=? WHERE id=?',
+        (new_cf, now_iso, dep['id']),
+    )
+    if prev < 3 and new_cf == 3:
+        task_id = str(uuid.uuid4())
+        c.execute(
+            \\\"INSERT INTO tasks (id, title, description, area, project_id, \\\"
+            \\\"status, priority, source, created_at, updated_at, \\\"
+            \\\"assigned_to_yume, assigned_to_claude) \\\"
+            \\\"VALUES (?, ?, ?, 'sistema', ?, 'pendiente', 'alta', \\\"
+            \\\"'routine:product_healthcheck', ?, ?, 0, 0)\\\",
+            (
+                task_id,
+                f\\\"Fix deployment {dep['slug']} (3 consecutive failures)\\\",
+                f\\\"product_healthcheck routine observed 3 consecutive failures for {url!r}. Last reason: {reason}.\\\",
+                dep.get('project_id'),
+                now_iso, now_iso,
+            ),
+        )
+    lines.append(f\\\"{dep['slug']}: {reason} (failures={new_cf})\\\")
+c.commit()
+print(chr(10).join(lines) if lines else 'no active deployments')
+\"""",
+            "timeout": 60,
+        },
+        "notify_channel": "none",
     },
     {
         "id": "daily-improvement",
