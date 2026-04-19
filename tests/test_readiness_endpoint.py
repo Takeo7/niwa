@@ -64,6 +64,11 @@ def server(monkeypatch):
     monkeypatch.setenv("NIWA_APP_PORT", str(port))
     monkeypatch.setenv("NIWA_APP_AUTH_REQUIRED", "0")
     monkeypatch.setenv("NIWA_APP_HOST", "127.0.0.1")
+    # FIX-20260419: keep these tests hermetic. The live Claude CLI
+    # probe added in readiness would otherwise spawn `claude` on any
+    # box where the binary is installed; test_readiness_probe.py
+    # exercises the probe separately against fake binaries.
+    monkeypatch.setenv("NIWA_READINESS_PROBE_DISABLED", "1")
     # Start each test with no hosting hint unless the test sets it.
     monkeypatch.delenv("NIWA_HOSTING_DOMAIN", raising=False)
     # Admin creds: the env default is 'change-me'; clear to force the

@@ -2,7 +2,9 @@
 import json as _json
 import logging
 import os
+import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -386,7 +388,7 @@ def _summarize_backend(profile, settings, oauth_providers, command_ok):
         enabled and has_credential and model_present and command_ok
     )
 
-    return {
+    summary = {
         'slug': slug,
         'display_name': profile.get('display_name') or slug,
         'enabled': enabled,
@@ -396,6 +398,245 @@ def _summarize_backend(profile, settings, oauth_providers, command_ok):
         'default_model': default_model,
         'reachable': reachable,
     }
+
+    # FIX-20260419 (Bug 33): expose a live CLI probe alongside the
+    # static creds/model snapshot for the Claude backend. Only runs
+    # for ``claude_code`` — Codex has its own surface in PR-A7.
+    #
+    # The probe spawns a subprocess. Tests (and any environment that
+    # would prefer a hermetic readiness endpoint) can opt out with
+    # ``NIWA_READINESS_PROBE_DISABLED=1``. When disabled we omit
+    # ``claude_probe`` from the summary entirely rather than faking a
+    # status — the UI already degrades cleanly when the field is
+    # absent.
+    probe_disabled = (
+        os.environ.get('NIWA_READINESS_PROBE_DISABLED', '').strip() in
+        {'1', 'true', 'yes', 'on'}
+    )
+    if slug == 'claude_code' and not probe_disabled:
+        binary = (
+            (settings.get('int.llm_command') or '').strip()
+            or os.environ.get('NIWA_LLM_COMMAND', '').strip()
+            or None
+        )
+        try:
+            raw_probe = probe_claude_cli(explicit_binary=binary)
+            summary['claude_probe'] = classify_claude_probe(
+                raw_probe, has_credential=has_credential,
+            )
+        except Exception:
+            logger.exception('readiness: claude probe failed')
+            summary['claude_probe'] = {
+                'status': 'error',
+                'detail': 'probe failed unexpectedly; see server logs',
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'binary': binary,
+            }
+
+    return summary
+
+
+# ── Claude CLI live probe (FIX-20260419 — Bug 33) ─────────────────
+#
+# probe_claude_cli runs ``claude -p --output-format stream-json`` with
+# an empty prompt to distinguish a healthy CLI (at least one
+# non-system event emitted) from the credential-expired case (exit 0,
+# empty stream, empty stderr — see docs/plans/FIX-20260419-
+# bug33-credential-check.md). Result is cached for _CLAUDE_PROBE_TTL
+# seconds so /api/readiness polling does not fork a subprocess on
+# every request.
+
+_CLAUDE_PROBE_CACHE: dict = {"value": None, "at": 0.0, "binary": None}
+_CLAUDE_PROBE_LOCK = threading.Lock()
+_CLAUDE_PROBE_TTL = 30.0
+# Keep the subprocess bounded: ``/api/readiness`` is a user-facing
+# health endpoint; a 10 s hang would be felt through the polling
+# widget. 3 s is enough for ``claude -p`` with an empty prompt to
+# either emit ``system_init`` or exit — anything longer almost
+# certainly means the CLI is blocked on the network.
+_CLAUDE_PROBE_DEFAULT_TIMEOUT = 3.0
+
+
+def _resolve_claude_binary(explicit: str | None = None) -> str | None:
+    """Locate the ``claude`` CLI binary or return None.
+
+    Priority:
+      1. ``explicit`` argument when given (settings > env at caller).
+      2. ``NIWA_LLM_COMMAND`` env var.
+      3. ``shutil.which("claude")``.
+
+    A candidate is only accepted when it points at an existing,
+    executable file on disk. An explicit path that does not resolve
+    returns None (surface as ``no_cli`` — do not silently fall back
+    to ``which``, otherwise the user never sees the misconfig).
+    """
+    if explicit is not None:
+        explicit = explicit.strip()
+        if not explicit:
+            return None
+        return explicit if (
+            os.path.isfile(explicit) and os.access(explicit, os.X_OK)
+        ) else None
+
+    env_cmd = os.environ.get("NIWA_LLM_COMMAND", "").strip()
+    if env_cmd:
+        return env_cmd if (
+            os.path.isfile(env_cmd) and os.access(env_cmd, os.X_OK)
+        ) else None
+    return shutil.which("claude")
+
+
+def _probe_stream_is_empty(stdout: bytes, stderr: bytes) -> bool:
+    """True when the stdout carried no informative event.
+
+    Mirrors the adapter-side rule used by Bug 33 classification: a
+    bare ``system`` frame does not count; non-JSON output does.
+    """
+    if stderr and stderr.strip():
+        return False
+    for raw in stdout.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            msg = _json.loads(s)
+        except (_json.JSONDecodeError, ValueError):
+            return False
+        if msg.get("type") != "system":
+            return False
+    return True
+
+
+def probe_claude_cli(*, timeout: float | None = None, force: bool = False,
+                    explicit_binary: str | None = None,
+                    _clock=None) -> dict:
+    """Spawn ``claude -p --output-format stream-json`` and classify.
+
+    Returns a dict ``{status, detail, checked_at, binary}`` where
+    status is one of:
+      - ``"ok"``: emitted at least one non-system event.
+      - ``"no_cli"``: binary not resolvable / not executable.
+      - ``"credential_error"``: exit 0 with empty / bare-system
+        stream and empty stderr. Callers may refine to
+        ``credential_missing`` / ``credential_expired`` through
+        :func:`classify_claude_probe`.
+      - ``"error"``: non-zero exit or timeout or unexpected failure.
+
+    Cached in-process for ``_CLAUDE_PROBE_TTL`` seconds per binary
+    path. Access is serialised through ``_CLAUDE_PROBE_LOCK`` so two
+    concurrent ``/api/readiness`` requests do not fork twice.
+    ``force=True`` bypasses the cache (UI refresh button).
+    """
+    if timeout is None:
+        timeout = _CLAUDE_PROBE_DEFAULT_TIMEOUT
+    clock = _clock or time.time
+    now = clock()
+    binary = _resolve_claude_binary(explicit_binary)
+    cache = _CLAUDE_PROBE_CACHE
+
+    with _CLAUDE_PROBE_LOCK:
+        if (not force
+                and cache.get("value") is not None
+                and cache.get("binary") == binary
+                and (now - cache.get("at", 0.0)) < _CLAUDE_PROBE_TTL):
+            return cache["value"]
+
+    if binary is None:
+        result = {
+            "status": "no_cli",
+            "detail": (
+                "claude CLI not found. Install the Anthropic CLI or "
+                "set NIWA_LLM_COMMAND to the absolute path."
+            ),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "binary": None,
+        }
+    else:
+        try:
+            out = subprocess.run(
+                [binary, "-p", "--output-format", "stream-json"],
+                input=b"",
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            result = {
+                "status": "error",
+                "detail": f"claude probe timed out after {timeout}s",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "binary": binary,
+            }
+        except OSError as exc:
+            result = {
+                "status": "no_cli",
+                "detail": f"cannot execute {binary}: {exc}",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "binary": binary,
+            }
+        else:
+            if out.returncode != 0:
+                stderr = (out.stderr or b"").decode(
+                    "utf-8", errors="replace",
+                )
+                result = {
+                    "status": "error",
+                    "detail": (
+                        f"exit {out.returncode}: "
+                        f"{stderr.strip()[:200] or 'no stderr'}"
+                    ),
+                    "checked_at":
+                        datetime.now(timezone.utc).isoformat(),
+                    "binary": binary,
+                }
+            elif _probe_stream_is_empty(out.stdout or b"",
+                                        out.stderr or b""):
+                result = {
+                    "status": "credential_error",
+                    "detail": (
+                        "claude exited 0 without emitting events; "
+                        "credentials are likely expired or malformed"
+                    ),
+                    "checked_at":
+                        datetime.now(timezone.utc).isoformat(),
+                    "binary": binary,
+                }
+            else:
+                result = {
+                    "status": "ok",
+                    "detail": "claude CLI responded with events",
+                    "checked_at":
+                        datetime.now(timezone.utc).isoformat(),
+                    "binary": binary,
+                }
+
+    with _CLAUDE_PROBE_LOCK:
+        cache["value"] = result
+        cache["at"] = now
+        cache["binary"] = binary
+    return result
+
+
+def classify_claude_probe(raw: dict, *, has_credential: bool) -> dict:
+    """Refine a raw probe result using readiness-side signals.
+
+    The raw probe only sees the CLI exit shape, so it cannot tell
+    "no credential configured" from "configured but expired". The
+    readiness handler does know ``has_credential`` (from settings +
+    oauth_tokens) and calls this helper to split the generic
+    ``credential_error`` into:
+
+      - ``credential_missing``: the user never pasted a token.
+      - ``credential_expired``: the user has a token in settings but
+        the CLI fails to use it.
+
+    ``ok``, ``no_cli`` and ``error`` pass through unchanged.
+    """
+    refined = dict(raw)
+    if raw.get("status") == "credential_error":
+        refined["status"] = (
+            "credential_expired" if has_credential else "credential_missing"
+        )
+    return refined
 
 
 def _check_hosting():

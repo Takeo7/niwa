@@ -39,6 +39,44 @@ function findClaudeBackend(r: Readiness | undefined): ReadinessBackend | null {
 }
 
 function statusBadge(backend: ReadinessBackend | null) {
+  // FIX-20260419 (Bug 33): when the backend ships a live probe, let
+  // it drive the badge — it knows if credentials actually work, not
+  // just if they are configured. Fall back to the static signal for
+  // older backends (and for tests that don't include claude_probe).
+  const probe = backend?.claude_probe;
+  if (probe) {
+    if (probe.status === 'ok') {
+      return (
+        <Badge color="teal" leftSection={<IconCheck size={12} />}>
+          Vía suscripción · activa
+        </Badge>
+      );
+    }
+    if (probe.status === 'credential_expired') {
+      return (
+        <Badge color="red" leftSection={<IconAlertTriangle size={12} />}>
+          Credenciales caducadas
+        </Badge>
+      );
+    }
+    if (probe.status === 'credential_missing') {
+      return (
+        <Badge color="red" leftSection={<IconX size={12} />}>
+          Sin credenciales
+        </Badge>
+      );
+    }
+    if (probe.status === 'no_cli') {
+      return (
+        <Badge color="yellow" leftSection={<IconAlertTriangle size={12} />}>
+          CLI no encontrado
+        </Badge>
+      );
+    }
+    // ``error`` / ``credential_error`` fall through to the static
+    // badge below so the user still sees something sensible.
+  }
+
   if (!backend || !backend.has_credential) {
     return (
       <Badge color="red" leftSection={<IconX size={12} />}>
