@@ -22,6 +22,7 @@ Run: pytest tests/test_readiness_probe.py -v
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import sys
 import tempfile
@@ -43,7 +44,11 @@ def _shim(tmp_path: str, name: str, target: str) -> str:
     """
     shim_path = os.path.join(tmp_path, name)
     with open(shim_path, "w", encoding="utf-8") as f:
-        f.write(f"#!/bin/sh\nexec {sys.executable} {target} \"$@\"\n")
+        f.write(
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(target)} "
+            f"\"$@\"\n",
+        )
     os.chmod(
         shim_path,
         os.stat(shim_path).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH,
@@ -55,8 +60,12 @@ def _shim(tmp_path: str, name: str, target: str) -> str:
 def clean_probe(monkeypatch):
     """Reset the module-level probe cache between tests."""
     import health_service
-    monkeypatch.setattr(health_service, "_CLAUDE_PROBE_CACHE",
-                        {"value": None, "at": 0.0}, raising=False)
+    monkeypatch.setattr(
+        health_service,
+        "_CLAUDE_PROBE_CACHE",
+        {"value": None, "at": 0.0, "binary": None},
+        raising=False,
+    )
     monkeypatch.delenv("NIWA_LLM_COMMAND", raising=False)
     yield
 

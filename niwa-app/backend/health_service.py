@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -401,13 +402,24 @@ def _summarize_backend(profile, settings, oauth_providers, command_ok):
     # FIX-20260419 (Bug 33): expose a live CLI probe alongside the
     # static creds/model snapshot for the Claude backend. Only runs
     # for ``claude_code`` — Codex has its own surface in PR-A7.
-    if slug == 'claude_code':
+    #
+    # The probe spawns a subprocess. Tests (and any environment that
+    # would prefer a hermetic readiness endpoint) can opt out with
+    # ``NIWA_READINESS_PROBE_DISABLED=1``. When disabled we omit
+    # ``claude_probe`` from the summary entirely rather than faking a
+    # status — the UI already degrades cleanly when the field is
+    # absent.
+    probe_disabled = (
+        os.environ.get('NIWA_READINESS_PROBE_DISABLED', '').strip() in
+        {'1', 'true', 'yes', 'on'}
+    )
+    if slug == 'claude_code' and not probe_disabled:
+        binary = (
+            (settings.get('int.llm_command') or '').strip()
+            or os.environ.get('NIWA_LLM_COMMAND', '').strip()
+            or None
+        )
         try:
-            binary = (
-                (settings.get('int.llm_command') or '').strip()
-                or os.environ.get('NIWA_LLM_COMMAND', '').strip()
-                or None
-            )
             raw_probe = probe_claude_cli(explicit_binary=binary)
             summary['claude_probe'] = classify_claude_probe(
                 raw_probe, has_credential=has_credential,
@@ -418,7 +430,7 @@ def _summarize_backend(profile, settings, oauth_providers, command_ok):
                 'status': 'error',
                 'detail': 'probe failed unexpectedly; see server logs',
                 'checked_at': datetime.now(timezone.utc).isoformat(),
-                'binary': None,
+                'binary': binary,
             }
 
     return summary
@@ -435,7 +447,14 @@ def _summarize_backend(profile, settings, oauth_providers, command_ok):
 # every request.
 
 _CLAUDE_PROBE_CACHE: dict = {"value": None, "at": 0.0, "binary": None}
+_CLAUDE_PROBE_LOCK = threading.Lock()
 _CLAUDE_PROBE_TTL = 30.0
+# Keep the subprocess bounded: ``/api/readiness`` is a user-facing
+# health endpoint; a 10 s hang would be felt through the polling
+# widget. 3 s is enough for ``claude -p`` with an empty prompt to
+# either emit ``system_init`` or exit — anything longer almost
+# certainly means the CLI is blocked on the network.
+_CLAUDE_PROBE_DEFAULT_TIMEOUT = 3.0
 
 
 def _resolve_claude_binary(explicit: str | None = None) -> str | None:
@@ -488,7 +507,7 @@ def _probe_stream_is_empty(stdout: bytes, stderr: bytes) -> bool:
     return True
 
 
-def probe_claude_cli(*, timeout: float = 10.0, force: bool = False,
+def probe_claude_cli(*, timeout: float | None = None, force: bool = False,
                     explicit_binary: str | None = None,
                     _clock=None) -> dict:
     """Spawn ``claude -p --output-format stream-json`` and classify.
@@ -504,17 +523,23 @@ def probe_claude_cli(*, timeout: float = 10.0, force: bool = False,
       - ``"error"``: non-zero exit or timeout or unexpected failure.
 
     Cached in-process for ``_CLAUDE_PROBE_TTL`` seconds per binary
-    path. ``force=True`` bypasses the cache (UI refresh button).
+    path. Access is serialised through ``_CLAUDE_PROBE_LOCK`` so two
+    concurrent ``/api/readiness`` requests do not fork twice.
+    ``force=True`` bypasses the cache (UI refresh button).
     """
+    if timeout is None:
+        timeout = _CLAUDE_PROBE_DEFAULT_TIMEOUT
     clock = _clock or time.time
     now = clock()
     binary = _resolve_claude_binary(explicit_binary)
     cache = _CLAUDE_PROBE_CACHE
-    if (not force
-            and cache["value"] is not None
-            and cache["binary"] == binary
-            and (now - cache["at"]) < _CLAUDE_PROBE_TTL):
-        return cache["value"]
+
+    with _CLAUDE_PROBE_LOCK:
+        if (not force
+                and cache.get("value") is not None
+                and cache.get("binary") == binary
+                and (now - cache.get("at", 0.0)) < _CLAUDE_PROBE_TTL):
+            return cache["value"]
 
     if binary is None:
         result = {
@@ -584,9 +609,10 @@ def probe_claude_cli(*, timeout: float = 10.0, force: bool = False,
                     "binary": binary,
                 }
 
-    cache["value"] = result
-    cache["at"] = now
-    cache["binary"] = binary
+    with _CLAUDE_PROBE_LOCK:
+        cache["value"] = result
+        cache["at"] = now
+        cache["binary"] = binary
     return result
 
 
