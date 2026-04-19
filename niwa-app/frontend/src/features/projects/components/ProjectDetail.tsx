@@ -16,6 +16,8 @@ import {
   Modal,
   TextInput,
   Textarea,
+  Alert,
+  Switch,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
 import { notifications } from '@mantine/notifications';
@@ -28,6 +30,7 @@ import {
   IconExternalLink,
   IconPlus,
   IconEdit,
+  IconAlertTriangle,
 } from '@tabler/icons-react';
 import {
   useProject,
@@ -91,10 +94,12 @@ export function ProjectDetail() {
   const { data: tasks } = useTasks({ project_id: project?.id, include_done: true });
   const { data: uploads } = useProjectUploads(slug);
   const uploadFile = useUploadFile(slug || '');
+  const updateProject = useUpdateProject();
   const [activeTab, setActiveTab] = useState<string | null>('overview');
   const [taskFormOpen, setTaskFormOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [focusDirectory, setFocusDirectory] = useState(false);
+  const [autonomyConfirmOpen, setAutonomyConfirmOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -119,6 +124,19 @@ export function ProjectDetail() {
 
   return (
     <Stack gap="md">
+      {project.autonomy_mode === 'dangerous' && (
+        <Alert
+          color="red"
+          variant="filled"
+          icon={<IconAlertTriangle size={18} />}
+          title="Modo autónomo activo"
+          data-testid="autonomy-banner"
+        >
+          Approvals desactivados para este proyecto. Las tareas
+          escribirán sin pedir confirmación. Revisa el riesgo antes
+          de disparar tareas nuevas.
+        </Alert>
+      )}
       <Group>
         <Button
           variant="subtle"
@@ -159,6 +177,113 @@ export function ProjectDetail() {
           </Badge>
         </Group>
       </Group>
+
+      <Card withBorder p="sm">
+        <Group justify="space-between" wrap="nowrap">
+          <Stack gap={2} style={{ flex: 1 }}>
+            <Text size="sm" fw={500}>
+              Modo autónomo
+            </Text>
+            <Text size="xs" c="dimmed">
+              Cuando está activado, las tareas de este proyecto se
+              ejecutan sin aprobaciones manuales. Usar bajo tu
+              responsabilidad.
+            </Text>
+          </Stack>
+          <Switch
+            aria-label="Modo autónomo"
+            checked={project.autonomy_mode === 'dangerous'}
+            disabled={updateProject.isPending}
+            onChange={(ev) => {
+              if (ev.currentTarget.checked) {
+                setAutonomyConfirmOpen(true);
+                return;
+              }
+              updateProject.mutate(
+                { slug: project.slug, autonomy_mode: 'normal' },
+                {
+                  onSuccess: () =>
+                    notifications.show({
+                      title: 'Modo autónomo desactivado',
+                      message: project.name,
+                      color: 'blue',
+                    }),
+                  onError: (err) =>
+                    notifications.show({
+                      title: 'Error al guardar',
+                      message:
+                        err instanceof Error
+                          ? err.message
+                          : 'Fallo desconocido',
+                      color: 'red',
+                    }),
+                },
+              );
+            }}
+          />
+        </Group>
+      </Card>
+
+      <Modal
+        opened={autonomyConfirmOpen}
+        onClose={() => setAutonomyConfirmOpen(false)}
+        title="Activar modo autónomo"
+        centered
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            Vas a desactivar todas las aprobaciones para el proyecto
+            <strong> {project.name}</strong>. Las tareas podrán
+            escribir ficheros, ejecutar comandos y llamar a redes sin
+            pedir confirmación.
+          </Text>
+          <Text size="sm" c="dimmed">
+            Puedes volver al modo normal cuando quieras.
+          </Text>
+          <Group justify="flex-end" mt="sm">
+            <Button
+              variant="subtle"
+              onClick={() => setAutonomyConfirmOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              color="red"
+              loading={updateProject.isPending}
+              disabled={updateProject.isPending}
+              onClick={() => {
+                updateProject.mutate(
+                  {
+                    slug: project.slug,
+                    autonomy_mode: 'dangerous',
+                  },
+                  {
+                    onSuccess: () => {
+                      setAutonomyConfirmOpen(false);
+                      notifications.show({
+                        title: 'Modo autónomo activado',
+                        message: project.name,
+                        color: 'red',
+                      });
+                    },
+                    onError: (err) =>
+                      notifications.show({
+                        title: 'Error al guardar',
+                        message:
+                          err instanceof Error
+                            ? err.message
+                            : 'Fallo desconocido',
+                        color: 'red',
+                      }),
+                  },
+                );
+              }}
+            >
+              Activar sin approvals
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Tabs value={activeTab} onChange={setActiveTab}>
         <Tabs.List>

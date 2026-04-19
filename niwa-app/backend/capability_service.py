@@ -117,16 +117,36 @@ def get_effective_profile(project_id: str | None, conn) -> dict:
 
     If the project has a row in ``project_capability_profiles``, returns
     it as a dict.  Otherwise falls back to ``DEFAULT_CAPABILITY_PROFILE``.
+
+    PR-B3: merges ``projects.autonomy_mode`` into the returned dict so
+    downstream ``evaluate*`` functions can short-circuit when the
+    operator has opted into dangerous mode for this project. This is
+    the single place where the flag is read — callers that build
+    profile dicts by hand won't see the bypass.
     """
+    profile: dict
     if project_id and conn:
         row = conn.execute(
             "SELECT * FROM project_capability_profiles "
             "WHERE project_id = ? ORDER BY created_at LIMIT 1",
             (project_id,),
         ).fetchone()
-        if row:
-            return dict(row)
-    return dict(DEFAULT_CAPABILITY_PROFILE)
+        profile = dict(row) if row else dict(DEFAULT_CAPABILITY_PROFILE)
+    else:
+        profile = dict(DEFAULT_CAPABILITY_PROFILE)
+
+    autonomy_mode = "normal"
+    if project_id and conn:
+        proj_row = conn.execute(
+            "SELECT autonomy_mode FROM projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        if proj_row is not None:
+            value = proj_row["autonomy_mode"]
+            if value in ("normal", "dangerous"):
+                autonomy_mode = value
+    profile["autonomy_mode"] = autonomy_mode
+    return profile
 
 
 # ── Seed ─────────────────────────────────────────────────────────
@@ -388,7 +408,19 @@ def evaluate(task: dict, run: dict, profile: dict,
 
     Both fields are ``None``/``"unknown"`` until the deterministic router
     (PR-06) populates them.
+
+    PR-B3: when ``capability_profile['autonomy_mode'] == 'dangerous'``
+    the gate is bypassed — the operator has explicitly opted into
+    unattended execution for this project.
     """
+    if capability_profile.get("autonomy_mode") == "dangerous":
+        return {
+            "allowed": True,
+            "reason": "autonomy_mode=dangerous — approval gate bypassed",
+            "approval_required": False,
+            "triggers": [],
+        }
+
     triggers: list[dict] = []
 
     # ── quota_risk ───────────────────────────────────────────────
@@ -456,6 +488,15 @@ def evaluate_runtime_event(event: dict, capability_profile: dict,
         return {
             "allowed": True,
             "reason": "Not a tool_use event",
+            "approval_required": False,
+            "triggers": [],
+        }
+
+    # PR-B3: project-level dangerous mode bypasses all runtime checks.
+    if capability_profile.get("autonomy_mode") == "dangerous":
+        return {
+            "allowed": True,
+            "reason": "autonomy_mode=dangerous — approval gate bypassed",
             "approval_required": False,
             "triggers": [],
         }
