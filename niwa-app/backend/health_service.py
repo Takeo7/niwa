@@ -344,8 +344,12 @@ def _read_settings_and_state():
 
 
 def _llm_command_set(settings):
-    """True when any LLM CLI command is configured locally."""
-    if settings.get('int.llm_command', '').strip():
+    """True when any LLM CLI command is configured locally.
+
+    ``settings.value`` is nullable in the DB, so the dict may hold
+    ``None`` for an explicitly-cleared key — normalize via ``or ''``.
+    """
+    if (settings.get('int.llm_command') or '').strip():
         return True
     return bool(os.environ.get('NIWA_LLM_COMMAND', '').strip())
 
