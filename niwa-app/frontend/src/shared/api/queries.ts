@@ -233,6 +233,24 @@ export function useReadiness() {
   });
 }
 
+// ── Claude subscription setup-token (PR-A6) ──
+export function useApplyClaudeSetupToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) =>
+      apiPost<{ ok: boolean; message?: string; error?: string }>(
+        'settings/llm/setup-token',
+        { token },
+      ),
+    onSuccess: (result) => {
+      if (result.ok) {
+        qc.invalidateQueries({ queryKey: ['readiness'] });
+        qc.invalidateQueries({ queryKey: ['services'] });
+      }
+    },
+  });
+}
+
 export function useSaveService() {
   const qc = useQueryClient();
   return useMutation({

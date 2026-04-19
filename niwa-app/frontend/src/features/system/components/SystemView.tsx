@@ -10,6 +10,7 @@ import {
   IconBrandGithub,
   IconRefresh,
 } from '@tabler/icons-react';
+import { AuthPanel } from './AuthPanel';
 import { ReadinessWidget } from './ReadinessWidget';
 import { ServicesPanel } from './ServicesPanel';
 import { AgentsPanel } from './AgentsPanel';
@@ -26,6 +27,7 @@ export function SystemView() {
     <Stack gap="md">
       <Title order={3}>Sistema</Title>
       <ReadinessWidget />
+      <AuthPanel />
 
       <Tabs defaultValue="services">
         <Tabs.List>
