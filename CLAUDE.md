@@ -46,7 +46,9 @@ equivalente, ejecutas estos pasos **en este orden**:
 
 ### Paso 2 — prepara rama y brief
 5. Checkout a `claude/pr-<NN>-<slug>`. Si existe remoto, `git pull`;
-   si no, crea desde la rama por defecto actualizada.
+   si no, crea desde `origin/v0.2` actualizada (`git fetch origin
+   v0.2` + branch desde ahí). **No** ramas desde `main` — está
+   congelada en pre-PR-73.
 6. Si `docs/plans/PR-<NN>-<slug>.md` **no existe**: escríbelo con
    `docs/plans/_TEMPLATE.md`, commitea SOLO el brief con mensaje
    `plan: brief for PR-<NN>`, push, y **PARA**. Di: "Brief escrito,
@@ -62,8 +64,8 @@ equivalente, ejecutas estos pasos **en este orden**:
 10. Corre `pytest -q` completo. No puedes regresar ningún test
     verde del baseline (ver regla 4 abajo).
 11. Invoca el subagente `codex-reviewer` sobre tu diff (`git diff
-    origin/<default>...HEAD`) salvo que el brief marque esfuerzo
-    `S`. Pega sus comentarios como `🤖 Codex review` en el PR.
+    origin/v0.2...HEAD`) salvo que el brief marque esfuerzo `S`.
+    Pega sus comentarios como `🤖 Codex review` en el PR.
 
 ### Paso 4 — abre el PR y termina
 12. `mcp__github__create_pull_request`. Título `PR-<NN>: <título>`
@@ -155,7 +157,12 @@ equivalente, ejecutas estos pasos **en este orden**:
 
 ## Baseline operativo rápido
 
-- Rama por defecto: consultar `git symbolic-ref refs/remotes/origin/HEAD`.
+- Rama de desarrollo activa: **`v0.2`**. Es contra la que abres el
+  PR y desde la que ramas. `main` está congelada en un estado
+  pre-PR-73 y **no** se usa para trabajo nuevo (aunque
+  `origin/HEAD` todavía apunte ahí por inercia histórica). Al
+  hacer `git fetch origin v0.2` + `git checkout -b claude/pr-<NN>
+  origin/v0.2` arrancas correctamente.
 - Tu rama: `claude/pr-<NN>-<slug>`. Una por sesión.
 - DB SQLite del tests en `tempfile`. Fresh install usa
   `data/niwa.sqlite3`.
