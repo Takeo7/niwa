@@ -193,6 +193,7 @@ export function ProjectDetail() {
           <Switch
             aria-label="Modo autónomo"
             checked={project.autonomy_mode === 'dangerous'}
+            disabled={updateProject.isPending}
             onChange={(ev) => {
               if (ev.currentTarget.checked) {
                 setAutonomyConfirmOpen(true);
@@ -249,6 +250,7 @@ export function ProjectDetail() {
             <Button
               color="red"
               loading={updateProject.isPending}
+              disabled={updateProject.isPending}
               onClick={() => {
                 updateProject.mutate(
                   {

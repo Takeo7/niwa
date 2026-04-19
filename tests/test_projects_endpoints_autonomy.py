@@ -163,8 +163,22 @@ def test_patch_sets_autonomy_mode_to_dangerous(app_server):
 def test_patch_accepts_returning_to_normal(app_server):
     slug = "proj-auto-2"
     _insert_project(app_server["db"], slug=slug)
-    _req(app_server["base"], f"/api/projects/{slug}",
-         method="PATCH", body={"autonomy_mode": "dangerous"})
+
+    # First PATCH must actually flip to 'dangerous'. Asserting this
+    # is what makes "return to normal" meaningful; without it the
+    # test would also pass when the first PATCH is a silent no-op.
+    status, _ = _req(
+        app_server["base"], f"/api/projects/{slug}",
+        method="PATCH", body={"autonomy_mode": "dangerous"},
+    )
+    assert status == 200
+    with _sq.connect(app_server["db"]) as c:
+        c.row_factory = _sq.Row
+        row = c.execute(
+            "SELECT autonomy_mode FROM projects WHERE slug=?", (slug,),
+        ).fetchone()
+    assert row["autonomy_mode"] == "dangerous"
+
     status, _ = _req(
         app_server["base"], f"/api/projects/{slug}",
         method="PATCH", body={"autonomy_mode": "normal"},
