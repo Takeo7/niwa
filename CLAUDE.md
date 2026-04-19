@@ -80,6 +80,9 @@ equivalente, ejecutas estos pasos **en este orden**:
 
 - **`docs/MVP-ROADMAP.md`** — plan maestro al MVP, happy path, lista
   de 16 PRs. Fuente de verdad del scope del proyecto.
+- **`docs/HANDBOOK.md`** — punto de entrada canónico al codebase:
+  arquitectura, módulos, recetas de extensión. Léelo antes de hacer
+  un PR que toque áreas que no conoces.
 - **`docs/plans/_TEMPLATE.md`** — formato obligatorio de cada brief.
 - **`docs/plans/PR-NN-<slug>.md`** — brief del PR concreto (uno por
   PR).
@@ -122,6 +125,10 @@ equivalente, ejecutas estos pasos **en este orden**:
 10. **Commits imperativos cortos** en inglés: `fix: ...`, `feat:
     ...`, `test: ...`, `docs: ...`, `chore: ...`. Sin emojis salvo
     que el usuario los pida.
+11. **Mantén `HANDBOOK.md` fresco**. Si tu PR añade/quita un módulo
+    backend, una feature frontend, una tabla DB o cambia un flujo
+    end-to-end, actualiza `docs/HANDBOOK.md` en el mismo PR (la
+    sección afectada). No se archiva como PR aparte.
 
 ## Paras y preguntas siempre que
 
