@@ -127,6 +127,9 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 
 -- ── Routines (cron-like scheduler) ──
+-- ``improvement_type`` (PR-C3) is populated only when ``action='improve'``
+-- and must be one of {'functional','stability','security'}. Enforced in
+-- the HTTP layer because SQLite cannot ALTER an existing CHECK constraint.
 CREATE TABLE IF NOT EXISTS routines (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -134,8 +137,9 @@ CREATE TABLE IF NOT EXISTS routines (
     enabled INTEGER NOT NULL DEFAULT 1,
     schedule TEXT NOT NULL,
     tz TEXT NOT NULL DEFAULT 'UTC',
-    action TEXT NOT NULL CHECK (action IN ('create_task', 'script', 'webhook')),
+    action TEXT NOT NULL CHECK (action IN ('create_task', 'script', 'webhook', 'improve')),
     action_config TEXT NOT NULL DEFAULT '{}',
+    improvement_type TEXT,
     notify_channel TEXT NOT NULL DEFAULT 'none',
     notify_config TEXT NOT NULL DEFAULT '{}',
     last_run_at TEXT,

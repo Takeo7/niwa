@@ -4624,7 +4624,12 @@ class Handler(BaseHTTPRequestHandler):
                     'message': 'Internal server error',
                 }, 500)
         if path == '/api/routines':
-            rid = scheduler.create_routine(db_conn, payload)
+            try:
+                rid = scheduler.create_routine(db_conn, payload)
+            except ValueError as e:
+                # PR-C3: scheduler.create_routine validates action +
+                # improvement_type. Surface a clean 400 instead of a 500.
+                return self._json({'error': 'invalid_routine', 'message': str(e)}, 400)
             return self._json({'ok': True, 'id': rid}, 201)
         if path == '/api/routines/toggle':
             rid = payload.get('id', '')
@@ -4781,7 +4786,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({'ok': True})
         if path.startswith('/api/routines/') and path.count('/') == 3:
             routine_id = path.split('/')[3]
-            scheduler.update_routine(db_conn, routine_id, payload)
+            try:
+                scheduler.update_routine(db_conn, routine_id, payload)
+            except ValueError as e:
+                return self._json({'error': 'invalid_routine', 'message': str(e)}, 400)
             return self._json({'ok': True})
         # ── PR-10d: backend profile edit ──
         _m_bp_patch = re.match(
