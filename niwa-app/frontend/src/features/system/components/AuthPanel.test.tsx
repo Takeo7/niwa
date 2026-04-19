@@ -196,4 +196,146 @@ describe('AuthPanel', () => {
       }) as HTMLButtonElement).disabled,
     ).toBe(false);
   });
+
+  // ── PR-A7: ChatGPT (suscripción) section ──
+  // The OpenAI section reads ``/api/auth/oauth/status?provider=openai``
+  // and exposes connect/disconnect buttons that call the
+  // ``/api/auth/oauth/start`` and ``/api/auth/oauth/revoke`` endpoints.
+
+  it('muestra la sección ChatGPT con badge "No conectado" cuando no hay token openai', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/readiness')) {
+        return new Response(
+          JSON.stringify(readinessWithClaude({ has_credential: false })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/auth/oauth/status')) {
+        return new Response(
+          JSON.stringify({ authenticated: false, provider: 'openai' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    render(wrap(<AuthPanel />));
+
+    await waitFor(() =>
+      expect(screen.getByText(/ChatGPT \(suscripción\)/i)).toBeTruthy(),
+    );
+    expect(screen.getByText(/No conectado/i)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /conectar con chatgpt/i }),
+    ).toBeTruthy();
+  });
+
+  it('click en "Conectar con ChatGPT" hace GET /auth/oauth/start y abre la auth_url real', async () => {
+    const startCalls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/readiness')) {
+        return new Response(
+          JSON.stringify(readinessWithClaude({ has_credential: false })),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/auth/oauth/status')) {
+        return new Response(
+          JSON.stringify({ authenticated: false, provider: 'openai' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.includes('/api/auth/oauth/start')) {
+        startCalls.push(url);
+        return new Response(
+          JSON.stringify({
+            auth_url:
+              'https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&state=xyz',
+            state: 'xyz',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const openSpy = vi
+      .spyOn(window, 'open')
+      .mockImplementation(() => null);
+
+    render(wrap(<AuthPanel />));
+
+    const connectBtn = await screen.findByRole('button', {
+      name: /conectar con chatgpt/i,
+    });
+    fireEvent.click(connectBtn);
+
+    await waitFor(() => expect(startCalls.length).toBe(1));
+    expect(startCalls[0]).toContain('provider=openai');
+
+    await waitFor(() => expect(openSpy).toHaveBeenCalled());
+    const openedUrl = openSpy.mock.calls[0][0];
+    expect(openedUrl).toContain('auth.openai.com');
+
+    openSpy.mockRestore();
+  });
+
+  it('click en "Desconectar" hace POST /auth/oauth/revoke con provider openai', async () => {
+    const revokeCalls: Array<{ url: string; body: unknown }> = [];
+    let revoked = false;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/api/readiness')) {
+          return new Response(
+            JSON.stringify(readinessWithClaude({ has_credential: false })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (url.includes('/api/auth/oauth/status')) {
+          return new Response(
+            JSON.stringify(
+              revoked
+                ? { authenticated: false, provider: 'openai' }
+                : {
+                    authenticated: true,
+                    provider: 'openai',
+                    email: 'user@example.com',
+                  },
+            ),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (
+          url.includes('/api/auth/oauth/revoke') &&
+          init?.method === 'POST'
+        ) {
+          const body = init.body ? JSON.parse(init.body as string) : {};
+          revokeCalls.push({ url, body });
+          revoked = true;
+          return new Response(
+            JSON.stringify({ ok: true }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+
+    render(wrap(<AuthPanel />));
+
+    await waitFor(() =>
+      expect(screen.getByText(/user@example\.com/i)).toBeTruthy(),
+    );
+
+    const disconnectBtn = screen.getByRole('button', {
+      name: /desconectar/i,
+    });
+    fireEvent.click(disconnectBtn);
+
+    await waitFor(() => expect(revokeCalls.length).toBe(1));
+    expect(revokeCalls[0].body).toEqual({ provider: 'openai' });
+  });
 });

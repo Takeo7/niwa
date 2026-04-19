@@ -296,9 +296,17 @@ export function useOAuthStatus(provider: string) {
 
 export function useStartOAuth() {
   return useMutation({
-    mutationFn: (provider: string) => {
-      window.open(`/api/auth/oauth/start?provider=${provider}`, '_blank', 'width=600,height=700');
-      return Promise.resolve({ ok: true });
+    mutationFn: async (provider: string) => {
+      // The /start endpoint returns JSON {auth_url, state}; opening it
+      // directly in a popup would just show the JSON text. Fetch first,
+      // then open the real provider auth URL.
+      const result = await api<{ auth_url?: string; state?: string; error?: string }>(
+        `auth/oauth/start?provider=${provider}`,
+      );
+      if (result.auth_url) {
+        window.open(result.auth_url, '_blank', 'width=600,height=700');
+      }
+      return result;
     },
   });
 }
