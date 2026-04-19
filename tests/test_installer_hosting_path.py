@@ -2,15 +2,15 @@
 
 Regression guard for **Bug 21** (docs/BUGS-FOUND.md): the hosting
 ``systemd`` unit ran as ``User=niwa`` but its ``ExecStart`` pointed at
-``/root/.<instance>/bin/hosting-server.py``. ``/root`` is ``drwx------``,
-so the niwa user can't traverse it and Python exits with
-``can't open file '/root/...': [Errno 13] Permission denied`` before
-even importing. On a fresh ``./niwa install --quick --mode assistant
+``/root/.niwa/bin/hosting-server.py``. ``/root`` is ``drwx------``, so
+the niwa user can't traverse it and Python exits with ``can't open
+file '/root/...': [Errno 13] Permission denied`` before even
+importing. On a fresh ``./niwa install --quick --mode assistant
 --yes`` with ``sudo`` the hosting service crash-looped forever.
 
 The fix mirrors the executor's pre-existing pattern in
 ``_install_systemd_unit``: copy the binary into
-``/home/niwa/.<instance>/bin/hosting-server.py`` (niwa-readable),
+``/home/niwa/.niwa/bin/hosting-server.py`` (niwa-readable),
 ``chown niwa:niwa`` that copy, and re-point the unit's ``ExecStart``
 at it.
 
@@ -37,7 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 
 class TestHostingBinaryPathSwap:
     """Pin the invariant that hosting-server.py is copied into
-    /home/niwa/.<instance>/bin/ when installing as root, and that the
+    /home/niwa/.niwa/bin/ when installing as root, and that the
     systemd unit's ExecStart points at that path — not at the
     root-owned install_dir copy."""
 
@@ -67,7 +67,7 @@ class TestHostingBinaryPathSwap:
         return after[: else_match.start()]
 
     def test_hosting_binary_copied_into_niwa_home(self):
-        """``shutil.copy`` into ``/home/niwa/.<instance>/bin/``
+        """``shutil.copy`` into ``/home/niwa/.niwa/bin/``
         must happen before the systemd unit is written, so
         ``ExecStart=... {dest}`` resolves to the niwa-readable path."""
         root_block = self._hosting_root_block()
@@ -81,12 +81,13 @@ class TestHostingBinaryPathSwap:
             "niwa_hosting_dest (mirror of the executor pattern)"
         )
 
+        # PR-A3: single-instance, niwa_home is literal "/home/niwa/.niwa".
         niwa_home_match = re.search(
-            r'niwa_home\s*=\s*Path\("/home/niwa"\)\s*/\s*f"\.\{cfg\.instance_name\}"',
+            r'niwa_home\s*=\s*Path\("/home/niwa"\)\s*/\s*"\.niwa"',
             root_block,
         )
         assert niwa_home_match, (
-            "root branch must compute niwa_home = /home/niwa/.<instance>"
+            "root branch must compute niwa_home = /home/niwa/.niwa"
         )
         assert niwa_home_match.start() < copy_match.start(), (
             "niwa_home must be computed before copying into it"
@@ -134,7 +135,7 @@ class TestHostingBinaryPathSwap:
         assert "/root/" not in unit_body, (
             "hosting unit template must not reference /root/ in any "
             "form — User=niwa cannot traverse it. Path must resolve "
-            "under /home/niwa or /opt/<instance>."
+            "under /home/niwa or /opt/niwa."
         )
 
 
