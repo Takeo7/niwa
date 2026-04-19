@@ -109,6 +109,33 @@ def _result_ends_with_question(text: str) -> bool:
     return stripped.endswith("?")
 
 
+def _stream_has_no_informative_event(raw_lines: list[str],
+                                     stderr_output: str) -> bool:
+    """True when a CLI exit-0 run carried no work-bearing event.
+
+    Bug 33 (FIX-20260419): when Claude credentials are expired or
+    malformed, ``claude -p --output-format stream-json`` exits 0 with
+    either zero lines or only a bare ``system`` frame on stdout, and
+    stderr empty. Treat that shape as an auth-level failure routed to
+    ``waiting_input`` instead of the historical silent ``hecha``.
+
+    A line counts as informative when it parses as JSON AND the
+    ``type`` is not ``system`` (``assistant``, ``tool_use``,
+    ``tool_result``, ``result``, ``error``...). Non-JSON output is
+    also informative — it means *something* was emitted.
+    """
+    if stderr_output and stderr_output.strip():
+        return False
+    for rl in raw_lines:
+        try:
+            msg = json.loads(rl)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        if msg.get("type") != "system":
+            return False
+    return True
+
+
 class ClaudeCodeAdapter(BackendAdapter):
     """Adapter for the Claude Code CLI backend.
 
@@ -1141,6 +1168,34 @@ class ClaudeCodeAdapter(BackendAdapter):
                         break
                     except (json.JSONDecodeError, ValueError):
                         continue
+
+                # Bug 33 fix (FIX-20260419) — empty-stream exit-0
+                # credential error. Claude CLI exits 0 with an empty
+                # stream when credentials are expired or malformed;
+                # without this branch the task used to close as
+                # ``hecha`` with no artefact. Route to waiting_input
+                # with a clear error_code so the UI can surface it.
+                if outcome == "success" and _stream_has_no_informative_event(
+                    raw_lines, stderr_output,
+                ):
+                    outcome = "needs_clarification"
+                    error_code = "empty_stream_exit_0"
+                    result_text = (
+                        "Claude salió correctamente (exit 0) pero no "
+                        "emitió ningún evento. Normalmente esto "
+                        "significa que las credenciales Claude están "
+                        "caducadas o mal pegadas. Revisa credenciales "
+                        "en Sistema → Autenticación y vuelve a lanzar."
+                    )
+                    if conn:
+                        runs_service.record_event(
+                            run_id, "error", conn,
+                            message=result_text,
+                            payload_json=json.dumps({
+                                "error_code": "empty_stream_exit_0",
+                                "raw_line_count": len(raw_lines),
+                            }),
+                        )
 
                 # Bug 32 fix — false-succeeded detection.
                 # Two complementary signals mark a task as waiting on

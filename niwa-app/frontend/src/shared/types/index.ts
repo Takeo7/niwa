@@ -586,6 +586,21 @@ export interface CapabilityProfilePatch {
   resource_budget_json?: string;
 }
 
+export type ClaudeProbeStatus =
+  | 'ok'
+  | 'no_cli'
+  | 'credential_missing'
+  | 'credential_expired'
+  | 'credential_error'
+  | 'error';
+
+export interface ClaudeProbe {
+  status: ClaudeProbeStatus;
+  detail: string;
+  checked_at: string;
+  binary: string | null;
+}
+
 export interface ReadinessBackend {
   slug: string;
   display_name: string;
@@ -595,6 +610,7 @@ export interface ReadinessBackend {
   model_present: boolean;
   default_model: string | null;
   reachable: boolean;
+  claude_probe?: ClaudeProbe;
 }
 
 export interface Readiness {
