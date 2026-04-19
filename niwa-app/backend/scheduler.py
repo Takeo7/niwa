@@ -193,6 +193,7 @@ def create_routine(db_conn_fn: Callable, data: dict) -> str:
 def update_routine(db_conn_fn: Callable, routine_id: str, data: dict) -> bool:
     allowed = {"name", "description", "enabled", "schedule", "tz", "action",
                "action_config", "improvement_type", "notify_channel", "notify_config"}
+    data = dict(data)  # avoid mutating caller's payload when we clear stale fields
     if "action" in data or "improvement_type" in data:
         # Need the other field to validate the combination. If action is
         # not in ``data``, read the current stored value.
@@ -203,6 +204,16 @@ def update_routine(db_conn_fn: Callable, routine_id: str, data: dict) -> bool:
             ).fetchone()
         current_action = row["action"] if row else None
         action = data.get("action", current_action)
+        # If the caller is switching action *away* from 'improve' without
+        # explicitly unsetting improvement_type, clear the column so the
+        # row doesn't keep a dangling value (e.g. 'stability' on an
+        # action='script' routine).
+        if (
+            "action" in data
+            and action != "improve"
+            and "improvement_type" not in data
+        ):
+            data["improvement_type"] = None
         improvement_type = data.get(
             "improvement_type",
             row["improvement_type"] if row else None,
@@ -580,9 +591,18 @@ class SchedulerThread(threading.Thread):
             if action == "create_task":
                 result = _exec_create_task(config, self.db_conn_fn)
             elif action == "script":
-                result = _exec_script(config, self.install_dir)
-                if result.startswith("[exit") or result.startswith("[timeout") or result.startswith("[error") or result.startswith("ERROR:"):
-                    success = False
+                # Builtin routines with in-process handlers bypass the
+                # subprocess path so they can be unit-tested directly and
+                # avoid the DDL/command duplication risk flagged by Codex
+                # on PR-C3. Custom user routines still go through
+                # ``_exec_script``.
+                handler = BUILTIN_HANDLERS.get(routine.get("id"))
+                if handler is not None:
+                    result = handler(self.db_conn_fn)
+                else:
+                    result = _exec_script(config, self.install_dir)
+                    if result.startswith("[exit") or result.startswith("[timeout") or result.startswith("[error") or result.startswith("ERROR:"):
+                        success = False
             elif action == "webhook":
                 result = _exec_webhook(config)
                 if result.startswith("[error"):
@@ -825,66 +845,12 @@ print(f'Processed {processed} inbox items into tasks')
         ),
         "schedule": "*/10 * * * *",
         "enabled": True,
+        # action='script' with BUILTIN_HANDLERS routing: the scheduler
+        # recognises this routine id and calls check_deployments_health
+        # directly, skipping _exec_script. action_config.command is kept
+        # empty so the custom-script path is never reached for this id.
         "action": "script",
-        "action_config": {
-            "command": """python3 -c "
-import sqlite3, os, uuid, urllib.request
-from datetime import datetime, timezone
-db = os.environ.get('NIWA_DB_PATH', 'data/niwa.sqlite3')
-c = sqlite3.connect(db)
-c.row_factory = sqlite3.Row
-now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-rows = c.execute(
-    \\\"SELECT id, project_id, slug, url, consecutive_failures \\\"
-    \\\"FROM deployments WHERE status='active'\\\"
-).fetchall()
-lines = []
-for row in rows:
-    dep = dict(row)
-    url = dep.get('url') or ''
-    prev = int(dep.get('consecutive_failures') or 0)
-    if not url:
-        lines.append(f\\\"{dep['slug']}: skipped (no url)\\\")
-        continue
-    ok, reason = False, ''
-    try:
-        resp = urllib.request.urlopen(url, timeout=5)
-        try:
-            status = getattr(resp, 'status', None) or resp.getcode()
-        finally:
-            try: resp.close()
-            except Exception: pass
-        ok = 200 <= int(status) < 400
-        reason = f'HTTP {status}'
-    except Exception as e:
-        reason = f'{type(e).__name__}: {e}'
-    new_cf = 0 if ok else min(prev + 1, 3)
-    c.execute(
-        'UPDATE deployments SET consecutive_failures=?, updated_at=? WHERE id=?',
-        (new_cf, now_iso, dep['id']),
-    )
-    if prev < 3 and new_cf == 3:
-        task_id = str(uuid.uuid4())
-        c.execute(
-            \\\"INSERT INTO tasks (id, title, description, area, project_id, \\\"
-            \\\"status, priority, source, created_at, updated_at, \\\"
-            \\\"assigned_to_yume, assigned_to_claude) \\\"
-            \\\"VALUES (?, ?, ?, 'sistema', ?, 'pendiente', 'alta', \\\"
-            \\\"'routine:product_healthcheck', ?, ?, 0, 0)\\\",
-            (
-                task_id,
-                f\\\"Fix deployment {dep['slug']} (3 consecutive failures)\\\",
-                f\\\"product_healthcheck routine observed 3 consecutive failures for {url!r}. Last reason: {reason}.\\\",
-                dep.get('project_id'),
-                now_iso, now_iso,
-            ),
-        )
-    lines.append(f\\\"{dep['slug']}: {reason} (failures={new_cf})\\\")
-c.commit()
-print(chr(10).join(lines) if lines else 'no active deployments')
-\"""",
-            "timeout": 60,
-        },
+        "action_config": {"command": "", "timeout": 60},
         "notify_channel": "none",
     },
     {
@@ -903,6 +869,16 @@ print(chr(10).join(lines) if lines else 'no active deployments')
         "notify_channel": "none",
     },
 ]
+
+
+# In-process handlers for built-in routines whose logic is easier to
+# unit-test as Python than as an inline ``python3 -c`` script. The
+# scheduler checks this map before falling back to ``_exec_script`` for
+# ``action='script'`` routines. Keep the value signature compatible with
+# ``(db_conn_fn) -> str``.
+BUILTIN_HANDLERS: dict = {
+    "product_healthcheck": check_deployments_health,
+}
 
 
 def seed_builtin_routines(db_conn_fn: Callable) -> int:

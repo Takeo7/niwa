@@ -335,17 +335,100 @@ def test_strikes_reset_on_success(tmp_path, flaky_server):
     assert n_tasks == 0
 
 
+def test_execute_routine_routes_product_healthcheck_in_process(tmp_path, flaky_server):
+    """_execute_routine for the seed routine must invoke the in-process
+    handler (check_deployments_health), not _exec_script. This guards the
+    routing contract flagged by Codex on PR-C3: the shipped behaviour and
+    the tested function must be the same code path."""
+    db = _fresh_db(tmp_path)
+    flaky_server["set_status"](500)
+    _seed_deployment(db, f"{flaky_server['base']}/")
+
+    import importlib
+    import scheduler
+    importlib.reload(scheduler)
+
+    conn_fn = _conn_fn_for(db)
+    sched = scheduler.SchedulerThread(conn_fn, tmp_path)
+
+    # Seed the routine row so _execute_routine reads the id from DB-shaped
+    # dict the way the real tick does.
+    routine = {
+        "id": "product_healthcheck",
+        "action": "script",
+        "action_config": '{"command": "", "timeout": 60}',
+        "consecutive_errors": 0,
+        "notify_channel": "none",
+        "notify_config": "{}",
+        "name": "Product healthcheck",
+    }
+    # Persist a routines row because _execute_routine UPDATEs it.
+    with conn_fn() as conn:
+        conn.execute(
+            "INSERT INTO routines (id, name, enabled, schedule, tz, action, "
+            "action_config, notify_channel, notify_config, consecutive_errors, "
+            "created_at, updated_at) VALUES (?, ?, 1, '*/10 * * * *', 'UTC', "
+            "'script', '{}', 'none', '{}', 0, '2026-01-01T00:00:00', "
+            "'2026-01-01T00:00:00')",
+            (routine["id"], routine["name"]),
+        )
+        conn.commit()
+
+    for _ in range(3):
+        sched._execute_routine(routine)
+
+    c = sqlite3.connect(db)
+    cf = c.execute("SELECT consecutive_failures FROM deployments").fetchone()[0]
+    n_tasks = c.execute(
+        "SELECT COUNT(*) FROM tasks WHERE source='routine:product_healthcheck'"
+    ).fetchone()[0]
+    c.close()
+    assert cf == 3
+    assert n_tasks == 1
+
+
+# ─────────────────────── update_routine tests ───────────────────────
+
+def test_update_routine_clears_improvement_type_when_action_changes(tmp_path):
+    """Switching action away from 'improve' without explicitly unsetting
+    improvement_type must clear the column so the row isn't inconsistent
+    (flagged by Codex on PR-C3)."""
+    db = _fresh_db(tmp_path)
+    import importlib
+    import scheduler
+    importlib.reload(scheduler)
+    conn_fn = _conn_fn_for(db)
+
+    rid = scheduler.create_routine(conn_fn, {
+        "name": "r", "schedule": "*/10 * * * *", "action": "improve",
+        "improvement_type": "stability", "action_config": {},
+    })
+
+    scheduler.update_routine(conn_fn, rid, {"action": "create_task"})
+
+    c = sqlite3.connect(db)
+    c.row_factory = sqlite3.Row
+    row = c.execute(
+        "SELECT action, improvement_type FROM routines WHERE id=?", (rid,)
+    ).fetchone()
+    c.close()
+    assert row["action"] == "create_task"
+    assert row["improvement_type"] is None
+
+
 # ─────────────────────── HTTP validation tests ───────────────────────
 
 @pytest.fixture
-def http_server(tmp_path):
+def http_server(tmp_path, monkeypatch):
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     port = _free_port()
-    os.environ["NIWA_DB_PATH"] = db_path
-    os.environ["NIWA_APP_PORT"] = str(port)
-    os.environ["NIWA_APP_AUTH_REQUIRED"] = "0"
-    os.environ["NIWA_APP_HOST"] = "127.0.0.1"
+    # monkeypatch.setenv restores prior values on teardown so these
+    # don't leak into later tests that import ``app`` lazily.
+    monkeypatch.setenv("NIWA_DB_PATH", db_path)
+    monkeypatch.setenv("NIWA_APP_PORT", str(port))
+    monkeypatch.setenv("NIWA_APP_AUTH_REQUIRED", "0")
+    monkeypatch.setenv("NIWA_APP_HOST", "127.0.0.1")
 
     # Pre-seed schema + 003 so app boot migrations don't crash (same
     # trick as test_deployments_endpoints.py).
