@@ -1,8 +1,12 @@
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  // Full parsed response body for callers that need structured data
+  // beyond the error message (e.g. validation results).
+  body?: unknown;
+  constructor(message: string, status: number, body?: unknown) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -43,6 +47,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(
       (body as Record<string, string>).error || `Error ${res.status}`,
       res.status,
+      body,
     );
   }
 

@@ -863,6 +863,42 @@ export function useHostingStatus(enabled: boolean = true) {
   });
 }
 
+export interface HostingDomainSaveResult {
+  ok: boolean;
+  domain?: string;
+  error?: string | null;
+  validation: {
+    dns_ok: boolean;
+    wildcard_ok: boolean;
+    http_ok: boolean;
+  } | null;
+}
+
+export function useSaveHostingDomain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ domain, force }: { domain: string; force?: boolean }) =>
+      apiPost<HostingDomainSaveResult>('hosting/domain', { domain, force: !!force }),
+    onSuccess: (result) => {
+      if (result.ok) {
+        qc.invalidateQueries({ queryKey: ['hosting-status'] });
+        qc.invalidateQueries({ queryKey: ['services'] });
+      }
+    },
+  });
+}
+
+export function useClearHostingDomain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete<{ ok: boolean }>('hosting/domain'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['hosting-status'] });
+      qc.invalidateQueries({ queryKey: ['services'] });
+    },
+  });
+}
+
 // ── GitHub PAT (PR-49) ──
 export interface GithubStatus {
   connected: boolean;

@@ -1,9 +1,10 @@
 /**
- * Tests for ``HostingDomainWizard`` (PR-48).
+ * Tests for ``HostingDomainWizard`` (PR-48 + PR-C2).
  *
  * The wizard consumes ``GET /api/hosting/status`` and saves the domain
- * via ``POST /api/services/hosting``. These tests mock fetch and
- * exercise the happy path + a couple of degraded states.
+ * via ``POST /api/hosting/domain`` (validation-aware endpoint added in
+ * PR-C2). These tests mock fetch and exercise the happy path + a
+ * couple of degraded states.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MantineProvider } from '@mantine/core';
@@ -71,7 +72,7 @@ function happyStatus() {
   };
 }
 
-function mockFetch(statusResponse: unknown, onPostHosting?: () => unknown) {
+function mockFetch(statusResponse: unknown, onPostDomain?: () => unknown) {
   globalThis.fetch = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -81,8 +82,14 @@ function mockFetch(statusResponse: unknown, onPostHosting?: () => unknown) {
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      if (url.includes('/api/services/hosting') && init?.method === 'POST') {
-        const body = onPostHosting ? onPostHosting() : { ok: true, saved: ['svc.hosting.domain'] };
+      if (url.includes('/api/hosting/domain') && init?.method === 'POST') {
+        const body = onPostDomain
+          ? onPostDomain()
+          : {
+              ok: true,
+              domain: 'mock',
+              validation: { dns_ok: true, wildcard_ok: true, http_ok: true },
+            };
         return new Response(JSON.stringify(body), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -119,7 +126,7 @@ describe('HostingDomainWizard', () => {
     );
   });
 
-  it('el botón Guardar llama POST /api/services/hosting con el dominio', async () => {
+  it('el botón Guardar llama POST /api/hosting/domain con domain y force=false', async () => {
     const posted: Array<{ url: string; body: unknown }> = [];
     globalThis.fetch = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -130,13 +137,17 @@ describe('HostingDomainWizard', () => {
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        if (url.includes('/api/services/hosting') && init?.method === 'POST') {
+        if (url.includes('/api/hosting/domain') && init?.method === 'POST') {
           const parsed = init.body ? JSON.parse(init.body as string) : {};
           posted.push({ url, body: parsed });
-          return new Response(JSON.stringify({ ok: true, saved: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              domain: 'misitio.com',
+              validation: { dns_ok: true, wildcard_ok: true, http_ok: true },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
         }
         return new Response('{}', { status: 200 });
       },
@@ -148,8 +159,70 @@ describe('HostingDomainWizard', () => {
     const saveBtn = screen.getByRole('button', { name: /^guardar$/i });
     fireEvent.click(saveBtn);
     await waitFor(() => expect(posted.length).toBe(1));
-    expect(posted[0].url).toContain('/api/services/hosting');
-    expect(posted[0].body).toEqual({ 'svc.hosting.domain': 'misitio.com' });
+    expect(posted[0].url).toContain('/api/hosting/domain');
+    expect(posted[0].body).toEqual({ domain: 'misitio.com', force: false });
+  });
+
+  it('si la validación falla, muestra las 3 filas en rojo y el botón "Guardar de todos modos"', async () => {
+    const posted: Array<{ body: unknown }> = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('/api/hosting/status')) {
+          return new Response(JSON.stringify(emptyStatus()), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        if (url.includes('/api/hosting/domain') && init?.method === 'POST') {
+          const parsed = init.body ? JSON.parse(init.body as string) : {};
+          posted.push({ body: parsed });
+          // First call (force=false): validation failed → 400.
+          // Second call (force=true): success.
+          if (!(parsed as { force?: boolean }).force) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: 'validation_failed',
+                validation: {
+                  dns_ok: false,
+                  wildcard_ok: false,
+                  http_ok: false,
+                },
+              }),
+              { status: 400, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              domain: 'misitio.com',
+              validation: {
+                dns_ok: false,
+                wildcard_ok: false,
+                http_ok: false,
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+
+    render(wrap(<HostingDomainWizard />));
+    const input = await screen.findByPlaceholderText('midominio.com');
+    fireEvent.change(input, { target: { value: 'misitio.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /^guardar$/i }));
+
+    const forceBtn = await screen.findByRole('button', {
+      name: /guardar de todos modos/i,
+    });
+    expect(screen.getByText(/DNS resuelve/i)).toBeTruthy();
+    fireEvent.click(forceBtn);
+
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1].body).toEqual({ domain: 'misitio.com', force: true });
   });
 
   it('con todo OK, muestra el mensaje "¡Listo!"', async () => {
