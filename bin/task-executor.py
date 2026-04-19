@@ -1160,13 +1160,39 @@ def _build_planner_prompt(task: sqlite3.Row, project_dir) -> str:
 
 # ────────────────────── PR-B4a planner split ─────────────────────────
 
+# When ``_try_planner_split`` succeeds, it returns an output prefixed
+# with this sentinel. ``_handle_task_result`` detects it and moves the
+# parent to ``bloqueada`` (a legal transition from ``en_progreso``)
+# instead of ``hecha``. The status change happens there — not inside
+# ``_try_planner_split`` — so the transition always runs against the
+# freshly-read DB status and cannot collide with a concurrent edit.
+_PLANNER_SPLIT_SENTINEL = "__NIWA_PLANNER_SPLIT__\n"
+
+# Defensive cap on the title field we take from the planner's JSON
+# output. The schema has no CHECK(length) on ``tasks.title`` so an
+# over-eager planner could persist multi-KB titles; bound it at a
+# length that fits in list UIs without truncation elsewhere.
+_PLANNER_TITLE_MAX = 256
+
+
 def _should_run_planner(task) -> bool:
     """Return True when the planner tier should be invoked for ``task``.
 
     Triggers:
       - ``task.decompose == 1`` (explicit flag), OR
       - ``len(task.description) > PLANNER_DESCRIPTION_THRESHOLD``.
+
+    Tasks that already have a ``parent_task_id`` are never split again:
+    recursive decomposition (hijas de hijas) is out of MVP scope and
+    would otherwise re-trigger automatically if the planner returned
+    long descriptions.
     """
+    try:
+        parent = task["parent_task_id"]
+    except (KeyError, IndexError):
+        parent = None
+    if parent:
+        return False
     try:
         flag = int(task["decompose"] or 0)
     except (KeyError, IndexError, TypeError, ValueError):
@@ -1221,11 +1247,17 @@ def _parse_planner_output(text: str) -> Optional[list[dict]]:
 
 
 def _create_subtasks(parent_task, subtasks: list[dict]) -> int:
-    """Insert children in the ``tasks`` table and move parent to ``bloqueada``.
+    """Insert children in the ``tasks`` table. Parent status is NOT
+    touched here — the caller returns a sentinel-prefixed output and
+    ``_handle_task_result`` is the one that moves the parent to
+    ``bloqueada`` (so the transition is asserted against the current
+    DB state, not a stale cached row).
 
     Each child inherits ``project_id`` and gets ``parent_task_id`` =
     parent id. Priority is validated against the schema's CHECK
-    whitelist; unknown values fall back to ``media``.
+    whitelist; unknown values fall back to ``media``. ``decompose`` is
+    set to ``0`` explicitly so children never re-trigger the planner
+    automatically.
     """
     parent_id = parent_task["id"]
     project_id = parent_task["project_id"]
@@ -1236,14 +1268,15 @@ def _create_subtasks(parent_task, subtasks: list[dict]) -> int:
             priority = (sub.get("priority") or "media").strip().lower()
             if priority not in _VALID_PRIORITIES:
                 priority = "media"
+            title = sub["title"].strip()[:_PLANNER_TITLE_MAX]
             c.execute(
                 "INSERT INTO tasks (id, title, description, area, "
                 "project_id, status, priority, urgent, source, "
-                "parent_task_id, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "parent_task_id, decompose, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     child_id,
-                    sub["title"].strip(),
+                    title,
                     (sub.get("description") or "").strip(),
                     "proyecto",
                     project_id,
@@ -1252,15 +1285,11 @@ def _create_subtasks(parent_task, subtasks: list[dict]) -> int:
                     0,
                     "planner",
                     parent_id,
+                    0,
                     now,
                     now,
                 ),
             )
-        _assert_task_transition(parent_task["status"], "bloqueada")
-        c.execute(
-            "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
-            ("bloqueada", now, parent_id),
-        )
         c.commit()
     return len(subtasks)
 
@@ -1332,7 +1361,8 @@ def _try_planner_split(task) -> tuple[bool, str]:
         "author": "executor", "kind": "decision",
         "message": f"Planner split task into {count} subtasks.",
     })
-    return True, f"[planner] Split into {count} subtasks"
+    summary = f"Split into {count} subtasks"
+    return True, _PLANNER_SPLIT_SENTINEL + summary
 
 
 def _run_with_heartbeat(task_id: str, prompt: str, cwd: Path, llm_cmd: str, timeout: int) -> tuple[bool, str]:
@@ -2147,6 +2177,18 @@ def _handle_task_result(task_id: str, success: bool, output: str, was_retry: boo
                 "task %s: waiting_input — needs clarification", task_id,
             )
             return True, 0  # neither success nor failure for counter
+        # PR-B4a: planner split — parent task is blocked on children.
+        # Move it to ``bloqueada`` (legal from ``en_progreso``) via
+        # the regular state-machine-asserted path instead of ``hecha``.
+        if output.startswith(_PLANNER_SPLIT_SENTINEL):
+            summary = output[len(_PLANNER_SPLIT_SENTINEL):]
+            _finish_task(task_id, "bloqueada", summary)
+            _record_event(
+                task_id, "status_changed",
+                {"to": "bloqueada", "reason": "planner split"},
+            )
+            log.info("task %s: bloqueada — %s", task_id, summary)
+            return True, 0  # waiting on children, not a success nor a failure
         _finish_task(task_id, "hecha", output)
         _record_event(task_id, "completed", {"executor": "niwa-executor"})
         log.info("task %s done", task_id)

@@ -63,16 +63,19 @@ def _load_executor(tmp_path, monkeypatch):
 
 
 def _seed_parent_task(db_path: str, *, decompose: int = 1,
-                      description: str = "", project_id: str | None = None):
+                      description: str = "", project_id: str | None = None,
+                      parent_task_id: str | None = None,
+                      status: str = "en_progreso"):
     task_id = f"task-{uuid.uuid4().hex[:12]}"
     now = "2026-04-19T00:00:00Z"
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tasks (id, title, description, area, project_id, "
         "status, priority, urgent, source, created_at, updated_at, "
-        "decompose) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "decompose, parent_task_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (task_id, "parent task", description, "proyecto", project_id,
-         "en_progreso", "media", 0, "niwa-app", now, now, decompose),
+         status, "media", 0, "niwa-app", now, now, decompose,
+         parent_task_id),
     )
     conn.commit()
     conn.close()
@@ -104,6 +107,16 @@ def test_should_run_planner_neither_trigger(tmp_path, monkeypatch):
 def test_should_run_planner_null_description(tmp_path, monkeypatch):
     mod, _ = _load_executor(tmp_path, monkeypatch)
     task = {"decompose": 0, "description": None}
+    assert mod._should_run_planner(task) is False
+
+
+def test_should_run_planner_blocked_on_children_never_splits(tmp_path, monkeypatch):
+    """Tasks that already are children of a split must not re-split.
+    Prevents recursive decomposition outside MVP scope.
+    """
+    mod, _ = _load_executor(tmp_path, monkeypatch)
+    task = {"decompose": 1, "description": "x" * 9999,
+            "parent_task_id": "task-parent-abc"}
     assert mod._should_run_planner(task) is False
 
 
@@ -190,12 +203,16 @@ def test_try_planner_split_creates_children_rows(tmp_path, monkeypatch):
         handled, result = mod._try_planner_split(parent_row)
 
     assert handled is True
+    # ``_try_planner_split`` returns the sentinel + summary. The parent
+    # status change to ``bloqueada`` is done by ``_handle_task_result``
+    # so the transition is asserted against the freshly-read DB row.
+    assert result.startswith(mod._PLANNER_SPLIT_SENTINEL)
     assert "3" in result
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     children = conn.execute(
-        "SELECT id, title, parent_task_id, status, project_id "
+        "SELECT id, title, parent_task_id, status, project_id, decompose "
         "FROM tasks WHERE parent_task_id=?",
         (parent_id,),
     ).fetchall()
@@ -208,7 +225,40 @@ def test_try_planner_split_creates_children_rows(tmp_path, monkeypatch):
     assert {c["title"] for c in children} == {"step 1", "step 2", "step 3"}
     assert all(c["parent_task_id"] == parent_id for c in children)
     assert all(c["status"] == "pendiente" for c in children)
-    assert parent["status"] == "bloqueada"
+    assert all(c["decompose"] == 0 for c in children)
+    # Parent stays in_progreso until _handle_task_result processes the
+    # sentinel.
+    assert parent["status"] == "en_progreso"
+
+
+def test_handle_task_result_planner_sentinel_blocks_parent(tmp_path, monkeypatch):
+    """When _execute_task returns a planner-split sentinel, the handler
+    must move the parent to ``bloqueada`` (legal from ``en_progreso``)
+    and never try to mark it ``hecha``.
+    """
+    mod, db_path = _load_executor(tmp_path, monkeypatch)
+    parent_id = _seed_parent_task(db_path, decompose=1, description="x")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    parent_row = conn.execute(
+        "SELECT * FROM tasks WHERE id=?", (parent_id,)
+    ).fetchone()
+    conn.close()
+
+    output = mod._PLANNER_SPLIT_SENTINEL + "Split into 3 subtasks"
+    task_done, delta = mod._handle_task_result(
+        parent_id, True, output, False, parent_row,
+    )
+    assert task_done is True
+    assert delta == 0  # neither success nor failure for the counter
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute(
+        "SELECT status FROM tasks WHERE id=?", (parent_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert status == "bloqueada"
 
 
 def test_try_planner_split_malformed_output_falls_through(tmp_path, monkeypatch):
