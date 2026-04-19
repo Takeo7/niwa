@@ -96,11 +96,27 @@ export function TaskList() {
       accessor: 'title',
       title: 'Título',
       sortable: true,
-      render: (task) => (
-        <Text size="sm" fw={500} lineClamp={1}>
-          {task.title}
-        </Text>
-      ),
+      render: (task) => {
+        const total = task.child_count_total || 0;
+        const done = task.child_count_done || 0;
+        return (
+          <Group gap={6} wrap="nowrap">
+            <Text size="sm" fw={500} lineClamp={1}>
+              {task.title}
+            </Text>
+            {total > 0 && (
+              <Badge
+                color="grape"
+                variant="light"
+                size="xs"
+                title="Subtareas (hechas/total)"
+              >
+                ↳ {done}/{total}
+              </Badge>
+            )}
+          </Group>
+        );
+      },
     },
     {
       accessor: 'status',

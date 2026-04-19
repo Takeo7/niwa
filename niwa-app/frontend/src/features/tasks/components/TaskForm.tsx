@@ -76,6 +76,10 @@ export function TaskForm({
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [area, setArea] = useState<string | null>(null);
   const [urgent, setUrgent] = useState(false);
+  // PR-B4b: opt-in to the planner tier at create time. Not exposed
+  // on edit — the flag is read by the executor only on first
+  // dispatch, so toggling it post-dispatch has no effect.
+  const [decompose, setDecompose] = useState(false);
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -108,6 +112,7 @@ export function TaskForm({
       setStartDate(null);
       setArea(null);
       setUrgent(false);
+      setDecompose(false);
     }
   }, [
     task,
@@ -142,6 +147,11 @@ export function TaskForm({
     // not exposed in the UI.
     if (!isEditing && initialParentTaskId) {
       data.parent_task_id = initialParentTaskId;
+    }
+    // PR-B4b: only include ``decompose`` on create. The backend
+    // whitelists it in ``create_task`` but not in ``update_task``.
+    if (!isEditing && decompose) {
+      data.decompose = 1;
     }
 
     if (isEditing) {
@@ -229,6 +239,14 @@ export function TaskForm({
           checked={urgent}
           onChange={(e) => setUrgent(e.currentTarget.checked)}
         />
+        {!isEditing && (
+          <Checkbox
+            label="Desgranar con planner"
+            description="Invoca el tier de planificación antes de ejecutar y crea subtareas."
+            checked={decompose}
+            onChange={(e) => setDecompose(e.currentTarget.checked)}
+          />
+        )}
         <Group justify="flex-end" mt="md">
           <Button variant="subtle" onClick={onClose}>
             Cancelar
