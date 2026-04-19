@@ -262,3 +262,175 @@ def _check_last_healthcheck(result):
                 result['last_healthcheck'] = dict(row)
     except Exception:
         pass
+
+
+# ─── Readiness (PR-A5) ───────────────────────────────────────────────
+#
+# fetch_readiness() aggregates the local prerequisites for running a
+# task end-to-end. It deliberately does NOT make outbound calls:
+# the widget polls this endpoint periodically and hitting Anthropic /
+# OpenAI on every poll would burn subscription tokens per user.
+# "reachable" therefore means "we have credentials, a model and a CLI
+# command locally — a run has a chance to start". A real network
+# probe is out of scope for PR-A5.
+
+# Slug → service key used to build settings keys (``svc.llm.<key>.*``).
+# Unknown slugs fall through to ``auth_mode='api_key'`` /
+# ``has_credential=False``.
+_BACKEND_SERVICE_KEY = {
+    'claude_code': 'anthropic',
+    'codex': 'openai',
+}
+
+# Which oauth_tokens.provider row backs an ``auth_mode=oauth`` flow
+# for each service.  Only openai is wired in v0.2.
+_SERVICE_OAUTH_PROVIDER = {
+    'openai': 'openai',
+}
+
+
+def _is_docker_ok():
+    if os.path.exists('/.dockerenv'):
+        return True
+    try:
+        import shutil
+        return shutil.which('docker') is not None
+    except Exception:
+        return False
+
+
+def _check_admin():
+    """Admin credentials OK when password is set and not the default.
+
+    Reads env vars dynamically (not the app module cache) so tests can
+    monkeypatch via ``monkeypatch.setenv`` without reloading ``app``.
+    """
+    username = os.environ.get('NIWA_APP_USERNAME', 'admin')
+    password = os.environ.get('NIWA_APP_PASSWORD', 'change-me')
+    if not username:
+        return False, 'NIWA_APP_USERNAME is empty'
+    if not password or password == 'change-me':
+        return False, 'using default credentials (change NIWA_APP_PASSWORD)'
+    return True, f'admin user: {username}'
+
+
+def _read_settings_and_state():
+    """Fetch settings, backend_profiles and oauth providers in one pass.
+
+    Returns ``(settings_dict, profiles_list, oauth_providers_set,
+    db_ok)``. Any exception degrades to empty data + ``db_ok=False``.
+    """
+    try:
+        with _db_conn() as conn:
+            settings = {
+                row['key']: row['value']
+                for row in conn.execute('SELECT key, value FROM settings')
+            }
+            profiles = [
+                dict(r) for r in conn.execute(
+                    "SELECT slug, display_name, enabled, default_model "
+                    "FROM backend_profiles ORDER BY priority DESC, slug ASC"
+                )
+            ]
+            oauth_providers = {
+                r['provider'] for r in conn.execute(
+                    'SELECT provider FROM oauth_tokens'
+                )
+            }
+        return settings, profiles, oauth_providers, True
+    except Exception:
+        logger.exception('readiness: failed to read db state')
+        return {}, [], set(), False
+
+
+def _llm_command_set(settings):
+    """True when any LLM CLI command is configured locally."""
+    if settings.get('int.llm_command', '').strip():
+        return True
+    return bool(os.environ.get('NIWA_LLM_COMMAND', '').strip())
+
+
+def _summarize_backend(profile, settings, oauth_providers, command_ok):
+    slug = profile['slug']
+    service_key = _BACKEND_SERVICE_KEY.get(slug)
+    enabled = bool(profile['enabled'])
+    default_model = profile['default_model']
+    model_present = bool(default_model)
+
+    if service_key is None:
+        auth_mode = 'api_key'
+        has_credential = False
+    else:
+        auth_mode = (
+            settings.get(f'svc.llm.{service_key}.auth_method') or 'api_key'
+        )
+        if auth_mode == 'api_key':
+            has_credential = bool(
+                (settings.get(f'svc.llm.{service_key}.api_key') or '').strip()
+            )
+        elif auth_mode == 'setup_token':
+            has_credential = bool(
+                (settings.get(f'svc.llm.{service_key}.setup_token') or '').strip()
+            )
+        elif auth_mode == 'oauth':
+            oauth_key = _SERVICE_OAUTH_PROVIDER.get(service_key)
+            has_credential = bool(oauth_key and oauth_key in oauth_providers)
+        else:
+            has_credential = False
+
+    reachable = bool(
+        enabled and has_credential and model_present and command_ok
+    )
+
+    return {
+        'slug': slug,
+        'display_name': profile.get('display_name') or slug,
+        'enabled': enabled,
+        'has_credential': has_credential,
+        'auth_mode': auth_mode,
+        'model_present': model_present,
+        'default_model': default_model,
+        'reachable': reachable,
+    }
+
+
+def _check_hosting():
+    domain = (os.environ.get('NIWA_HOSTING_DOMAIN') or '').strip()
+    if domain:
+        return True, f'NIWA_HOSTING_DOMAIN={domain}'
+    caddyfile = Path(
+        os.environ.get('NIWA_HOSTING_CADDYFILE') or '/tmp/niwa-hosting-Caddyfile'
+    )
+    try:
+        if caddyfile.is_file() and caddyfile.stat().st_size > 0:
+            return True, f'caddyfile present at {caddyfile}'
+    except Exception:
+        pass
+    return False, 'no hosting domain and no caddyfile found'
+
+
+def fetch_readiness():
+    """Aggregate local readiness for the MVP happy path.
+
+    Never hits the network. Degrades gracefully when the DB is
+    unavailable: individual ``*_ok`` flags flip to False instead of
+    raising, so the caller can always 200 the response.
+    """
+    settings, profiles, oauth_providers, db_ok = _read_settings_and_state()
+    admin_ok, admin_detail = _check_admin()
+    hosting_ok, hosting_detail = _check_hosting()
+    command_ok = _llm_command_set(settings)
+    backends = [
+        _summarize_backend(p, settings, oauth_providers, command_ok)
+        for p in profiles
+    ]
+    return {
+        'docker_ok': _is_docker_ok(),
+        'db_ok': db_ok,
+        'admin_ok': admin_ok,
+        'admin_detail': admin_detail,
+        'backends': backends,
+        'hosting_ok': hosting_ok,
+        'hosting_detail': hosting_detail,
+        'checked_at': datetime.now(timezone.utc).isoformat(),
+    }
