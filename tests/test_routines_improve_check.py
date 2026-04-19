@@ -45,7 +45,44 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
 
 
 def _apply_migration(conn: sqlite3.Connection, filename: str) -> None:
-    conn.executescript((DB_DIR / "migrations" / filename).read_text(encoding="utf-8"))
+    """Idempotent apply — mirrors niwa-app/backend/app.py._apply_sql_idempotent.
+
+    Fresh installs apply schema.sql (which already includes post-migration
+    columns like ``improvement_type``) and then run migrations; the real
+    ``_apply_sql_idempotent`` in app.py skips ``ALTER TABLE ADD COLUMN``
+    when the column already exists. Tests need the same behaviour.
+    """
+    import re as _re
+    sql = (DB_DIR / "migrations" / filename).read_text(encoding="utf-8")
+    lines = []
+    for line in sql.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("--") or not stripped:
+            continue
+        if " --" in line:
+            line = line[: line.index(" --")]
+        lines.append(line)
+    for stmt in "\n".join(lines).split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        if _re.match(
+            r"(BEGIN|COMMIT|END|ROLLBACK)(\s+(TRANSACTION|WORK))?\s*$",
+            stmt, _re.IGNORECASE,
+        ):
+            continue
+        m = _re.match(
+            r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)",
+            stmt, _re.IGNORECASE,
+        )
+        if m:
+            table, column = m.group(1), m.group(2)
+            existing = {
+                r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column in existing:
+                continue
+        conn.execute(stmt)
 
 
 def _free_port() -> int:
@@ -76,13 +113,15 @@ def _request(base, path, *, method="GET", body=None):
 # ─────────────────────── schema/migration tests ───────────────────────
 
 def test_migration_016_adds_columns(tmp_path):
-    """Applying 016 onto a pre-016 DB must add both new columns."""
+    """Applying 016 onto a pre-016 DB must add both new columns.
+
+    ``deployments`` lives in migration 003 (not schema.sql), so apply it
+    explicitly; in real installs _run_migrations walks files in order.
+    """
     db = tmp_path / "t.db"
     c = sqlite3.connect(db)
-    # Simulate a DB where schema.sql doesn't yet include the new columns:
-    # use the real schema.sql but then verify that applying 016 is a no-op
-    # on the already-present columns (idempotent) or adds them if missing.
     _apply_schema(c)
+    _apply_migration(c, "003_deployments.sql")
     _apply_migration(c, "016_routines_improve.sql")
     c.commit()
 
@@ -210,6 +249,8 @@ def _fresh_db(tmp_path: Path) -> Path:
     db = tmp_path / "t.db"
     c = sqlite3.connect(db)
     _apply_schema(c)
+    _apply_migration(c, "003_deployments.sql")
+    _apply_migration(c, "016_routines_improve.sql")
     c.commit()
     c.close()
     return db
