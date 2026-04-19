@@ -27,14 +27,19 @@ import {
 } from '@tabler/icons-react';
 import {
   useHostingStatus,
-  useSaveService,
+  useSaveHostingDomain,
   type HostingStatus,
+  type HostingDomainSaveResult,
 } from '../../../shared/api/queries';
+import { ApiError } from '../../../shared/api/client';
 
 export function HostingDomainWizard() {
   const status = useHostingStatus();
-  const saveService = useSaveService();
+  const saveDomain = useSaveHostingDomain();
   const [domainInput, setDomainInput] = useState('');
+  const [validation, setValidation] = useState<
+    HostingDomainSaveResult['validation']
+  >(null);
 
   // Keep the input seeded with the persisted value when it arrives.
   useEffect(() => {
@@ -43,7 +48,7 @@ export function HostingDomainWizard() {
     }
   }, [status.data?.domain, domainInput]);
 
-  async function handleSaveDomain() {
+  async function doSave(force: boolean) {
     const cleaned = domainInput.trim().toLowerCase();
     if (!cleaned) {
       notifications.show({
@@ -54,10 +59,8 @@ export function HostingDomainWizard() {
       return;
     }
     try {
-      await saveService.mutateAsync({
-        id: 'hosting',
-        values: { 'svc.hosting.domain': cleaned },
-      });
+      await saveDomain.mutateAsync({ domain: cleaned, force });
+      setValidation(null);
       notifications.show({
         title: 'Dominio guardado',
         message: cleaned,
@@ -65,12 +68,38 @@ export function HostingDomainWizard() {
       });
       status.refetch();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 400) {
+        const body = (err.body ?? {}) as Partial<HostingDomainSaveResult>;
+        setValidation(body.validation ?? null);
+        const isHardReject = body.error === 'private_or_invalid_host';
+        notifications.show({
+          title: isHardReject
+            ? 'Dominio rechazado'
+            : 'La validación no pasó',
+          message:
+            body.error === 'private_or_invalid_host'
+              ? 'El dominio resuelve a una IP privada o es una IP pura. Usa un FQDN público.'
+              : body.error === 'domain_required'
+                ? 'Escribe un dominio válido.'
+                : 'DNS o HTTP no responden todavía. Puedes guardar de todos modos.',
+          color: 'red',
+        });
+        return;
+      }
       notifications.show({
         title: 'Error al guardar',
         message: err instanceof Error ? err.message : 'Fallo desconocido',
         color: 'red',
       });
     }
+  }
+
+  async function handleSaveDomain() {
+    await doSave(false);
+  }
+
+  async function handleForceSaveDomain() {
+    await doSave(true);
   }
 
   return (
@@ -104,8 +133,10 @@ export function HostingDomainWizard() {
           domainInput={domainInput}
           setDomainInput={setDomainInput}
           onSave={handleSaveDomain}
-          saving={saveService.isPending}
+          onForceSave={handleForceSaveDomain}
+          saving={saveDomain.isPending}
           status={status.data}
+          validation={validation}
         />
         <Divider />
         <Step4Verify status={status.data} isLoading={status.isLoading} />
@@ -237,14 +268,22 @@ function Step3Domain({
   domainInput,
   setDomainInput,
   onSave,
+  onForceSave,
   saving,
   status,
+  validation,
 }: {
   domainInput: string;
   setDomainInput: (s: string) => void;
   onSave: () => void;
+  onForceSave: () => void;
   saving: boolean;
   status: HostingStatus | undefined;
+  validation: {
+    dns_ok: boolean;
+    wildcard_ok: boolean;
+    http_ok: boolean;
+  } | null;
 }) {
   const currentDomain = status?.domain || '';
   const changed = domainInput.trim().toLowerCase() !== currentDomain;
@@ -275,6 +314,38 @@ function Step3Domain({
         <Text size="xs" c="dimmed">
           Actualmente guardado: <Code>{currentDomain}</Code>
         </Text>
+      )}
+      {validation && (
+        <Alert color="red" variant="light">
+          <Stack gap={4}>
+            <Text size="sm" fw={500}>
+              La validación no pasó:
+            </Text>
+            <StatusLine
+              ok={validation.dns_ok}
+              label="DNS resuelve para el dominio"
+            />
+            <StatusLine
+              ok={validation.wildcard_ok}
+              label="Wildcard (*) resuelve"
+            />
+            <StatusLine
+              ok={validation.http_ok}
+              label="El dominio responde a HTTP/HTTPS"
+            />
+            <Group gap="xs" mt="xs">
+              <Button
+                size="compact-sm"
+                color="red"
+                variant="light"
+                onClick={onForceSave}
+                loading={saving}
+              >
+                Guardar de todos modos
+              </Button>
+            </Group>
+          </Stack>
+        </Alert>
       )}
     </Stack>
   );

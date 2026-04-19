@@ -4662,6 +4662,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/agents':
             result = save_agents_config(payload)
             return self._json(result)
+        # ── Hosting domain (PR-C2): save with validation, then reload. ──
+        if path == '/api/hosting/domain':
+            domain = str(payload.get('domain', '') or '')
+            force = bool(payload.get('force'))
+            try:
+                result = hosting.save_domain(domain, force=force)
+            except Exception as e:
+                logger.exception('hosting.save_domain failed')
+                return self._json({'ok': False, 'error': str(e)}, 500)
+            if not result.get('ok'):
+                return self._json(result, 400)
+            return self._json(result)
         # ── Services API ──
         if re.match(r'^/api/services/[^/]+$', path) and path.count('/') == 3:
             service_id = path.split('/')[3]
@@ -4839,6 +4851,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.exception('github clear_pat failed')
                 return self._json({'error': str(e)}, 500)
+        if path == '/api/hosting/domain':
+            try:
+                return self._json(hosting.clear_domain())
+            except Exception as e:
+                logger.exception('hosting.clear_domain failed')
+                return self._json({'ok': False, 'error': str(e)}, 500)
         if re.match(r'^/api/tasks/[^/]+/labels/[^/]+$', path):
             parts = path.split('/')
             task_id, label = parts[3], urllib.parse.unquote(parts[5])
