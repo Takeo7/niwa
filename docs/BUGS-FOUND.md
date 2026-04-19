@@ -177,7 +177,9 @@ Scope estimado: ~200-400 LOC (router + adapters + tests).
 **Descripción:** `_get_service_status('llm_anthropic')` devolvía `{"status": "configured", "message": "Setup Token configurado ✓"}` cuando el usuario sólo tenía Setup Token (sin API key). La UI renderizaba un badge verde "Configurado". Pero el camino del chat (`assistant_turn`) **no** usa Setup Token — requiere API key — así que el usuario abría el Chat y recibía `llm_not_configured` sin pista de por qué el panel decía verde. "Fail silently" típico: un estado agregado que miente sobre qué superficies están efectivamente cubiertas.
 **Ubicación:** `niwa-app/backend/app.py::_get_service_status` caso `service_id == "llm_anthropic"` (líneas ~1949-1960 pre-fix).
 **Severidad:** baja (confunde pero no corrompe datos ni rompe nada que ya funcionaba).
-**Estado:** **ARREGLADO en PR-22.** El status ahora devuelve `warning` cuando sólo hay Setup Token, con mensaje explícito: "Setup Token OK para tareas (CLI). Falta API key para el chat conversacional." `configured` sólo si la API key está presente. Test matrix en `tests/test_service_status_llm_anthropic.py` cubre las 4 celdas (api_key × setup_token). Relacionado con el gap de Bug 16 — ese gap persiste y justifica el `warning`; cuando Bug 16 se resuelva (runtime CLI para chat), el Setup Token solo podría volver a ser "configured" honestamente.
+**Estado:** **ARREGLADO en PR-22 + extendido en FIX-20260420.** El status ahora devuelve `warning` cuando sólo hay Setup Token, con mensaje explícito: "Setup Token OK para tareas (CLI). Falta API key para el chat conversacional." `configured` sólo si la API key está presente. Test matrix en `tests/test_service_status_llm_anthropic.py` cubre las 4 celdas (api_key × setup_token). Relacionado con el gap de Bug 16 — ese gap persiste y justifica el `warning`; cuando Bug 16 se resuelva (runtime CLI para chat), el Setup Token solo podría volver a ser "configured" honestamente.
+
+**Ampliación FIX-20260420 (ServicesPanel):** incluso con el `warning` del PR-22, la UI seguía mostrando "Configurado" para el Claude Code CLI (la suscripción pagada) cuando `/api/readiness` ya detectaba `credential_expired` (probado por FIX #95). Motivo: el badge del `ServiceCard` venía de `service.status.status`, computado sobre presencia de settings — no consumía el probe live. En FIX-20260420 el badge de `llm_anthropic`/`llm_openai` se alimenta directamente de `/api/readiness.backends[].claude_probe.status` y `.auth_mode`. Etiquetas visibles: `suscripción · activa`, `suscripción · caducada`, `api key`, `sin credencial`, `no instalado`, `error credenciales`. El cómputo legacy del badge se eliminó; no es opt-in.
 
 ## 2026-04-15 — encontrado durante PR-23
 
@@ -699,3 +701,40 @@ Cambios:
 Tests: 6 backend (`test_tasks_service_last_run.py`) incluyendo guard de leak de snapshots JSON y JOIN con backend_profiles; 4 frontend nuevos en `TaskDetailsTab.test.tsx` (banner visible, suprimido en hecha, suprimido sin last_run, suprimido con success).
 
 **Follow-up pendiente (documentado explícitamente):** badge de error en listas/kanban. Sin ello, un usuario que no abre la tarea no se entera del fallo. Alternativa barata: añadir `has_failed_run: bool` al enriquecimiento `enrich_tasks_with_agent_info` (query agregada con `task_id IN (...)`), no JOIN en `fetch_tasks`. Candidato para PR-40+ si el usuario lo pide.
+
+## 2026-04-19 — encontrado en instalación limpia (fresh install reproducción)
+
+### Bug 35: `tool_use_count==0` falso positivo cuando Claude ejecuta tools anidados
+
+**Descripción:** Instalación limpia, tarea "crea un proyecto con un botón que se mueve y cambia estilos". Claude **escribió 3 ficheros** en `~/.niwa/data/projects/nuevo-proyecto-2ab561/` (index.html, style.css, app.js) pero el adapter contabilizó `tool_use_count: 0` y el detector de Bug 32 marcó la run como `clarification_required`. Causa raíz: `_classify_event` y el contador en `_execute` solo reconocían `msg["type"] == "tool_use"` a nivel top-level. El CLI real emite cada tool_use dentro de `assistant.message.content[*].type == "tool_use"`; el parser nunca los veía. El estado se manifestó como banner amarillo "Claude necesita más información" con respuesta vacía — trabajo oculto tras un estado erróneo.
+**Ubicación:** `niwa-app/backend/backend_adapters/claude_code.py::_classify_event` + bucle de `_execute` + `_collect_artifacts_outside_cwd` (pre-fix). Reproducción capturada en `tests/fixtures/claude_stream_bug35.jsonl`.
+**Severidad:** **alta UX** (bloqueaba el happy path end-to-end manual; si Bug 35 disparaba, Bug 36 impedía incluso rescatar la tarea).
+**Estado:** **ARREGLADO en FIX-20260420.**
+
+Cambios:
+
+1. Helper `_extract_tool_uses_from_msg` normaliza ambas formas (top-level y anidada) y se usa para contar, para el hook de capability runtime y para `_collect_artifacts_outside_cwd`.
+2. Tabla de decisión por evidencia: cuando `tool_use_count == 0` pero el diff del filesystem del `project_directory` no está vacío, el outcome es `succeeded` — el filesystem es la evidencia canónica; el parser del stream es una estimación secundaria. Ver §5 de `docs/state-machines.md`.
+3. Snapshots (`runs_service.snapshot_directory` / `diff_snapshots`) toman huella antes y después del run, con excludes por defecto (`.git`, `.niwa`, `__pycache__`, `node_modules`, `.venv`, etc.) y límite de 10k ficheros.
+4. El diff se registra en `artifacts` con `artifact_type ∈ {added, modified, removed}` — coexiste con los tipos legacy (`code/document/data/…`).
+5. Evento `completion_by_fs_diff` cuando el salvage se dispara, para poder diagnosticar futuras regresiones del parser desde `backend_run_events`.
+
+Tests: 12 casos en `tests/test_claude_adapter_completion.py` (una por fila de la tabla de decisión, más el gold-standard contra el fixture real) + 14 en `tests/test_runs_service_snapshot.py` (snapshot determinista, excludes, truncation, diff semántico, register_artifacts_from_diff).
+
+### Bug 36: `waiting_input` es un callejón sin salida — no hay forma de responder a Claude desde la UI
+
+**Descripción:** Cuando una tarea entra en `waiting_input` (sea por el detector de Bug 32 legítimo o por el falso positivo de Bug 35) la UI solo ofrecía editar la descripción y cambiar el estado manualmente a `pendiente`, lo que relanza Claude desde cero, perdiendo contexto. El backend YA tenía `relation_type='resume'` + `session_handle` para continuar la conversación (PR-04/PR-05), pero no había endpoint ni UI que los expusieran. Resultado práctico: una tarea "atascada" en waiting_input se convertía en trabajo perdido.
+**Ubicación:** gap end-to-end; no había endpoint, no había botón, no se consumía el marker de resume.
+**Severidad:** **alta** (degradaba el MVP a un modelo de prompt-único sin conversación real).
+**Estado:** **ARREGLADO en FIX-20260420.**
+
+Cambios:
+
+1. Migración 018: `tasks.resume_from_run_id` + `tasks.pending_followup_message` (mismo patrón que `retry_from_run_id` del PR-57).
+2. Endpoint `POST /api/tasks/:id/respond` con validación explícita (404 / 409 / 400 / 201) y límite de 10k caracteres en el mensaje. Carrera de estado → 409 con error `state_conflict` en vez de corrupción.
+3. Executor: `_build_resume_decision` reutiliza `routing_decision_id` y `backend_profile_id` del run previo (no reroute); rama específica llama a `adapter.resume(task, prior_run, new_run, …)` en vez de `adapter.start`. Graceful degrade si el marker apunta a un run huérfano.
+4. Adapter: `_build_prompt` splicea el followup bajo `## USER FOLLOWUP`; `claude --resume <session_id>` restaura la conversación anterior.
+5. Frontend: componente `WaitingInputBanner` con textarea, botón "Reenviar con tu respuesta", optimistic UI e invalidación React Query. El banner legacy amarillo read-only se eliminó (no flag-hide).
+6. Desviación del brief documentada: la transición de estado usa el camino `waiting_input → pendiente` existente, NO se añade `waiting_input → en_progreso`. El executor solo recoge tareas en `pendiente` (ver `bin/task-executor.py::_claim_next_task`); modificarlo para recoger `en_progreso` con runs queued estaría fuera del scope declarado. Semántica user-facing idéntica: tarea reactivada, banner desaparece, backend trabaja sobre el followup.
+
+Tests: 9 casos en `tests/test_tasks_respond_endpoint.py` cubriendo 404, 409 (wrong state, no previous run, re-post tras flip), 400 (empty / whitespace / missing key / too long), 201 happy path con DB + task_event verification.

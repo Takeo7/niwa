@@ -23,8 +23,8 @@ import {
   IconPlus,
   IconPlayerStop,
   IconAlertTriangle,
-  IconHelp,
 } from '@tabler/icons-react';
+import { WaitingInputBanner } from './WaitingInputBanner';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -154,37 +154,7 @@ export function TaskDetailsTab() {
 
   return (
     <Stack gap="md">
-      {showClarificationBanner && (
-        <Alert
-          variant="light"
-          color="yellow"
-          icon={<IconHelp size={18} />}
-          title="Claude necesita más información"
-        >
-          <Stack gap={4}>
-            <Text size="sm">
-              Claude respondió sin ejecutar ninguna acción. Probablemente
-              falta especificación en la tarea.
-              {task.executor_output && (
-                <>
-                  {' '}Su respuesta:
-                </>
-              )}
-            </Text>
-            {task.executor_output && (
-              <Paper p="sm" radius="sm" withBorder bg="yellow.0">
-                <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                  {task.executor_output}
-                </Text>
-              </Paper>
-            )}
-            <Text size="xs" c="dimmed">
-              Edita la tarea con los detalles que te pide y vuelve a
-              lanzarla desde el menú de estado (pendiente → en_progreso).
-            </Text>
-          </Stack>
-        </Alert>
-      )}
+      {showClarificationBanner && <WaitingInputBanner task={task} />}
       {showFailureBanner && lastRun && (
         <Alert
           variant="light"

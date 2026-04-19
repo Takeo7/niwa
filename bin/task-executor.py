@@ -1718,6 +1718,46 @@ def _execute_task_v02(task: sqlite3.Row) -> tuple[bool, str]:
                 )
 
 
+def _build_resume_decision(
+    task_id: str, resume_from_run_id: str, c: sqlite3.Connection,
+) -> Optional[dict]:
+    """Resolve a resume marker to a pseudo-decision dict (FIX-20260420).
+
+    Parallel to :func:`_build_retry_decision`. When the user answers a
+    ``waiting_input`` task via ``POST /api/tasks/:id/respond`` the app
+    sets ``tasks.resume_from_run_id`` and ``pending_followup_message``;
+    the executor reads them here and pins the new ``backend_run`` to
+    the same routing decision + backend profile so the resume run is a
+    sibling of the paused one (not a reroute).
+
+    Graceful degrade on stale markers mirrors the retry path — return
+    None and let the caller clear the marker so the task still makes
+    forward progress via normal routing.
+    """
+    prev = c.execute(
+        "SELECT id, backend_profile_id, routing_decision_id, session_handle "
+        "FROM backend_runs WHERE id = ?",
+        (resume_from_run_id,),
+    ).fetchone()
+    if not prev:
+        return None
+    bp = c.execute(
+        "SELECT id FROM backend_profiles WHERE id = ?",
+        (prev["backend_profile_id"],),
+    ).fetchone()
+    if not bp:
+        return None
+    return {
+        "routing_decision_id": prev["routing_decision_id"],
+        "selected_backend_profile_id": prev["backend_profile_id"],
+        "fallback_chain": [],  # resume is a single attempt, not a reroute
+        "reason_summary": f"resume of run {resume_from_run_id}",
+        "relation_type_override": "resume",
+        "previous_run_id_override": resume_from_run_id,
+        "resume_session_handle": prev["session_handle"],
+    }
+
+
 def _build_retry_decision(
     task_id: str, retry_from_run_id: str, c: sqlite3.Connection,
 ) -> Optional[dict]:
@@ -1772,17 +1812,40 @@ def _execute_task_v02_body(
 ) -> tuple[bool, str]:
     if codex_tmpdirs is None:
         codex_tmpdirs = []
-    # Step 1: Route — unless this task is a retry (PR-57). When
-    # ``retry_from_run_id`` is set, we bypass routing and reuse the
-    # prior run's backend + routing decision so the new backend_run
-    # becomes a ``relation_type='retry'`` sibling rather than a
-    # rerouted attempt. Graceful degrade: if the marker points at a
-    # prior run that no longer exists, clear it and fall back to the
-    # normal routing path.
+    # Step 1: Route — unless this task carries a retry (PR-57) or a
+    # resume marker (FIX-20260420). Both markers bypass routing and
+    # reuse the prior run's backend + routing decision so the new
+    # backend_run becomes a sibling, not a reroute. Graceful degrade:
+    # if a marker points at a prior run that no longer exists, clear
+    # it and fall back to the normal routing path.
+    #
+    # Resume takes priority over retry — if both are set, the user
+    # explicitly answered a clarification which is a stronger signal
+    # than an auto-retry intent.
     retry_from = task_dict.get("retry_from_run_id")
+    resume_from = task_dict.get("resume_from_run_id")
     with _conn() as c:
         decision: Optional[dict] = None
-        if retry_from:
+        if resume_from:
+            decision = _build_resume_decision(task_id, resume_from, c)
+            if decision is None:
+                log.warning(
+                    "task %s: resume marker %s points to missing/stale data; "
+                    "clearing marker and rerouting normally",
+                    task_id, resume_from,
+                )
+            # Clear the marker regardless — either consumed or
+            # determined stale. Keep ``pending_followup_message`` on
+            # the row until it's copied into task_dict below, then
+            # clear separately so an adapter crash before prompt read
+            # doesn't silently drop the user's message.
+            c.execute(
+                "UPDATE tasks SET resume_from_run_id = NULL, updated_at = ? "
+                "WHERE id = ?",
+                (_now_iso(), task_id),
+            )
+            c.commit()
+        elif retry_from:
             decision = _build_retry_decision(task_id, retry_from, c)
             if decision is None:
                 log.warning(
@@ -1790,9 +1853,6 @@ def _execute_task_v02_body(
                     "clearing marker and rerouting normally",
                     task_id, retry_from,
                 )
-            # Always clear the marker — either we consumed it
-            # successfully into ``decision``, or we determined it's
-            # corrupt and we want the task to proceed via routing.
             c.execute(
                 "UPDATE tasks SET retry_from_run_id = NULL, updated_at = ? "
                 "WHERE id = ?",
@@ -1901,6 +1961,20 @@ def _execute_task_v02_body(
                 artifact_root=artifact_root,
             )
 
+            # FIX-20260420: clear the pending followup on the task row
+            # once we've committed a run to consume it. ``task_dict``
+            # already has the message in memory (copied in
+            # ``_execute_task_v02``) and we pass that dict to the
+            # adapter, so ``_build_prompt`` still sees the text. The
+            # DB clear makes the row idempotent — the next pickup
+            # will not duplicate the followup.
+            if chain_idx == 0 and retry_relation_type == "resume":
+                c.execute(
+                    "UPDATE tasks SET pending_followup_message = NULL, "
+                    "updated_at = ? WHERE id = ?",
+                    (_now_iso(), task_id),
+                )
+
             c.execute(
                 "UPDATE tasks SET current_run_id = ?, updated_at = ? "
                 "WHERE id = ?",
@@ -1983,7 +2057,45 @@ def _execute_task_v02_body(
                     task_dict.get("project_id"), c,
                 )
 
-            result = adapter.start(task_dict, run, profile, cap_profile)
+            # FIX-20260420: when the task carries a resume marker, hand
+            # the prior run to ``adapter.resume()`` so the backend can
+            # restore its session (Claude CLI: ``--resume <id>``) and
+            # continue the conversation instead of starting fresh. The
+            # followup message is already in ``task_dict['pending_
+            # followup_message']`` and ``_build_prompt`` will splice
+            # it under ``## USER FOLLOWUP``. The column is cleared
+            # after the adapter returns so a crash during execution
+            # does NOT silently drop the user's message — the next
+            # pickup would see it again and retry.
+            is_resume = (
+                chain_idx == 0 and retry_relation_type == "resume"
+            )
+            if is_resume and retry_previous_run_id:
+                with _conn() as c:
+                    prior_run_row = c.execute(
+                        "SELECT * FROM backend_runs WHERE id = ?",
+                        (retry_previous_run_id,),
+                    ).fetchone()
+                prior_run = dict(prior_run_row) if prior_run_row else None
+                if prior_run is None:
+                    # Marker survived clearance — should be impossible
+                    # given _build_resume_decision already verified,
+                    # but guard against races anyway. Fall back to
+                    # start(); the followup prompt still flows through.
+                    log.warning(
+                        "task %s: resume prior run vanished between "
+                        "decision and execution; falling back to start()",
+                        task_id,
+                    )
+                    result = adapter.start(
+                        task_dict, run, profile, cap_profile,
+                    )
+                else:
+                    result = adapter.resume(
+                        task_dict, prior_run, run, profile, cap_profile,
+                    )
+            else:
+                result = adapter.start(task_dict, run, profile, cap_profile)
 
             # Check for transient failures eligible for fallback
             error_code = result.get("error_code", "")

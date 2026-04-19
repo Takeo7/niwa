@@ -25,10 +25,19 @@ import {
 import { notifications } from '@mantine/notifications';
 import { useSaveService, useTestService } from '../hooks/useServices';
 import { OAuthSection } from './OAuthSection';
-import type { Service, ServiceField } from '../../../shared/types';
+import type {
+  ReadinessBackend,
+  Service,
+  ServiceField,
+} from '../../../shared/types';
 
 interface Props {
   service: Service;
+  // FIX-20260420: optional live probe from /api/readiness. When set
+  // it overrides the legacy local status heuristic — the card shows
+  // what the backend service actually looks like right now instead
+  // of "configurado" based on whether the settings key is present.
+  probe?: ReadinessBackend;
 }
 
 const STATUS_BADGE: Record<
@@ -41,7 +50,50 @@ const STATUS_BADGE: Record<
   warning: { color: 'yellow', label: 'Aviso' },
 };
 
-export function ServiceCard({ service }: Props) {
+// FIX-20260420: translate the live probe shape into a human badge.
+// Returns null for unknown/absent probes so the caller falls back to
+// the legacy STATUS_BADGE map.
+function backendBadge(
+  probe: ReadinessBackend,
+): { color: string; label: string } {
+  // "no_cli" → CLI binary missing. Pair with "no instalado" for
+  // operator clarity; the setting might be populated but useless
+  // without the CLI.
+  const probeStatus = probe.claude_probe?.status;
+  if (probeStatus === 'no_cli') {
+    return { color: 'red', label: 'no instalado' };
+  }
+  if (!probe.has_credential) {
+    return { color: 'gray', label: 'sin credencial' };
+  }
+  if (probeStatus === 'credential_missing') {
+    return { color: 'gray', label: 'sin credencial' };
+  }
+  if (probeStatus === 'credential_expired') {
+    return {
+      color: 'yellow',
+      label:
+        probe.auth_mode === 'subscription_token'
+          ? 'suscripción · caducada'
+          : 'credencial caducada',
+    };
+  }
+  if (probeStatus === 'credential_error' || probeStatus === 'error') {
+    return { color: 'red', label: 'error credenciales' };
+  }
+  // Default: credential present and probe happy (or no probe because
+  // the backend doesn't support one — still a green signal because
+  // credentials + model + reachable all line up).
+  if (probe.auth_mode === 'subscription_token') {
+    return { color: 'green', label: 'suscripción · activa' };
+  }
+  if (probe.auth_mode === 'api_key') {
+    return { color: 'green', label: 'api key' };
+  }
+  return { color: 'green', label: 'configurado' };
+}
+
+export function ServiceCard({ service, probe }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<{
@@ -125,7 +177,14 @@ export function ServiceCard({ service }: Props) {
     }
   };
 
-  const badgeInfo = STATUS_BADGE[service.status?.status] || STATUS_BADGE.not_configured;
+  // FIX-20260420: prefer the live probe when available. The legacy
+  // path computed the badge from a local "settings key is populated"
+  // heuristic that never fired for credential_expired — showing
+  // "Configurado" for a caducated subscription. Delete, do not
+  // flag-hide: if the probe says something, we trust it.
+  const badgeInfo = probe
+    ? backendBadge(probe)
+    : STATUS_BADGE[service.status?.status] || STATUS_BADGE.not_configured;
 
   return (
     <Card withBorder radius="md">

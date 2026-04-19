@@ -158,3 +158,63 @@ Approval is mandatory for:
 - Network access when the capability profile disallows it
 - `quota_risk >= medium`
 - `estimated_resource_cost > threshold`
+
+---
+
+## 5. Completion detection: evidence-based classification (FIX-20260420)
+
+The Claude Code adapter classifies the outcome of a run from four
+cross-checked signals instead of the single `tool_use_count` heuristic
+that powered PR-B1 + PR-B2:
+
+1. **Stream events** — `tool_use` blocks counted from both top-level
+   messages AND nested `assistant.message.content[]`. The nested case
+   is the real Claude CLI shape; pre-FIX the counter saw zero for
+   those runs (Bug 35).
+2. **Filesystem diff** — a snapshot of `project_directory` taken
+   before the process spawns and again after it exits. Added,
+   modified and removed files outside the excludes list
+   (`.git`, `.niwa`, `__pycache__`, `node_modules`, …) count as
+   objective evidence of work done.
+3. **Exit code** — non-zero always means `failed` with
+   `error_code=exit_<N>`.
+4. **`stop_reason` and `result` fields** — `permission_denials`,
+   `is_error=true`, empty stream, trailing `?` in `result` text.
+
+Decision table applied in the order the rows appear; first match wins:
+
+| Stream events         | FS diff       | Exit | Outcome              | error_code             |
+|-----------------------|---------------|------|----------------------|------------------------|
+| any                   | any           | ≠ 0  | `failed`             | `exit_<N>`             |
+| `permission_denials ≥ 1` | any        | 0    | `failed`             | `permission_denied`    |
+| `is_error = true`     | any           | 0    | `failed`             | `execution_error`      |
+| stream empty          | any           | 0    | `needs_clarification`| `empty_stream_exit_0`  |
+| `≥ 1 tool_use` + clean `result` | any | 0 | `succeeded`          | —                      |
+| `0 tool_use`          | `diff ≠ ∅`    | 0    | `succeeded` (Bug 35) | —                      |
+| `0 tool_use`          | `diff = ∅`    | 0    | `needs_clarification`| `clarification_required` |
+| `≥ 1 tool_use` + trailing `?` | any   | 0    | `needs_clarification`| `clarification_required` |
+
+The filesystem salvage row emits a `completion_by_fs_diff` event so a
+future regression in the stream parser is diagnosable from
+`backend_run_events`.
+
+### Artifact registration
+
+Every entry in the filesystem diff becomes a row in `artifacts` with
+`artifact_type ∈ {added, modified, removed}` — alongside the legacy
+`code/document/data/image/log/file` types produced by
+`collect_artifacts`. The two sets coexist; the UI renders both.
+
+### Round-trip on `waiting_input` — `POST /api/tasks/:id/respond`
+
+When a task enters `waiting_input` the user answers Claude from the UI
+via `WaitingInputBanner`. The endpoint stores the message in
+`tasks.pending_followup_message`, sets `tasks.resume_from_run_id` to
+the prior run id, and flips the task back to `pendiente`. The
+executor picks the task up, sees the resume marker, and calls
+`adapter.resume(task, prior_run, new_run, …)` with
+`relation_type='resume'`. `_build_prompt` splices the followup under
+`## USER FOLLOWUP`; `claude --resume <session_id>` restores the
+prior transcript, so Claude sees the original context plus the new
+user turn. The task stays inside its normal `waiting_input ➝ pendiente ➝ en_progreso`
+flow — no new state machine transition was needed.

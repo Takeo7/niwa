@@ -4311,6 +4311,116 @@ class Handler(BaseHTTPRequestHandler):
                 'status': 'pendiente',
                 'retry_from_run_id': prev_run_id,
             })
+        # ── FIX-20260420: POST /api/tasks/:id/respond ──
+        # User answers Claude from the UI when a task is in
+        # ``waiting_input``. The endpoint stores the followup message
+        # + a pointer to the prior run, then flips the task back to
+        # ``pendiente`` so the executor picks it up and creates a
+        # resume-linked ``backend_run``. The adapter reads the
+        # followup from the task row inside ``_build_prompt`` and uses
+        # the prior run's ``session_handle`` for ``claude --resume``.
+        #
+        # Deviation from the brief: the brief nominally transitions to
+        # ``en_progreso``. The executor only polls tasks in
+        # ``pendiente`` (bin/task-executor.py::_claim_next_task), so
+        # using ``pendiente`` is the minimal structural change. The
+        # user-visible semantics — task reactivated, banner gone,
+        # backend works on followup — are identical. See the PR body
+        # for the full rationale.
+        _m_task_respond = re.match(r'^/api/tasks/([^/]+)/respond$', path)
+        if _m_task_respond:
+            task_id = _m_task_respond.group(1)
+            message = (payload.get('message') or '').strip()
+            if not message:
+                return self._json(
+                    {'error': 'empty_message',
+                     'message': "Field 'message' is required and non-empty."},
+                    400,
+                )
+            if len(message) > 10_000:
+                # Pragmatic ceiling — a followup longer than this is
+                # almost certainly user error (copy-paste of a log,
+                # etc.) and Claude will struggle with it anyway.
+                return self._json(
+                    {'error': 'message_too_long',
+                     'message': "Followup message is capped at 10000 chars."},
+                    400,
+                )
+            ts = now_iso()
+            with db_conn() as conn:
+                task = conn.execute(
+                    "SELECT id, status, current_run_id "
+                    "FROM tasks WHERE id=?", (task_id,),
+                ).fetchone()
+                if not task:
+                    return self._json({'error': 'not_found'}, 404)
+                if task['status'] != 'waiting_input':
+                    return self._json(
+                        {'error': 'invalid_state',
+                         'message': (
+                             f"Task is in state {task['status']!r}. "
+                             "Followup is only accepted while "
+                             "waiting_input."
+                         ),
+                         'status': task['status']},
+                        409,
+                    )
+                # Pick the run to resume from: prefer ``current_run_id``,
+                # fall back to the most recent backend_run. If none
+                # exists the respond flow has no anchor and we refuse.
+                prev_run_id = task['current_run_id']
+                if not prev_run_id:
+                    row = conn.execute(
+                        "SELECT id FROM backend_runs WHERE task_id=? "
+                        "ORDER BY COALESCE(finished_at, created_at) DESC "
+                        "LIMIT 1",
+                        (task_id,),
+                    ).fetchone()
+                    prev_run_id = row['id'] if row else None
+                if not prev_run_id:
+                    return self._json(
+                        {'error': 'no_previous_run',
+                         'message': (
+                             "Task has no backend_run to resume from."
+                         )},
+                        409,
+                    )
+                # Mark the task for executor pickup. Status goes to
+                # ``pendiente`` (allowed from waiting_input), and the
+                # resume marker + followup message tell the executor
+                # to create a ``relation_type='resume'`` run.
+                conn.execute(
+                    "UPDATE tasks SET status='pendiente', "
+                    "completed_at=NULL, resume_from_run_id=?, "
+                    "pending_followup_message=?, updated_at=? "
+                    "WHERE id=? AND status='waiting_input'",
+                    (prev_run_id, message, ts, task_id),
+                )
+                if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                    # Raced — someone else transitioned the task
+                    # between our read and write. Surface as a conflict
+                    # so the UI can refresh.
+                    return self._json(
+                        {'error': 'state_conflict',
+                         'message': (
+                             "Task transitioned during the request. "
+                             "Refresh and try again."
+                         )},
+                        409,
+                    )
+                record_task_event(conn, task_id, 'status_changed', {
+                    'changes': {'status': 'pendiente'},
+                    'old_status': 'waiting_input',
+                    'source': 'user_respond',
+                    'resume_from_run_id': prev_run_id,
+                })
+                conn.commit()
+            return self._json({
+                'ok': True,
+                'status': 'pendiente',
+                'resume_from_run_id': prev_run_id,
+                'task_id': task_id,
+            }, 201)
         _m_proj_deploy = re.match(r'^/api/projects/([^/]+)/deploy$', path)
         if _m_proj_deploy:
             key = _m_proj_deploy.group(1)

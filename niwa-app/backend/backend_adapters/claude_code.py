@@ -109,6 +109,38 @@ def _result_ends_with_question(text: str) -> bool:
     return stripped.endswith("?")
 
 
+def _extract_tool_uses_from_msg(msg: dict) -> list[dict]:
+    """Return all ``tool_use`` dicts carried by a single stream message.
+
+    Two shapes are supported:
+
+    *   Top-level: ``{"type": "tool_use", "name": "...", "input": {...}}``.
+        This is the synthetic form used by the older ``fake_claude.py``
+        and a handful of unit tests.
+    *   Nested: a ``type == "assistant"`` message whose
+        ``message.content`` array contains one or more
+        ``{"type": "tool_use", ...}`` blocks. This is the **real** shape
+        emitted by the Claude CLI — captured in
+        ``tests/fixtures/claude_stream_bug35.jsonl``.
+
+    Pre-FIX-20260420 the adapter only counted the top-level shape, so
+    any real run silently produced ``tool_use_count == 0`` regardless
+    of how many tools Claude invoked (Bug 35).
+    """
+    if not isinstance(msg, dict):
+        return []
+    mtype = msg.get("type")
+    if mtype == "tool_use":
+        return [msg]
+    if mtype == "assistant":
+        message_data = msg.get("message") or {}
+        content = message_data.get("content") or []
+        if isinstance(content, list):
+            return [b for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return []
+
+
 def _stream_has_no_informative_event(raw_lines: list[str],
                                      stderr_output: str) -> bool:
     """True when a CLI exit-0 run carried no work-bearing event.
@@ -604,6 +636,15 @@ class ClaudeCodeAdapter(BackendAdapter):
         enforcement we have; rules carry much more weight when they
         arrive as a SYSTEM prompt rather than embedded in the user
         message.
+
+        FIX-20260420: when the task carries ``pending_followup_message``
+        (set by POST /api/tasks/:id/respond) append it under an
+        explicit ``## USER FOLLOWUP`` heading. On a resume run the
+        prior session is restored via ``claude --resume`` so Claude
+        already has the prior transcript; the followup is the new
+        user turn. When ``--resume`` is unavailable (session_handle
+        missing), the task title/description above still provide
+        anchor context — the followup can stand alone.
         """
         parts: list[str] = []
         title = task.get("title", "")
@@ -615,6 +656,9 @@ class ClaudeCodeAdapter(BackendAdapter):
         notes = task.get("notes", "")
         if notes:
             parts.append(f"## Notes\n{notes}")
+        followup = (task.get("pending_followup_message") or "").strip()
+        if followup:
+            parts.append(f"## USER FOLLOWUP\n{followup}")
         return "\n\n".join(parts) if parts else "Complete the assigned task."
 
     @staticmethod
@@ -771,41 +815,42 @@ class ClaudeCodeAdapter(BackendAdapter):
                 msg = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("type") != "tool_use":
-                continue
-            name = str(msg.get("name") or msg.get("tool") or "").lower()
-            if name not in write_tools:
-                continue
-            tool_input = msg.get("input") or {}
-            if not isinstance(tool_input, dict):
-                continue
-            raw_path = (
-                tool_input.get("file_path")
-                or tool_input.get("notebook_path")
-                or tool_input.get("path")
-                or ""
-            )
-            if not isinstance(raw_path, str) or not raw_path:
-                continue
-            # Relative paths are anchored to cwd by Claude; safe.
-            if not os.path.isabs(raw_path):
-                continue
-            try:
-                resolved = Path(raw_path).resolve(strict=False)
-            except OSError:
-                continue
-            if resolved == cwd_resolved:
-                continue
-            try:
-                resolved.relative_to(cwd_resolved)
-                continue  # inside cwd
-            except ValueError:
-                pass
-            if raw_path not in seen:
-                seen.add(raw_path)
-                offenders.append(raw_path)
+            # FIX-20260420: look at both top-level ``tool_use`` messages
+            # and the nested blocks inside ``assistant.message.content``.
+            # Pre-FIX this only handled the top-level shape, so real
+            # Claude runs silently bypassed the outside-cwd gate.
+            for tu in _extract_tool_uses_from_msg(msg):
+                name = str(tu.get("name") or tu.get("tool") or "").lower()
+                if name not in write_tools:
+                    continue
+                tool_input = tu.get("input") or {}
+                if not isinstance(tool_input, dict):
+                    continue
+                raw_path = (
+                    tool_input.get("file_path")
+                    or tool_input.get("notebook_path")
+                    or tool_input.get("path")
+                    or ""
+                )
+                if not isinstance(raw_path, str) or not raw_path:
+                    continue
+                # Relative paths are anchored to cwd by Claude; safe.
+                if not os.path.isabs(raw_path):
+                    continue
+                try:
+                    resolved = Path(raw_path).resolve(strict=False)
+                except OSError:
+                    continue
+                if resolved == cwd_resolved:
+                    continue
+                try:
+                    resolved.relative_to(cwd_resolved)
+                    continue  # inside cwd
+                except ValueError:
+                    pass
+                if raw_path not in seen:
+                    seen.add(raw_path)
+                    offenders.append(raw_path)
         return offenders
 
     @staticmethod
@@ -951,6 +996,28 @@ class ClaudeCodeAdapter(BackendAdapter):
             if conn:
                 runs_service.transition_run(run_id, "starting", conn)
 
+            # FIX-20260420: take an objective snapshot of the project
+            # directory *before* we hand control to Claude. The post-run
+            # snapshot + diff is the primary "did work get done?" signal
+            # for the revised decision table (see Bug 35 in the brief).
+            # When the task has no project_directory contract the cwd
+            # is either the pre-created artifact_root or
+            # ``os.getcwd()`` — snapshotting those is either low value
+            # or a minefield, so we skip.
+            fs_snapshot_before: dict | None = None
+            snapshot_target: str | None = task.get("project_directory") or None
+            if snapshot_target:
+                try:
+                    fs_snapshot_before = runs_service.snapshot_directory(
+                        snapshot_target,
+                    )
+                except Exception:
+                    logger.exception(
+                        "snapshot_directory(before) failed for %s",
+                        snapshot_target,
+                    )
+                    fs_snapshot_before = None
+
             # Spawn the CLI process
             env = os.environ.copy()
             env["NO_COLOR"] = "1"
@@ -1020,8 +1087,13 @@ class ClaudeCodeAdapter(BackendAdapter):
 
                 # Classify and record event
                 event_type, message, payload = self._classify_event(msg)
-                if event_type == "tool_use":
-                    tool_use_count += 1
+                # FIX-20260420: count tool_use from BOTH shapes —
+                # top-level (synthetic tests) and nested inside
+                # assistant.message.content[] (real Claude CLI). This
+                # was Bug 35's root cause.
+                tool_uses_in_msg = _extract_tool_uses_from_msg(msg)
+                if tool_uses_in_msg:
+                    tool_use_count += len(tool_uses_in_msg)
                 if event_type and conn:
                     runs_service.record_event(
                         run_id, event_type, conn,
@@ -1029,6 +1101,23 @@ class ClaudeCodeAdapter(BackendAdapter):
                         payload_json=json.dumps(payload)
                         if payload else None,
                     )
+                # Record one synthetic ``tool_use`` event per nested
+                # block so the UI's event timeline still shows each
+                # tool call. Top-level tool_use messages were already
+                # recorded above via event_type == "tool_use".
+                if conn and event_type == "assistant_message":
+                    for tu in tool_uses_in_msg:
+                        runs_service.record_event(
+                            run_id, "tool_use", conn,
+                            message=(
+                                f"Tool call: "
+                                f"{tu.get('name', tu.get('tool', 'unknown'))}"
+                            ),
+                            payload_json=json.dumps({
+                                "tool_name": tu.get("name"),
+                                "input": tu.get("input"),
+                            }),
+                        )
 
                 # Extract session_id from any message that carries it
                 if not session_handle:
@@ -1041,40 +1130,51 @@ class ClaudeCodeAdapter(BackendAdapter):
                             )
 
                 # ── Runtime capability check (PR-05) ─────────────
-                if event_type == "tool_use" and capability_profile:
+                # Evaluate every tool_use observed in this message —
+                # both top-level and nested. The evaluator expects a
+                # dict with ``type: tool_use`` shape; we synthesise
+                # one for nested blocks so capability rules apply
+                # uniformly regardless of CLI stream format.
+                if capability_profile and tool_uses_in_msg:
                     import capability_service
-                    rt_check = capability_service.evaluate_runtime_event(
-                        msg, capability_profile, workspace_path=cwd,
-                    )
-                    if not rt_check["allowed"]:
-                        if conn:
-                            import approval_service
-                            runs_service.record_event(
-                                run_id, "approval_gate_triggered", conn,
-                                message=rt_check["reason"],
-                                payload_json=json.dumps(rt_check),
-                            )
-                            trigger_type = (
-                                rt_check["triggers"][0]["type"]
-                                if rt_check.get("triggers")
-                                else "runtime_violation"
-                            )
-                            approval_service.request_approval(
-                                task["id"], run_id,
-                                trigger_type,
-                                rt_check["reason"],
-                                "medium",
-                                conn,
-                            )
-                            runs_service.transition_run(
-                                run_id, "waiting_approval", conn,
-                            )
-                        self._terminate_process(run_id)
-                        return {
-                            "status": "waiting_approval",
-                            "reason": rt_check["reason"],
-                            "triggers": rt_check.get("triggers", []),
-                        }
+                    for tu in tool_uses_in_msg:
+                        if tu.get("type") != "tool_use":
+                            tu_evt = dict(tu)
+                            tu_evt["type"] = "tool_use"
+                        else:
+                            tu_evt = tu
+                        rt_check = capability_service.evaluate_runtime_event(
+                            tu_evt, capability_profile, workspace_path=cwd,
+                        )
+                        if not rt_check["allowed"]:
+                            if conn:
+                                import approval_service
+                                runs_service.record_event(
+                                    run_id, "approval_gate_triggered", conn,
+                                    message=rt_check["reason"],
+                                    payload_json=json.dumps(rt_check),
+                                )
+                                trigger_type = (
+                                    rt_check["triggers"][0]["type"]
+                                    if rt_check.get("triggers")
+                                    else "runtime_violation"
+                                )
+                                approval_service.request_approval(
+                                    task["id"], run_id,
+                                    trigger_type,
+                                    rt_check["reason"],
+                                    "medium",
+                                    conn,
+                                )
+                                runs_service.transition_run(
+                                    run_id, "waiting_approval", conn,
+                                )
+                            self._terminate_process(run_id)
+                            return {
+                                "status": "waiting_approval",
+                                "reason": rt_check["reason"],
+                                "triggers": rt_check.get("triggers", []),
+                            }
 
             # Wait for process to finish
             proc.wait()
@@ -1111,6 +1211,28 @@ class ClaudeCodeAdapter(BackendAdapter):
                         continue
 
             usage_json = json.dumps(usage)
+
+            # FIX-20260420: take the post-run snapshot and compute the
+            # diff. This is Bug 35's evidence: a run with zero counted
+            # tool_use events but a non-empty diff proves Claude wrote
+            # files — the parser missed them, not the model.
+            fs_snapshot_after: dict | None = None
+            fs_diff: dict = {"added": [], "modified": [], "removed": []}
+            diff_nonempty = False
+            if snapshot_target and fs_snapshot_before is not None:
+                try:
+                    fs_snapshot_after = runs_service.snapshot_directory(
+                        snapshot_target,
+                    )
+                    fs_diff = runs_service.diff_snapshots(
+                        fs_snapshot_before, fs_snapshot_after,
+                    )
+                    diff_nonempty = runs_service.diff_is_nonempty(fs_diff)
+                except Exception:
+                    logger.exception(
+                        "snapshot_directory(after) failed for %s",
+                        snapshot_target,
+                    )
 
             # Determine outcome from exit code + stream-json result.
             #
@@ -1197,38 +1319,82 @@ class ClaudeCodeAdapter(BackendAdapter):
                             }),
                         )
 
-                # Bug 32 fix — false-succeeded detection.
-                # Two complementary signals mark a task as waiting on
-                # the human instead of "hecha":
-                #   (a) zero tool_use events + end_turn: Claude just
-                #       talked (PR final 6 case).
-                #   (b) end_turn + result_text ends with '?': Claude
-                #       may have executed partial work but finished
-                #       asking a question (PR-B1 regression case:
-                #       `mkdir /tmp/foo` then "¿qué tipo quieres?").
-                # Chat-origin tasks are excluded — there, answering
-                # with a question is legitimate.
+                # FIX-20260420 — evidence-based clarification gate.
+                #
+                # Decision table (only rows still in play at this point
+                # are reached; permission_denied / execution_error /
+                # empty_stream have already short-circuited above):
+                #
+                #   tool_use_count ≥ 1 AND no trailing '?'
+                #       → success (happy path, unchanged).
+                #   tool_use_count ≥ 1 AND trailing '?'
+                #       → needs_clarification
+                #         (PR-B1: partial work + open question).
+                #   tool_use_count == 0 AND diff ≠ ∅
+                #       → success (Bug 35: parser missed nested
+                #         tool_use blocks but the filesystem shows
+                #         work was done — trust the filesystem).
+                #   tool_use_count == 0 AND diff == ∅
+                #       → needs_clarification (Bug 32: "just talked").
+                #
+                # Chat-origin tasks are excluded — conversational
+                # answers without tools are legitimate success there.
                 if outcome == "success" and stop_reason == "end_turn":
                     task_source = (task.get("source") or "").strip().lower()
+                    is_executive = bool(task_source) and task_source != "chat"
                     ends_with_q = _result_ends_with_question(result_text)
-                    if (task_source and task_source != "chat"
-                            and (tool_use_count == 0 or ends_with_q)):
-                        outcome = "needs_clarification"
-                        error_code = "clarification_required"
-                        if conn:
-                            if tool_use_count == 0:
-                                reason_msg = (
-                                    "Claude respondió sin ejecutar ninguna "
-                                    "acción (0 tool_use). Probablemente "
-                                    "falta información en la tarea."
+
+                    if is_executive:
+                        if tool_use_count == 0 and not diff_nonempty:
+                            # "Claude just talked, nothing changed on
+                            # disk" — the post-Bug-32 canonical case.
+                            outcome = "needs_clarification"
+                            error_code = "clarification_required"
+                            reason_msg = (
+                                "Claude respondió sin ejecutar ninguna "
+                                "acción (0 tool_use) y no se detectan "
+                                "cambios en el directorio de trabajo. "
+                                "Probablemente falta información en la "
+                                "tarea."
+                            )
+                        elif tool_use_count == 0 and diff_nonempty:
+                            # Bug 35 salvage: filesystem says work got
+                            # done; record why the counter disagreed
+                            # so future regressions are traceable.
+                            if conn:
+                                runs_service.record_event(
+                                    run_id,
+                                    "completion_by_fs_diff",
+                                    conn,
+                                    message=(
+                                        "Completion inferred from "
+                                        "filesystem diff — tool_use "
+                                        "events missed by parser. "
+                                        f"added={len(fs_diff['added'])} "
+                                        f"modified={len(fs_diff['modified'])} "
+                                        f"removed={len(fs_diff['removed'])}"
+                                    ),
+                                    payload_json=json.dumps({
+                                        "tool_use_count": tool_use_count,
+                                        "fs_diff": fs_diff,
+                                    }),
                                 )
-                            else:
-                                reason_msg = (
-                                    "Claude ejecutó "
-                                    f"{tool_use_count} acción(es) y "
-                                    "terminó con una pregunta. Falta "
-                                    "información para completar la tarea."
-                                )
+                            reason_msg = None
+                        elif tool_use_count > 0 and ends_with_q:
+                            # PR-B1 path: Claude worked AND asked —
+                            # partial delivery needing clarification.
+                            outcome = "needs_clarification"
+                            error_code = "clarification_required"
+                            reason_msg = (
+                                f"Claude ejecutó {tool_use_count} "
+                                "acción(es) y terminó con una pregunta. "
+                                "Falta información para completar la "
+                                "tarea."
+                            )
+                        else:
+                            reason_msg = None
+
+                        if reason_msg and conn:
                             runs_service.record_event(
                                 run_id, "error", conn,
                                 message=(
@@ -1242,6 +1408,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                                     "tool_use_count": tool_use_count,
                                     "stop_reason": stop_reason,
                                     "ends_with_question": ends_with_q,
+                                    "fs_diff_nonempty": diff_nonempty,
                                 }),
                             )
 
@@ -1298,6 +1465,27 @@ class ClaudeCodeAdapter(BackendAdapter):
                         message=scrub_secrets(stderr_output[:2000]),
                     )
 
+            # FIX-20260420: persist the filesystem diff as artifacts so
+            # the UI and audits can see exactly which files changed,
+            # independently of whatever tool_use events were recorded.
+            # Runs without a project_directory contract (no snapshot)
+            # fall through — the legacy ``collect_artifacts`` path in
+            # the executor handles those via artifact_root scans.
+            if conn and snapshot_target and fs_snapshot_after is not None:
+                try:
+                    runs_service.register_artifacts_from_diff(
+                        task_id=task["id"], run_id=run_id,
+                        diff=fs_diff,
+                        project_directory=snapshot_target,
+                        conn=conn,
+                        after_snapshot=fs_snapshot_after,
+                    )
+                except Exception:
+                    logger.exception(
+                        "register_artifacts_from_diff failed for run %s",
+                        run_id,
+                    )
+
             # Finish run
             if conn:
                 runs_service.finish_run(
@@ -1320,6 +1508,7 @@ class ClaudeCodeAdapter(BackendAdapter):
                 "usage": usage,
                 "result_text": result_text,
                 "tool_use_count": tool_use_count,
+                "fs_diff": fs_diff,
             }
 
         except Exception as exc:
