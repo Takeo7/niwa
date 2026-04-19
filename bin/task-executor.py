@@ -188,6 +188,13 @@ LLM_COMMAND_PLANNER = _cfg("llm_command_planner", "NIWA_LLM_COMMAND_PLANNER") or
 LLM_COMMAND_EXECUTOR = _cfg("llm_command_executor", "NIWA_LLM_COMMAND_EXECUTOR") or ""
 PLANNER_TIMEOUT = int(ENV.get("NIWA_EXECUTOR_PLANNER_TIMEOUT_SECONDS", "300"))
 PLANNER_MAX_TURNS = int(ENV.get("NIWA_EXECUTOR_PLANNER_MAX_TURNS", "10"))
+# PR-B4a: description length above which the planner is auto-invoked
+# even without an explicit ``decompose=1`` flag on the task.
+PLANNER_DESCRIPTION_THRESHOLD = int(
+    os.environ.get("NIWA_PLANNER_DESCRIPTION_THRESHOLD")
+    or ENV.get("NIWA_PLANNER_DESCRIPTION_THRESHOLD")
+    or "400"
+)
 LLM_API_KEY = _cfg("llm_api_key", "NIWA_LLM_API_KEY")
 # Read setup token from new service key OR legacy key
 LLM_SETUP_TOKEN = (_SETTINGS.get("svc.llm.anthropic.setup_token") or _cfg("llm_setup_token", "NIWA_LLM_SETUP_TOKEN"))
@@ -1071,7 +1078,16 @@ def _build_retry_prompt(task, project_dir, previous_error: str) -> str:
 
 
 def _build_planner_prompt(task: sqlite3.Row, project_dir) -> str:
-    """Build a prompt for the planner model to analyze and optionally split a task."""
+    """Build a prompt for the planner model to analyze and optionally split a task.
+
+    The planner must reply with either ``EXECUTE_DIRECTLY`` (simple
+    task) or a structured ``<SUBTASKS>[...]</SUBTASKS>`` JSON block
+    that Niwa parses to create child tasks in the database. The
+    previous prompt asked the model to create subtasks via the
+    ``task_create`` MCP tool; switching to a structured output lets
+    Niwa guarantee ``parent_task_id`` is set and gives us a testable
+    parser (PR-B4a).
+    """
     ctx = _load_project_context(task["project_id"], task["id"])
     memories = _load_memories(task["project_id"])
 
@@ -1112,31 +1128,241 @@ def _build_planner_prompt(task: sqlite3.Row, project_dir) -> str:
     # Planner instructions
     parts.append("")
     parts.append("=" * 60)
-    parts.append("ROLE: You are the PLANNER. You analyze tasks and decide execution strategy.")
+    parts.append("ROLE: You are the PLANNER. Analyze the task and decide execution strategy.")
     parts.append("")
-    parts.append("ANALYZE this task and choose ONE of these actions:")
+    parts.append("Choose ONE of these two options and reply with nothing else:")
     parts.append("")
     parts.append("OPTION A — SIMPLE TASK (can be done in one step):")
     parts.append("  Reply with exactly: EXECUTE_DIRECTLY")
-    parts.append("  Use this for: simple code changes, single file creation, quick fixes, questions.")
+    parts.append("  Use for: single-file changes, questions, quick fixes.")
     parts.append("")
-    parts.append("OPTION B — COMPLEX TASK (needs splitting):")
-    parts.append("  Use task_create MCP tool to create 2-5 subtasks, each with:")
-    parts.append("    - Clear, specific title")
-    parts.append("    - Detailed description of what to do")
-    parts.append("    - Same project_id as the parent task")
-    parts.append("    - status=pendiente (so the executor picks them up)")
-    parts.append("  Then reply with: SPLIT_INTO_SUBTASKS")
-    parts.append("  Use this for: multi-file changes, projects with multiple components,")
-    parts.append("  tasks requiring research + implementation, anything taking >10 min.")
+    parts.append("OPTION B — COMPLEX TASK (needs splitting into 2-5 subtasks):")
+    parts.append("  Reply with a structured block:")
+    parts.append("    <SUBTASKS>")
+    parts.append('    [{"title": "short imperative title",')
+    parts.append('      "description": "detailed instructions",')
+    parts.append('      "priority": "baja|media|alta|critica"}, ...]')
+    parts.append("    </SUBTASKS>")
+    parts.append("  Rules:")
+    parts.append("    - ``title`` is required; ``description`` recommended;")
+    parts.append("      ``priority`` optional (defaults to media).")
+    parts.append("    - Each subtask must be independently executable.")
+    parts.append("    - Keep them ordered (first things first).")
     parts.append("")
     parts.append("IMPORTANT:")
-    parts.append("- Do NOT implement anything yourself. Only analyze and split.")
-    parts.append("- Each subtask must be independently executable.")
-    parts.append("- Keep subtasks ordered (first things first).")
-    parts.append("- If splitting, use task_log to explain your reasoning.")
+    parts.append("- Do NOT implement anything yourself. Only plan.")
+    parts.append("- Do NOT call ``task_create`` or any MCP tool; Niwa creates")
+    parts.append("  the subtasks from the JSON block.")
+    parts.append("- Output ONLY one of the two options above.")
 
     return "\n".join(parts)
+
+
+# ────────────────────── PR-B4a planner split ─────────────────────────
+
+# When ``_try_planner_split`` succeeds, it returns an output prefixed
+# with this sentinel. ``_handle_task_result`` detects it and moves the
+# parent to ``bloqueada`` (a legal transition from ``en_progreso``)
+# instead of ``hecha``. The status change happens there — not inside
+# ``_try_planner_split`` — so the transition always runs against the
+# freshly-read DB status and cannot collide with a concurrent edit.
+_PLANNER_SPLIT_SENTINEL = "__NIWA_PLANNER_SPLIT__\n"
+
+# Defensive cap on the title field we take from the planner's JSON
+# output. The schema has no CHECK(length) on ``tasks.title`` so an
+# over-eager planner could persist multi-KB titles; bound it at a
+# length that fits in list UIs without truncation elsewhere.
+_PLANNER_TITLE_MAX = 256
+
+
+def _should_run_planner(task) -> bool:
+    """Return True when the planner tier should be invoked for ``task``.
+
+    Triggers:
+      - ``task.decompose == 1`` (explicit flag), OR
+      - ``len(task.description) > PLANNER_DESCRIPTION_THRESHOLD``.
+
+    Tasks that already have a ``parent_task_id`` are never split again:
+    recursive decomposition (hijas de hijas) is out of MVP scope and
+    would otherwise re-trigger automatically if the planner returned
+    long descriptions.
+    """
+    try:
+        parent = task["parent_task_id"]
+    except (KeyError, IndexError):
+        parent = None
+    if parent:
+        return False
+    try:
+        flag = int(task["decompose"] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        flag = 0
+    if flag == 1:
+        return True
+    try:
+        desc = task["description"]
+    except (KeyError, IndexError):
+        desc = None
+    if desc and len(desc) > PLANNER_DESCRIPTION_THRESHOLD:
+        return True
+    return False
+
+
+_VALID_PRIORITIES = frozenset({
+    "baja", "media", "alta", "critica",
+    "low", "medium", "high", "critical",
+})
+
+
+def _parse_planner_output(text: str) -> Optional[list[dict]]:
+    """Extract a list of subtasks from the planner output.
+
+    Looks for the first ``<SUBTASKS>...</SUBTASKS>`` block and expects
+    its body to be a JSON array of objects with at least a non-empty
+    ``title`` field. Returns ``None`` if no block is present, the JSON
+    is invalid, the array is empty, or any item is missing ``title``.
+    """
+    if not text:
+        return None
+    start = text.find("<SUBTASKS>")
+    end = text.find("</SUBTASKS>")
+    if start < 0 or end <= start:
+        return None
+    block = text[start + len("<SUBTASKS>"):end].strip()
+    try:
+        parsed = json.loads(block)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    subs: list[dict] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            return None
+        title = item.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return None
+        subs.append(item)
+    return subs
+
+
+def _create_subtasks(parent_task, subtasks: list[dict]) -> int:
+    """Insert children in the ``tasks`` table. Parent status is NOT
+    touched here — the caller returns a sentinel-prefixed output and
+    ``_handle_task_result`` is the one that moves the parent to
+    ``bloqueada`` (so the transition is asserted against the current
+    DB state, not a stale cached row).
+
+    Each child inherits ``project_id`` and gets ``parent_task_id`` =
+    parent id. Priority is validated against the schema's CHECK
+    whitelist; unknown values fall back to ``media``. ``decompose`` is
+    set to ``0`` explicitly so children never re-trigger the planner
+    automatically.
+    """
+    parent_id = parent_task["id"]
+    project_id = parent_task["project_id"]
+    now = _now_iso()
+    with _conn() as c:
+        for sub in subtasks:
+            child_id = f"task-{uuid.uuid4().hex[:12]}"
+            priority = (sub.get("priority") or "media").strip().lower()
+            if priority not in _VALID_PRIORITIES:
+                priority = "media"
+            title = sub["title"].strip()[:_PLANNER_TITLE_MAX]
+            c.execute(
+                "INSERT INTO tasks (id, title, description, area, "
+                "project_id, status, priority, urgent, source, "
+                "parent_task_id, decompose, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    child_id,
+                    title,
+                    (sub.get("description") or "").strip(),
+                    "proyecto",
+                    project_id,
+                    "pendiente",
+                    priority,
+                    0,
+                    "planner",
+                    parent_id,
+                    0,
+                    now,
+                    now,
+                ),
+            )
+        c.commit()
+    return len(subtasks)
+
+
+def _try_planner_split(task) -> tuple[bool, str]:
+    """Run the planner tier for ``task``.
+
+    Returns ``(handled, result)``:
+      - ``(True, "[planner] Split into N subtasks")`` when the planner
+        produced a valid ``<SUBTASKS>`` block and Niwa persisted the
+        children; the caller should treat the parent as done (blocked
+        on children) and return ``result`` as its output.
+      - ``(False, "")`` when the planner decided the task is simple
+        (``EXECUTE_DIRECTLY``), the subprocess failed, or the output
+        was unparseable. The caller must continue to the normal
+        executor pipeline.
+    """
+    task_id = task["id"]
+    project_dir = _resolve_project_dir(task["project_id"])
+    cwd = project_dir or Path.home()
+
+    log.info("task %s planning phase (tier-2 planner)", task_id)
+    _record_event(task_id, "comment", {
+        "author": "executor", "kind": "progress",
+        "message": "Planning phase: analyzing task complexity...",
+    })
+
+    prompt = _build_planner_prompt(task, project_dir)
+    success, output = _run_with_heartbeat(
+        task_id, prompt, cwd, LLM_COMMAND_PLANNER, PLANNER_TIMEOUT,
+    )
+
+    if not success:
+        log.warning(
+            "task %s planner run failed, falling back to direct execution",
+            task_id,
+        )
+        return False, ""
+
+    subs = _parse_planner_output(output)
+    if not subs:
+        if "EXECUTE_DIRECTLY" in output:
+            log.info(
+                "task %s planner: EXECUTE_DIRECTLY, proceeding to executor",
+                task_id,
+            )
+            _record_event(task_id, "comment", {
+                "author": "executor", "kind": "progress",
+                "message": "Planner: task is simple, executing directly.",
+            })
+        else:
+            log.warning(
+                "task %s planner output unparseable (len=%d); falling back",
+                task_id, len(output or ""),
+            )
+        return False, ""
+
+    try:
+        count = _create_subtasks(task, subs)
+    except (sqlite3.Error, ValueError) as e:
+        log.error(
+            "task %s could not persist planner subtasks: %s; falling back",
+            task_id, e,
+        )
+        return False, ""
+
+    log.info("task %s split into %d subtasks by planner", task_id, count)
+    _record_event(task_id, "comment", {
+        "author": "executor", "kind": "decision",
+        "message": f"Planner split task into {count} subtasks.",
+    })
+    summary = f"Split into {count} subtasks"
+    return True, _PLANNER_SPLIT_SENTINEL + summary
 
 
 def _run_with_heartbeat(task_id: str, prompt: str, cwd: Path, llm_cmd: str, timeout: int) -> tuple[bool, str]:
@@ -1873,36 +2099,11 @@ def _execute_task_legacy(task: sqlite3.Row, retry_prompt: str = "") -> tuple[boo
         log.info("chat task %s (tier-1 haiku)", task["id"])
         return _run_with_heartbeat(task["id"], prompt, cwd, LLM_COMMAND_CHAT, CHAT_TIMEOUT_SECONDS)
 
-    # Tier 2: Planner → Opus
-    if LLM_COMMAND_PLANNER and not retry_prompt and not WORKER_MODE:
-        log.info("task %s planning phase (tier-2 planner)", task["id"])
-        _record_event(task["id"], "comment", {
-            "author": "executor", "kind": "progress",
-            "message": "Planning phase: analyzing task complexity..."
-        })
-        planner_prompt = _build_planner_prompt(task, project_dir)
-        success, planner_output = _run_with_heartbeat(
-            task["id"], planner_prompt, cwd, LLM_COMMAND_PLANNER, PLANNER_TIMEOUT
-        )
-
-        if success and "SPLIT_INTO_SUBTASKS" in planner_output:
-            log.info("task %s split into subtasks by planner", task["id"])
-            _record_event(task["id"], "comment", {
-                "author": "executor", "kind": "decision",
-                "message": f"Planner split task into subtasks. Planning output:\n{planner_output[:1000]}"
-            })
-            return True, f"[planner] Task split into subtasks.\n{planner_output}"
-
-        if success and "EXECUTE_DIRECTLY" in planner_output:
-            log.info("task %s marked as simple by planner, proceeding to executor", task["id"])
-            _record_event(task["id"], "comment", {
-                "author": "executor", "kind": "progress",
-                "message": "Planner: task is simple, executing directly."
-            })
-        elif not success:
-            log.warning("task %s planner failed, falling back to direct execution", task["id"])
-
     # Tier 3: Executor → Sonnet (or default LLM_COMMAND)
+    # The planner tier (tier 2) used to live here; PR-B4a moved it to
+    # ``_execute_task`` so both legacy and v0.2 pipelines share the
+    # same trigger (``_should_run_planner``) and DB-level persistence
+    # of child tasks via ``_try_planner_split``.
     if retry_prompt:
         prompt = retry_prompt
     else:
@@ -1927,6 +2128,17 @@ def _execute_task(task: sqlite3.Row, retry_prompt: str = "") -> tuple[bool, str]
     # Chat tasks and retries always go through legacy pipeline
     if is_chat or retry_prompt:
         return _execute_task_legacy(task, retry_prompt=retry_prompt)
+
+    # PR-B4a: planner tier. Runs before pipeline selection so both
+    # v0.2 and legacy benefit. Triggered only when ``decompose=1`` is
+    # set on the task or the description exceeds the threshold, and
+    # only when a planner command is configured and OpenClaw is not
+    # orchestrating.
+    if (LLM_COMMAND_PLANNER and not WORKER_MODE
+            and _should_run_planner(task)):
+        handled, result = _try_planner_split(task)
+        if handled:
+            return True, result
 
     routing_mode = _get_routing_mode()
     if routing_mode == "v02":
@@ -1965,6 +2177,18 @@ def _handle_task_result(task_id: str, success: bool, output: str, was_retry: boo
                 "task %s: waiting_input — needs clarification", task_id,
             )
             return True, 0  # neither success nor failure for counter
+        # PR-B4a: planner split — parent task is blocked on children.
+        # Move it to ``bloqueada`` (legal from ``en_progreso``) via
+        # the regular state-machine-asserted path instead of ``hecha``.
+        if output.startswith(_PLANNER_SPLIT_SENTINEL):
+            summary = output[len(_PLANNER_SPLIT_SENTINEL):]
+            _finish_task(task_id, "bloqueada", summary)
+            _record_event(
+                task_id, "status_changed",
+                {"to": "bloqueada", "reason": "planner split"},
+            )
+            log.info("task %s: bloqueada — %s", task_id, summary)
+            return True, 0  # waiting on children, not a success nor a failure
         _finish_task(task_id, "hecha", output)
         _record_event(task_id, "completed", {"executor": "niwa-executor"})
         log.info("task %s done", task_id)

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   attachments TEXT,
   parent_task_id TEXT,  -- PR-55: follow-up tasks link back to their parent (waiting_input reply, etc.)
   retry_from_run_id TEXT,  -- PR-57: marker; executor reads it to create a retry-linked backend_run
+  decompose INTEGER NOT NULL DEFAULT 0,  -- PR-B4a: ask planner tier to split this task before executing
   -- v0.2 execution columns (migration 007)
   requested_backend_profile_id TEXT REFERENCES backend_profiles(id) ON DELETE SET NULL,
   selected_backend_profile_id TEXT REFERENCES backend_profiles(id) ON DELETE SET NULL,

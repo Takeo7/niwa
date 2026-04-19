@@ -1,0 +1,15 @@
+-- Migration 017: tasks.decompose flag (PR-B4a)
+-- Boolean flag that asks the executor to run the planner tier on this
+-- task before executing. When set to 1, ``_execute_task`` delegates to
+-- ``_try_planner_split`` which prompts the planner model and, if it
+-- returns valid subtasks, inserts them with ``parent_task_id`` = this
+-- task id and moves the parent to ``bloqueada``.
+--
+-- The fallback path is also triggered automatically when the task's
+-- description exceeds ``NIWA_PLANNER_DESCRIPTION_THRESHOLD`` (default
+-- 400 chars) — the flag lets a human force decomposition for short
+-- but ambiguous descriptions.
+--
+-- Fresh installs get the column via schema.sql; migrated DBs get it
+-- here. Default 0 keeps existing tasks unchanged.
+ALTER TABLE tasks ADD COLUMN decompose INTEGER NOT NULL DEFAULT 0;
