@@ -1,14 +1,19 @@
 """Task CRUD and query functions extracted from app.py."""
 import json
+import logging
+import os
 import uuid
 from datetime import datetime, timezone, date
 from pathlib import Path
 
+import hosting
 from tasks_helpers import (
     load_delegations_index, enrich_tasks_with_agent_info,
     record_task_event,
 )
 from state_machines import assert_task_transition
+
+logger = logging.getLogger(__name__)
 
 # Set by _make_deps() from app.py — must be called before using any function in this module.
 # These module-level mutable globals avoid circular imports but make testing harder.
@@ -31,7 +36,8 @@ def get_task(task_id):
         # project_slug/project_name. ``SELECT *`` isn't enough here
         # because we need columns from a second table.
         row = conn.execute(
-            "SELECT t.*, p.slug AS project_slug, p.name AS project_name "
+            "SELECT t.*, p.slug AS project_slug, p.name AS project_name, "
+            "       p.url AS deployment_url "
             "FROM tasks t LEFT JOIN projects p ON p.id = t.project_id "
             "WHERE t.id=?",
             (task_id,),
@@ -210,6 +216,49 @@ def update_task(task_id, payload):
         conn.execute(f'UPDATE tasks SET {", ".join(sets)} WHERE id=?', params)
         record_task_event(conn, task_id, 'completed' if status_value == 'hecha' else 'updated', event_payload)
         conn.commit()
+    # PR-C1: auto-deploy once the transition is durable. The hook runs
+    # OUTSIDE the write transaction so deploy's own DB work (Caddy
+    # config, deployments table) can't deadlock against the tasks
+    # update, and so that a deploy failure can't roll back the status
+    # change we already committed above.
+    if status_value == 'hecha' and current_task.get('project_id'):
+        _maybe_autodeploy(task_id, current_task['project_id'])
+
+
+def _autodeploy_enabled() -> bool:
+    """Env-gated kill switch for the auto-deploy hook.
+
+    Default is ON (matches the v1 MVP happy-path). Accepts the usual
+    falsey spellings so an operator can disable it without touching
+    code during an incident."""
+    raw = os.environ.get('NIWA_DEPLOY_ON_TASK_SUCCESS', '').strip().lower()
+    return raw not in {'0', 'false', 'no'}
+
+
+def _maybe_autodeploy(task_id: str, project_id: str) -> None:
+    """Best-effort deploy-on-completion. Swallows and records failures
+    so a broken hosting layer never rolls back a legitimate status
+    transition. The timeline surfaces the error for the operator."""
+    if not _autodeploy_enabled():
+        return
+    try:
+        hosting.deploy_project(project_id)
+    except Exception as exc:
+        logger.exception(
+            'auto-deploy failed for task=%s project=%s', task_id, project_id,
+        )
+        try:
+            with _db_conn() as conn:
+                record_task_event(conn, task_id, 'alerted', {
+                    'source': 'autodeploy',
+                    'project_id': project_id,
+                    'error': str(exc),
+                })
+                conn.commit()
+        except Exception:
+            logger.exception(
+                'failed to record autodeploy alert for task=%s', task_id,
+            )
 
 
 def delete_task(task_id):
