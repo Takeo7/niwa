@@ -2,6 +2,23 @@
 
 Cada entrada: fecha, PR, decisión, motivo.
 
+## 2026-04-19 — PR-B3
+
+**Decisión:** `autonomy_mode` vive como columna de `projects`, no
+de `project_capability_profiles`. El bypass se aplica en
+`capability_service.evaluate()` y `.evaluate_runtime_event()`, no
+en los adapters ni en `approval_service`.
+**Motivo:** es una propiedad del proyecto (decisión del operador
+sobre autonomía), no un parámetro técnico del perfil. Centralizar
+el bypass en `capability_service` garantiza que ambos adapters
+(claude_code, codex) hereden el comportamiento sin duplicar la
+rama "if dangerous". La migración `015` queda para este PR; PR-C3
+pasa a `016`.
+**Impacto:** `get_effective_profile` es ahora el único punto que
+lee `projects.autonomy_mode`; callers que construyan capability
+profiles a mano no verán el bypass. Aceptable: hoy solo
+`task-executor.py:1742` y `routing_service.py:252` son callers.
+
 Formato sugerido:
 
 ```
