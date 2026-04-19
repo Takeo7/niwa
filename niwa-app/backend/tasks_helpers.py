@@ -108,3 +108,89 @@ def record_task_event(conn, task_id, event_type, payload):
     )
 
 
+# PR-B4b: planner parent closure.
+#
+# PR-B4a makes the planner insert children with ``parent_task_id`` and
+# moves the parent to ``bloqueada``. Without a closure step, that
+# parent would stay blocked forever. This helper closes the loop.
+#
+# Callers pass the connection explicitly so the closure happens inside
+# their write transaction (no second round-trip, no lock races).
+# ``now_iso_str`` is also explicit so the executor (which lives in
+# ``bin/task-executor.py`` and does not call ``_make_deps``) can reuse
+# the helper without wiring the backend module globals.
+_PARENT_CLOSURE_TERMINAL_STATUSES = ("hecha", "archivada")
+
+
+def close_parent_if_children_done(conn, parent_id, now_iso_str):
+    """Transition ``parent_id`` from ``bloqueada`` to ``hecha`` when all
+    its children are terminal (``hecha`` or ``archivada``).
+
+    Returns ``True`` when the parent was just closed by this call,
+    ``False`` otherwise (parent missing, wrong status, no children, or
+    at least one child still open).
+
+    The caller MUST commit. This function never commits on its own so
+    it composes with whatever write transaction the caller opened.
+    """
+    row = conn.execute(
+        "SELECT status FROM tasks WHERE id=?", (parent_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    # A parent the operator moved back to ``pendiente`` (manual
+    # recovery) must not be silently overwritten. Only close the exact
+    # state the planner put it in.
+    if row["status"] != "bloqueada":
+        return False
+
+    placeholders = ",".join("?" * len(_PARENT_CLOSURE_TERMINAL_STATUSES))
+    counts = conn.execute(
+        f"SELECT COUNT(*) AS total, "
+        f"       SUM(CASE WHEN status IN ({placeholders}) THEN 1 ELSE 0 END) "
+        f"       AS terminal "
+        f"FROM tasks WHERE parent_task_id=?",
+        (*_PARENT_CLOSURE_TERMINAL_STATUSES, parent_id),
+    ).fetchone()
+    total = counts["total"] or 0
+    terminal = counts["terminal"] or 0
+    # ``total > 0`` guards against closing a parent that has no
+    # children — which would otherwise satisfy the "all children
+    # terminal" predicate vacuously for any ``bloqueada`` task.
+    if total == 0 or terminal < total:
+        return False
+
+    conn.execute(
+        "UPDATE tasks SET status='hecha', completed_at=?, updated_at=? "
+        "WHERE id=?",
+        (now_iso_str, now_iso_str, parent_id),
+    )
+    conn.execute(
+        "INSERT INTO task_events (id, task_id, type, payload_json, "
+        "created_at) VALUES (?, ?, 'status_changed', ?, ?)",
+        (
+            str(uuid.uuid4()),
+            parent_id,
+            json.dumps(
+                {"to": "hecha", "source": "planner_parent_closure"},
+                ensure_ascii=False,
+            ),
+            now_iso_str,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO task_events (id, task_id, type, payload_json, "
+        "created_at) VALUES (?, ?, 'completed', ?, ?)",
+        (
+            str(uuid.uuid4()),
+            parent_id,
+            json.dumps(
+                {"source": "planner_parent_closure"},
+                ensure_ascii=False,
+            ),
+            now_iso_str,
+        ),
+    )
+    return True
+
+

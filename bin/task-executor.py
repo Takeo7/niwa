@@ -882,15 +882,29 @@ def _finish_task(task_id: str, status: str, output: str) -> None:
     if len(output) > MAX_OUTPUT_CHARS:
         truncated += "\n[output truncated]"
 
+    parent_task_id: Optional[str] = None
     with _conn() as c:
-        row = c.execute("SELECT status, completed_at FROM tasks WHERE id=?", (task_id,)).fetchone()
+        row = c.execute(
+            "SELECT status, completed_at, parent_task_id "
+            "FROM tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
         if row:
             _assert_task_transition(row["status"], status)
+            parent_task_id = row["parent_task_id"]
         completed_at = now if status == "hecha" else (row["completed_at"] if row else None)
         c.execute(
             "UPDATE tasks SET status=?, updated_at=?, completed_at=? WHERE id=?",
             (status, now, completed_at, task_id),
         )
+        # PR-B4b: close the planner-split parent in the same
+        # transaction when this was the last open child. Lazy import
+        # so tests that load the executor module without the backend
+        # on sys.path still work; the path is already injected above
+        # when the module is used for real.
+        if status == "hecha" and parent_task_id:
+            from tasks_helpers import close_parent_if_children_done
+            close_parent_if_children_done(c, parent_task_id, now)
         c.commit()
 
     _record_event(task_id, "comment", {
