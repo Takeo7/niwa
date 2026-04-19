@@ -81,6 +81,14 @@ def server(monkeypatch):
         app.DB_PATH = Path(db_path)
     else:
         import app
+    import health_service
+
+    # Earlier test fixtures may have re-imported ``app`` and left
+    # ``health_service._db_conn`` bound to a dead module's db_conn
+    # (see test_pr58b2_health_check_revert.py which drops ``app`` from
+    # sys.modules). Re-bind defensively so fetch_readiness always hits
+    # the DB this fixture just set up.
+    health_service._make_deps(app.db_conn)
 
     app.HOST = "127.0.0.1"
     app.PORT = port
