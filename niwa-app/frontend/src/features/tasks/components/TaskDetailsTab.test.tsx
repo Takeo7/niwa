@@ -271,6 +271,42 @@ describe('TaskDetailsTab — Resultado markdown', () => {
     expect(screen.queryByText('Claude necesita más información')).toBeNull();
   });
 
+  // ── PR-C1: deployment URL block ─────────────────────────────────
+
+  it('renders deployment link when task is hecha and has deployment_url', () => {
+    const task = makeTask({
+      status: 'hecha',
+      deployment_url: 'http://demo.example.com:8880/',
+    });
+    const { container } = render(wrap(task));
+    // Section heading.
+    expect(screen.getByText('Desplegado')).toBeTruthy();
+    // Link opens in new tab with rel=noopener.
+    const link = container.querySelector(
+      'a[href="http://demo.example.com:8880/"]',
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('hides deployment link when task is not hecha', () => {
+    // A task with a URL but still in progress must not surface the
+    // deploy link — the deploy will only happen once it transitions.
+    const task = makeTask({
+      status: 'en_progreso',
+      deployment_url: 'http://demo.example.com:8880/',
+    });
+    render(wrap(task));
+    expect(screen.queryByText('Desplegado')).toBeNull();
+  });
+
+  it('hides deployment section when deployment_url is empty', () => {
+    const task = makeTask({ status: 'hecha', deployment_url: '' });
+    render(wrap(task));
+    expect(screen.queryByText('Desplegado')).toBeNull();
+  });
+
   it('escapes raw HTML in markdown (no script injection)', () => {
     // react-markdown 9.x without rehype-raw must NOT inject raw HTML.
     // The <script> string should appear as literal text, never as a real

@@ -270,6 +270,29 @@ export function TaskDetailsTab() {
         </>
       )}
 
+      {/* PR-C1: auto-deploy surfaces the resulting URL here so the user
+          can open the published project without digging through the
+          project view. Only shown on terminal success + when the hook
+          actually wrote a URL into projects.url. */}
+      {task.status === 'hecha' && task.deployment_url && (
+        <>
+          <Divider />
+          <Text size="sm" fw={500}>Desplegado</Text>
+          <Paper p="sm" radius="sm" withBorder>
+            <Text size="sm">
+              Desplegado en:{' '}
+              <a
+                href={task.deployment_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {task.deployment_url}
+              </a>
+            </Text>
+          </Paper>
+        </>
+      )}
+
       <Group grow>
         <Select
           label="Estado"

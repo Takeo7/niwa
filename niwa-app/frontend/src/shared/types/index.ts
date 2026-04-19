@@ -31,6 +31,10 @@ export interface Task {
   // PR-39: latest run summary so the UI can show an error banner
   // without a second fetch. Populated by GET /api/tasks/:id only.
   last_run?: TaskLastRun | null;
+  // PR-C1: deployment URL copied from ``projects.url`` via JOIN in
+  // ``get_task``. Non-empty only when the task's project has been
+  // deployed. Populated by GET /api/tasks/:id only.
+  deployment_url?: string | null;
 }
 
 export interface TaskLastRun {
