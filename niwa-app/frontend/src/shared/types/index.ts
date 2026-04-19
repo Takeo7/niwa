@@ -62,6 +62,7 @@ export interface Project {
   total_tasks: number;
   created_at: string;
   updated_at: string;
+  autonomy_mode?: 'normal' | 'dangerous';
 }
 
 export interface Deployment {
