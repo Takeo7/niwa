@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   directory TEXT,
-  url TEXT
+  url TEXT,
+  -- PR-B3: when 'dangerous', capability_service bypasses the approval gate.
+  autonomy_mode TEXT NOT NULL DEFAULT 'normal'
+    CHECK (autonomy_mode IN ('normal','dangerous'))
 );
 
 -- ── Tasks ──
