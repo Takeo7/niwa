@@ -137,9 +137,10 @@ def test_expiring_token_is_refreshed_and_persisted(temp_db):
     assert mock_refresh.call_count == 1
     # provider + refresh_token are passed positionally or by keyword
     args, kwargs = mock_refresh.call_args
-    call_args = list(args) + [kwargs.get("provider"), kwargs.get("refresh_token")]
-    assert "openai" in call_args
-    assert "rt" in call_args
+    provider_arg = args[0] if args else kwargs.get("provider")
+    refresh_arg = args[1] if len(args) > 1 else kwargs.get("refresh_token")
+    assert provider_arg == "openai"
+    assert refresh_arg == "rt"
 
     row = _fetch_row(db_conn_fn, "openai")
     assert row["access_token"] == "new_access"
@@ -183,3 +184,33 @@ def test_row_without_refresh_token_is_skipped(temp_db):
         _refresh_expiring_oauth_tokens(db_conn_fn, margin_seconds=600)
 
     assert mock_refresh.call_count == 0
+
+
+def test_non_future_expires_at_is_not_persisted(temp_db):
+    """If the provider returns a token whose expires_at is 0 or in
+    the past (e.g. JWT without parseable exp claim), the refresher
+    must refuse the write. Otherwise every subsequent tick would
+    match the margin and call the provider in a loop."""
+    from scheduler import _refresh_expiring_oauth_tokens
+
+    _, db_conn_fn = temp_db
+    now = int(time.time())
+    _insert_token(db_conn_fn, provider="openai", expires_at=now + 60)
+
+    # Provider returns success but with expires_at=0
+    with patch(
+        "oauth.refresh_access_token",
+        return_value={
+            "access_token": "new_access",
+            "refresh_token": "new_rt",
+            "expires_at": 0,
+            "provider": "openai",
+        },
+    ):
+        _refresh_expiring_oauth_tokens(db_conn_fn, margin_seconds=600)
+
+    row = _fetch_row(db_conn_fn, "openai")
+    # Row unchanged — scheduler refused the poisoned response
+    assert row["access_token"] == "old_access"
+    assert row["refresh_token"] == "rt"
+    assert row["expires_at"] == now + 60

@@ -333,6 +333,19 @@ def _refresh_expiring_oauth_tokens(
             continue
         new_refresh = result.get("refresh_token") or refresh_token
         new_expires = result.get("expires_at") or 0
+        # Refuse to persist a non-positive expires_at: if the provider
+        # returns a JWT without a parseable ``exp`` claim, ``oauth.py``
+        # falls back to 0 and we'd re-enter this branch on every tick,
+        # hammering the token endpoint until rate-limited. Skip the
+        # write and leave the row alone; the lazy refresh in
+        # task-executor is the safety net.
+        if new_expires <= time.time():
+            log.warning(
+                "OAuth refresher: %s returned non-future expires_at=%s, skipping write",
+                provider,
+                new_expires,
+            )
+            continue
         try:
             with db_conn_fn() as conn:
                 conn.execute(
