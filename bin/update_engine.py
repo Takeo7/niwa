@@ -280,12 +280,8 @@ def _rebuild_app(ctx: _Ctx) -> None:
 
 
 def _restart_executor(ctx: _Ctx) -> None:
-    # setup.py siempre instala el unit como ``niwa-{instance}-executor.service``
-    # (ver setup.py:2292). El fallback anterior a ``niwa-executor.service``
-    # cuando instance=="niwa" no correspondía con ningún unit real, así que
-    # el restart automático fallaba siempre en el install por defecto.
-    instance = ctx.install_dir.name.replace(".", "")
-    service_name = f"niwa-{instance}-executor.service"
+    # PR-A3: Niwa is single-instance; the unit is always ``niwa-executor.service``.
+    service_name = "niwa-executor.service"
     try:
         r = _run(ctx, "systemctl", "restart", service_name, timeout=30)
     except Exception as exc:
