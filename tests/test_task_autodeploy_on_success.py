@@ -57,6 +57,8 @@ def tmp_db(monkeypatch):
             conn.commit()
 
         sys.modules.pop("tasks_service", None)
+        sys.modules.pop("tasks_helpers", None)
+        import tasks_helpers  # noqa: E402
         import tasks_service  # noqa: E402
 
         def _db_conn():
@@ -67,6 +69,11 @@ def tmp_db(monkeypatch):
         def _now_iso():
             return "2026-04-19T00:00:00Z"
 
+        # ``update_task`` calls ``load_delegations_index`` via the
+        # helpers module, which needs its own dep-injection so the
+        # Path it probes is real (not None).
+        delegations_path = Path(path).parent / "delegations.json"
+        tasks_helpers._make_deps(_db_conn, _now_iso, delegations_path)
         tasks_service._make_deps(_db_conn, _now_iso, Path(path).parent)
         yield tasks_service, path
     finally:
