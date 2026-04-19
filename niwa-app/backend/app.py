@@ -4729,7 +4729,21 @@ class Handler(BaseHTTPRequestHandler):
                     proj = conn.execute('SELECT * FROM projects WHERE id=?', (slug,)).fetchone()
                 if not proj:
                     return self._json({'error': 'not_found'}, 404)
-                allowed = {'name', 'description', 'area', 'active', 'directory', 'url'}
+                allowed = {'name', 'description', 'area', 'active',
+                           'directory', 'url', 'autonomy_mode'}
+                # PR-B3: autonomy_mode must be one of {'normal',
+                # 'dangerous'} — enforced here because SQLite can't
+                # add a CHECK constraint via ALTER in migration 015.
+                if 'autonomy_mode' in payload and payload['autonomy_mode'] \
+                        not in ('normal', 'dangerous'):
+                    return self._json(
+                        {'error': 'invalid_autonomy_mode',
+                         'message': (
+                             "autonomy_mode must be 'normal' or "
+                             "'dangerous'"
+                         )},
+                        400,
+                    )
                 # PR-55: if the client explicitly passes an empty
                 # ``directory`` string on edit, honor the "déjalo vacío
                 # para autogenerar" UI contract by synthesising
