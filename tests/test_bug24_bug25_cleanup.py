@@ -58,6 +58,22 @@ class TestArtifactRootMkdirFailure:
     ``failed`` with a specific error_code so it doesn't linger in
     ``starting``."""
 
+    # FIX-20260420: restore sys.modules["runs_service"] around every
+    # test in this class. The original implementation swapped in a
+    # MagicMock and left it in place for the rest of the pytest
+    # process — any later test whose adapter code path called
+    # ``runs_service.record_event(..., payload_json=...)`` failed
+    # because the mock's ``_record`` didn't accept the kwarg. This
+    # caused 10 flaky failures in test_claude_adapter_clarification
+    # and, once FIX-20260420 added test_claude_adapter_completion, 12
+    # more. The fix is test hygiene, not production code.
+    def setup_method(self, method):  # noqa: D401,ARG002
+        import runs_service as _real_runs
+        self._saved_runs_service = _real_runs
+
+    def teardown_method(self, method):  # noqa: D401,ARG002
+        sys.modules["runs_service"] = self._saved_runs_service
+
     def _load_adapter_with_fake_db(self):
         from backend_adapters.claude_code import ClaudeCodeAdapter
 
@@ -66,14 +82,18 @@ class TestArtifactRootMkdirFailure:
 
         # Patch the ``runs_service`` module globally so the adapter's
         # ``_finish_run_failed`` picks up our fakes via ``import
-        # runs_service``.
+        # runs_service``. ``teardown_method`` restores the real
+        # module so other tests see the un-mocked behaviour.
         fake_runs = MagicMock()
-        def _finish(run_id, outcome, conn, *, error_code=None, exit_code=None):
+        def _finish(run_id, outcome, conn, *,
+                    error_code=None, exit_code=None,
+                    observed_usage_signals_json=None):
             record["finish_called_with"] = {
                 "run_id": run_id, "outcome": outcome,
                 "error_code": error_code, "exit_code": exit_code,
             }
-        def _record(run_id, event_type, conn, *, message=""):
+        def _record(run_id, event_type, conn, *,
+                    message="", payload_json=None):
             record["event_message"] = message
         fake_runs.finish_run = _finish
         fake_runs.record_event = _record
