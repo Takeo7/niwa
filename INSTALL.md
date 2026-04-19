@@ -67,8 +67,7 @@ If the LLM is not yet configured, the MCP smoke reports `roundtrip_assistant_tur
   --admin-user USER         Niwa web UI username (default: niwa).
   --admin-password PW       Niwa web UI password (default: auto-generated
                             and printed at the end of the install).
-  --instance NAME           Instance name / container prefix (default: niwa).
-  --dir PATH                Install location (default: ~/.<instance>).
+  --dir PATH                Install location (default: ~/.niwa).
 ```
 
 ### Exit codes
@@ -118,8 +117,7 @@ It walks you through 13 steps. Sensible defaults — for a first install you can
 Verifies Docker, finds the socket (OrbStack/Docker Desktop/Colima/rootless), checks Python version, detects optional integrations (OpenClaw, Claude Code, cloudflared).
 
 ### Step 1 — Naming
-- **Instance name** (default `niwa`) — prefixes container/image/network names. Use a different one if running multiple installs on the same machine.
-- **Install location** (default `~/.niwa` or `~/.<instance>`)
+- **Install location** (default `~/.niwa`)
 - **Customize MCP server names?** (default `n`) — if yes, you rename the 4 default identifiers (`tasks`, `notes`, `platform`, `filesystem`) that the LLM sees in `tools/list`.
 
 ### Step 2 — Database
@@ -222,9 +220,9 @@ Shows everything you picked. Last chance to abort with `n`.
     └── task-executor.py          # only if executor enabled
 ```
 
-Plus 4 Docker images (`<instance>-tasks-mcp`, `<instance>-notes-mcp`, `<instance>-platform-mcp`, `<instance>-app`) and 5 running containers.
+Plus 4 Docker images (`niwa-tasks-mcp`, `niwa-notes-mcp`, `niwa-platform-mcp`, `niwa-app`) and 5 running containers.
 
-If executor enabled: a launchd plist at `~/Library/LaunchAgents/com.niwa.<instance>.executor.plist` (macOS) or `~/.config/systemd/user/niwa-<instance>-executor.service` (Linux).
+If executor enabled: a launchd plist at `~/Library/LaunchAgents/com.niwa.executor.plist` (macOS) or `~/.config/systemd/user/niwa-executor.service` (Linux).
 
 ## Verifying the install
 
@@ -318,7 +316,7 @@ The wizard prompts for alternatives. To find what's using a port: `lsof -nP -iTC
 Run without `-d` to see logs: `docker compose -f ~/.niwa/docker-compose.yml up`
 
 ### Gateway returns 502 from Caddy
-Check that all 5 containers are running: `docker ps | grep <instance>-`. If `mcp-gateway` is missing, check `docker logs <instance>-mcp-gateway`.
+Check that all 5 containers are running: `docker ps | grep niwa-`. If `mcp-gateway` is missing, check `docker logs niwa-mcp-gateway`.
 
 ### Niwa app shows blank page
 Hard-refresh the browser (`Cmd+Shift+R` / `Ctrl+Shift+R`). The frontend caches aggressively.
@@ -337,16 +335,6 @@ Check `NIWA_APP_PUBLIC_BASE_URL` in `~/.niwa/secrets/mcp.env`. Default is `http:
 For now: `git pull && ./niwa uninstall --keep-data && ./niwa install` (reusing your previous answers — the wizard does NOT remember them yet, but the DB and configs are preserved with `--keep-data`).
 
 A real `./niwa upgrade` is a planned follow-up.
-
-## Multiple installs on the same machine
-
-Pick different `INSTANCE_NAME` and ports. Each install gets its own:
-- Container names (`<instance>-mcp-gateway`, etc.)
-- Network (`<instance>-net`)
-- Image tags (`<instance>-tasks-mcp`, etc.)
-- Install dir (default `~/.<instance>`)
-
-They don't interfere.
 
 ## What's NOT in this version
 
