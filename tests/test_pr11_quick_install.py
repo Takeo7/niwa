@@ -46,7 +46,7 @@ class TestArgparseSurface:
             "setup.py", "install", "--quick", "--mode", "assistant",
             "--workspace", "/tmp/ws", "--public-url", "https://n.example.com",
             "--admin-user", "sam", "--admin-password", "secret",
-            "--instance", "stg", "--dir", "/tmp/stg", "-y",
+            "--dir", "/tmp/stg", "-y",
         ])
         parser = _build_parser()
         args = parser.parse_args(sys.argv[1:])
@@ -55,8 +55,22 @@ class TestArgparseSurface:
         assert args.public_url == "https://n.example.com"
         assert args.admin_user == "sam"
         assert args.admin_password == "secret"
-        assert args.instance == "stg"
         assert args.dir == "/tmp/stg"
+
+    def test_install_parser_rejects_instance_flag(self, monkeypatch):
+        """PR-A3: Niwa is single-instance; ``--instance`` is gone.
+
+        The parser built here mirrors the real one in ``setup.main``;
+        ``test_setup_source_has_no_instance_flag`` pins the production
+        parser itself.
+        """
+        monkeypatch.setattr(sys, "argv", [
+            "setup.py", "install", "--quick", "--mode", "core",
+            "--instance", "stg", "-y",
+        ])
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(sys.argv[1:])
 
     def test_quick_mode_choice_enforced(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", [
@@ -90,7 +104,6 @@ def _build_parser():
     p_install.add_argument("--public-url")
     p_install.add_argument("--admin-user")
     p_install.add_argument("--admin-password")
-    p_install.add_argument("--instance")
     p_install.add_argument("--dir")
     p_install.add_argument("--force", action="store_true")
     return parser
@@ -329,7 +342,6 @@ class _Args:
         self.public_url = kw.get("public_url")
         self.admin_user = kw.get("admin_user")
         self.admin_password = kw.get("admin_password")
-        self.instance = kw.get("instance")
         self.dir = kw.get("dir")
 
 
@@ -348,7 +360,8 @@ class TestBuildQuickConfig:
         args = _Args(mode="core", dir=str(tmp_path / "niwa"))
         cfg = setup.build_quick_config(args)
         assert cfg.quick_mode == "core"
-        assert cfg.instance_name == "niwa"
+        # PR-A3: instance_name field removed; WizardConfig has no such attr.
+        assert not hasattr(cfg, "instance_name")
         assert cfg.niwa_home == (tmp_path / "niwa").resolve()
         assert cfg.db_mode == "fresh"
         assert cfg.bind_host == "127.0.0.1"
@@ -625,6 +638,53 @@ class TestModeIdempotence:
         args = _Args(mode="core", dir=str(niwa_home))
         cfg = setup.build_quick_config(args)
         assert setup._ensure_mode_matches_existing(cfg, force=True) is None
+
+
+# ────────────────────────── single-instance guards (PR-A3) ──────────
+class TestSingleInstanceGuards:
+    """PR-A3 retires ``{instance}`` from the installer. These source-level
+    guards keep the flag and the derived naming from creeping back."""
+
+    def _setup_source(self) -> str:
+        return (REPO_ROOT / "setup.py").read_text()
+
+    def test_setup_source_has_no_instance_flag(self):
+        """``p_install.add_argument("--instance", ...)`` must be gone."""
+        import re
+        src = self._setup_source()
+        assert not re.search(r'add_argument\(\s*["\']--instance["\']', src), (
+            "PR-A3: --instance CLI flag is retired; Niwa is single-instance"
+        )
+
+    def test_setup_source_has_no_instance_name_references(self):
+        """``cfg.instance_name`` / ``self.instance_name`` must be gone."""
+        src = self._setup_source()
+        assert "cfg.instance_name" not in src, (
+            "PR-A3: cfg.instance_name must not exist anywhere in setup.py"
+        )
+        assert "self.instance_name" not in src, (
+            "PR-A3: WizardConfig.instance_name field is retired"
+        )
+
+    def test_setup_source_has_no_valid_instance_name_helper(self):
+        """The validator is dead code once the prompt is gone."""
+        src = self._setup_source()
+        assert "valid_instance_name" not in src, (
+            "PR-A3: valid_instance_name helper is dead code"
+        )
+
+    def test_executor_unit_name_is_fixed(self):
+        """Systemd unit baked into the installer must be
+        ``niwa-executor.service``, not the legacy ``niwa-{instance}-executor.service``.
+        """
+        src = self._setup_source()
+        assert 'unit_name = f"niwa-{cfg.instance_name}-executor.service"' not in src
+        assert 'unit_name = "niwa-executor.service"' in src
+
+    def test_hosting_unit_name_is_fixed(self):
+        src = self._setup_source()
+        assert 'unit_name = f"niwa-{cfg.instance_name}-hosting.service"' not in src
+        assert 'unit_name = "niwa-hosting.service"' in src
 
 
 # ────────────────────────── compose template pin ────────────────────

@@ -161,12 +161,6 @@ def prompt_multiselect(question: str, options: list[tuple[str, bool]]) -> list[s
 
 
 # ────────────────────────── validators ──────────────────────────
-def valid_instance_name(name: str) -> Optional[str]:
-    if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", name):
-        return "use lowercase letters, digits, hyphens; start with a letter; 2-31 chars"
-    return None
-
-
 def valid_server_name(name: str) -> Optional[str]:
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", name):
         return "use lowercase letters, digits, underscores, hyphens; start with a letter"
@@ -654,7 +648,6 @@ def generate_token() -> str:
 class WizardConfig:
     def __init__(self):
         self.detected: dict = {}
-        self.instance_name: str = "niwa"
         self.niwa_home: Path = Path.home() / ".niwa"
         self.db_mode: str = "fresh"  # or "existing"
         self.db_path: Path = Path()
@@ -784,14 +777,9 @@ def step_detection(cfg: WizardConfig) -> None:
 def step_naming(cfg: WizardConfig) -> None:
     header("Step 1 — Naming")
     print("Pick names for your install. Defaults are fine for most users.")
-    cfg.instance_name = prompt(
-        "Instance name (used for container/image/network prefix)",
-        default="niwa",
-        validator=valid_instance_name,
-    )
     cfg.niwa_home = Path(prompt(
         "Install location",
-        default=str(Path.home() / f".{cfg.instance_name}"),
+        default=str(Path.home() / ".niwa"),
         validator=valid_path,
     )).expanduser()
 
@@ -1365,7 +1353,6 @@ def step_clients(cfg: WizardConfig) -> None:
 
 def step_summary(cfg: WizardConfig) -> bool:
     header("Step 13 — Summary")
-    print(f"  Instance name:      {cfg.instance_name}")
     print(f"  Install location:   {cfg.niwa_home}")
     print(f"  Database:           {cfg.db_mode} at {cfg.db_path}")
     print(f"  Filesystem scope:   {cfg.fs_workspace} → /workspace")
@@ -1506,7 +1493,9 @@ def execute_install(cfg: WizardConfig) -> None:
         "NIWA_MODE": cfg.mode,
         "NIWA_PUBLIC_DOMAIN": cfg.public_domain,
         "NIWA_CLOUDFLARE_TUNNEL_ID": cfg.cloudflared_tunnel_id,
-        "INSTANCE_NAME": cfg.instance_name,
+        # PR-A3: kept as a literal so existing readers (compose vars,
+        # external healthchecks) keep resolving it; Niwa is single-instance.
+        "INSTANCE_NAME": "niwa",
         "NIWA_HOME": str(cfg.niwa_home),
         "NIWA_LOGS_DIR": str(cfg.niwa_home / "logs"),
         "NIWA_SECRETS_DIR": str(cfg.niwa_home / "secrets"),
@@ -1612,7 +1601,7 @@ def execute_install(cfg: WizardConfig) -> None:
             tasks_env = {
                 "NIWA_MCP_CONTRACT": cfg.mcp_contract,
                 "NIWA_MCP_SERVER_TOKEN": cfg.mcp_server_token,
-                "NIWA_APP_URL": f"http://{cfg.instance_name}-app:8080",
+                "NIWA_APP_URL": "http://niwa-app:8080",
             }
         else:
             warn(f"Contract file not found: {contract_path} — "
@@ -1622,7 +1611,7 @@ def execute_install(cfg: WizardConfig) -> None:
         str(cfg.db_path),
         str(cfg.fs_workspace),
         str(cfg.fs_memory),
-        cfg.instance_name,
+        "niwa",
         contract_file=contract_file,
         tasks_env=tasks_env,
     )
@@ -1658,7 +1647,7 @@ def execute_install(cfg: WizardConfig) -> None:
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO projects (id, slug, name, area, description, active, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                ("proj-default", "default", "Default", "proyecto", f"Default project for {cfg.instance_name}", 1, ts, ts),
+                ("proj-default", "default", "Default", "proyecto", "Default project for niwa", 1, ts, ts),
             )
             # Run all migrations on top of the base schema.
             #
@@ -1703,10 +1692,10 @@ def execute_install(cfg: WizardConfig) -> None:
     # Build images
     header("Step 14b — Building Docker images")
     images = [
-        ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"{cfg.instance_name}-tasks-mcp:{NIWA_VERSION}"),
-        ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"{cfg.instance_name}-notes-mcp:{NIWA_VERSION}"),
-        ("platform-mcp", REPO_ROOT / "servers" / "platform-mcp", f"{cfg.instance_name}-platform-mcp:{NIWA_VERSION}"),
-        ("niwa-app", REPO_ROOT / "niwa-app", f"{cfg.instance_name}-app:{NIWA_VERSION}"),
+        ("tasks-mcp", REPO_ROOT / "servers" / "tasks-mcp", f"niwa-tasks-mcp:{NIWA_VERSION}"),
+        ("notes-mcp", REPO_ROOT / "servers" / "notes-mcp", f"niwa-notes-mcp:{NIWA_VERSION}"),
+        ("platform-mcp", REPO_ROOT / "servers" / "platform-mcp", f"niwa-platform-mcp:{NIWA_VERSION}"),
+        ("niwa-app", REPO_ROOT / "niwa-app", f"niwa-app:{NIWA_VERSION}"),
     ]
     for name, ctx, tag in images:
         info(f"Building {name} → {tag}")
@@ -1747,10 +1736,10 @@ def execute_install(cfg: WizardConfig) -> None:
         if e.code in (400, 405, 406):
             ok(f"Gateway responding on port {cfg.gateway_streaming_port} (HTTP {e.code} expected for GET)")
         else:
-            warn(f"Gateway returned HTTP {e.code} — check 'docker logs {cfg.instance_name}-mcp-gateway'")
+            warn(f"Gateway returned HTTP {e.code} — check 'docker logs niwa-mcp-gateway'")
     except Exception as e:
         warn(f"Gateway health check failed: {e}")
-        warn(f"  Run: docker logs {cfg.instance_name}-mcp-gateway")
+        warn("  Run: docker logs niwa-mcp-gateway")
 
     # Niwa app healthcheck
     try:
@@ -1761,7 +1750,7 @@ def execute_install(cfg: WizardConfig) -> None:
                 warn(f"Niwa app returned HTTP {r.status}")
     except Exception as e:
         warn(f"Niwa app health check failed: {e}")
-        warn(f"  Run: docker logs {cfg.instance_name}-app")
+        warn("  Run: docker logs niwa-app")
 
     # Caddy healthcheck (no auth needed for /health)
     try:
@@ -1770,7 +1759,7 @@ def execute_install(cfg: WizardConfig) -> None:
                 ok(f"Caddy responding on port {cfg.caddy_port}")
     except Exception as e:
         warn(f"Caddy health check failed: {e}")
-        warn(f"  Run: docker logs {cfg.instance_name}-caddy")
+        warn("  Run: docker logs niwa-caddy")
 
     # Bootstrap projects table with the user's chosen projects
     if cfg.projects:
@@ -1902,7 +1891,7 @@ def print_summary(cfg: WizardConfig) -> None:
     print(f"    - Open Niwa app:    open http://{host_display}:{cfg.app_port}")
     if cfg.register_claude:
         print(f"    - Test from Claude Code:  ask it to use the '{cfg.server_names['tasks']}' MCP")
-    print(f"    - View logs:          docker logs {cfg.instance_name}-mcp-gateway")
+    print("    - View logs:          docker logs niwa-mcp-gateway")
     print(f"    - Stop:               docker compose -f {cfg.niwa_home / 'docker-compose.yml'} down")
     print(f"    - Restart:            docker compose -f {cfg.niwa_home / 'docker-compose.yml'} restart")
     print()
@@ -1930,7 +1919,7 @@ def install_task_executor(cfg: WizardConfig) -> None:
 
 
 def _install_launchd_agent(cfg: WizardConfig, executor_path: Path) -> None:
-    label = f"com.niwa.{cfg.instance_name}.executor"
+    label = "com.niwa.executor"
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     log_path = cfg.niwa_home / "logs" / "executor.log"
@@ -2089,8 +2078,8 @@ def _verify_service_or_abort(
     err("  Known causes (see docs/BUGS-FOUND.md):")
     err("    • Bug 18 — executor.log owned by root (fixed in PR-23).")
     err("      Manual unblock on an already-broken install:")
-    err("        chown niwa:niwa /opt/<instance>/logs/executor.log")
-    err("        chown niwa:niwa /opt/<instance>/logs/hosting.log")
+    err("        chown niwa:niwa /opt/niwa/logs/executor.log")
+    err("        chown niwa:niwa /opt/niwa/logs/hosting.log")
     err("    • Bug 19 — executor passed prompt as path (fixed in PR-24).")
     err("")
     err("  Install aborted (fail-loud). Investigate, fix, then retry")
@@ -2136,7 +2125,7 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             subprocess.run(["useradd", "-m", "-s", "/bin/bash", "niwa"], check=True)
             ok("Created system user 'niwa' for the executor")
         # Setup niwa home with copies/links
-        niwa_home = Path("/home/niwa") / f".{cfg.instance_name}"
+        niwa_home = Path("/home/niwa") / ".niwa"
         niwa_home.mkdir(parents=True, exist_ok=True)
         (niwa_home / "secrets").mkdir(parents=True, exist_ok=True)
         (niwa_home / "bin").mkdir(parents=True, exist_ok=True)
@@ -2176,7 +2165,7 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
             except Exception as e:
                 info(f"Could not generate setup token: {e} (executor will use copied credentials)")
         # Data/logs in a shared location
-        shared_dir = Path("/opt") / cfg.instance_name
+        shared_dir = Path("/opt") / "niwa"
         shared_dir.mkdir(parents=True, exist_ok=True)
         if not (shared_dir / "data").exists():
             shutil.copytree(str(cfg.niwa_home / "data"), str(shared_dir / "data"))
@@ -2281,7 +2270,7 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
         # ``NIWA_BACKEND_DIR`` so ``bin/task-executor.py`` resolves
         # imports against this copy instead of the (non-existent)
         # path it would compute relative to its own __file__ after
-        # being copied to /home/niwa/.<instance>/bin/.
+        # being copied to /home/niwa/.niwa/bin/.
         backend_runtime_dir = shared_dir / "niwa-app" / "backend"
         if backend_runtime_dir.exists():
             shutil.rmtree(str(backend_runtime_dir))
@@ -2358,7 +2347,7 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
         claude_settings.write_text(json.dumps(existing_usr, indent=2) + "\n")
         ok("Created scoped Claude Code permissions for executor")
 
-    unit_name = f"niwa-{cfg.instance_name}-executor.service"
+    unit_name = "niwa-executor.service"
 
     # Detect paths for LLM CLIs so the executor can find them
     extra_paths = set()
@@ -2376,7 +2365,7 @@ def _install_systemd_unit(cfg: WizardConfig, executor_path: Path) -> None:
         # System-level unit running as niwa user
         unit_dir = Path("/etc/systemd/system")
         unit = f"""[Unit]
-Description=Niwa task executor ({cfg.instance_name})
+Description=Niwa task executor
 After=network.target
 
 [Service]
@@ -2406,7 +2395,7 @@ WantedBy=multi-user.target
         unit_dir = Path.home() / ".config" / "systemd" / "user"
         unit_dir.mkdir(parents=True, exist_ok=True)
         unit = f"""[Unit]
-Description=Niwa task executor ({cfg.instance_name})
+Description=Niwa task executor
 After=network.target
 
 [Service]
@@ -2444,10 +2433,10 @@ WantedBy=default.target
             warn(f"Enable manually: systemctl --user enable --now {unit_name}")
 
 
-def _uninstall_service(install_dir: Path, instance: str, service_type: str) -> None:
+def _uninstall_service(install_dir: Path, service_type: str) -> None:
     """Stop and remove the launchd agent / systemd unit for a service type (executor or hosting)."""
     if sys.platform == "darwin":
-        label = f"com.niwa.{instance}.{service_type}"
+        label = f"com.niwa.{service_type}"
         plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
         if plist_path.exists():
             uid = os.getuid()
@@ -2455,7 +2444,7 @@ def _uninstall_service(install_dir: Path, instance: str, service_type: str) -> N
             plist_path.unlink()
             ok(f"Removed launchd agent {label}")
     elif sys.platform.startswith("linux"):
-        unit_name = f"niwa-{instance}-{service_type}.service"
+        unit_name = f"niwa-{service_type}.service"
         # Check system-level first (root installs)
         system_path = Path("/etc/systemd/system") / unit_name
         if system_path.exists():
@@ -2471,10 +2460,10 @@ def _uninstall_service(install_dir: Path, instance: str, service_type: str) -> N
             ok(f"Removed user systemd unit {unit_name}")
 
 
-def _uninstall_task_executor(install_dir: Path, instance: str) -> None:
+def _uninstall_task_executor(install_dir: Path) -> None:
     """Stop and remove the executor and hosting server services."""
-    _uninstall_service(install_dir, instance, "executor")
-    _uninstall_service(install_dir, instance, "hosting")
+    _uninstall_service(install_dir, "executor")
+    _uninstall_service(install_dir, "hosting")
 
 
 def install_hosting_server(cfg: WizardConfig) -> None:
@@ -2496,7 +2485,7 @@ def install_hosting_server(cfg: WizardConfig) -> None:
     ok(f"Copied hosting server to {dest}")
 
     if sys.platform == "darwin":
-        label = f"com.niwa.{cfg.instance_name}.hosting"
+        label = "com.niwa.hosting"
         plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         log_path = cfg.niwa_home / "logs" / "hosting.log"
@@ -2546,20 +2535,20 @@ def install_hosting_server(cfg: WizardConfig) -> None:
     elif sys.platform.startswith("linux"):
         run_as_root = os.getuid() == 0
         log_path = cfg.niwa_home / "logs" / "hosting.log"
-        unit_name = f"niwa-{cfg.instance_name}-hosting.service"
+        unit_name = "niwa-hosting.service"
 
         if run_as_root:
             # Bug 21 (docs/BUGS-FOUND.md): when the installer runs as
-            # root, `cfg.niwa_home` lives under `/root/.<instance>`,
+            # root, `cfg.niwa_home` lives under `/root/.niwa`,
             # which is mode 0700 (drwx------). The unit runs as
             # ``User=niwa`` and cannot read anything under /root, so
             # ``ExecStart=/usr/bin/env python3 /root/.niwa/bin/hosting-server.py``
             # dies immediately with ``can't open file: Permission
             # denied`` (exit code 2). The executor already side-steps
-            # this by copying its binary into ``/home/niwa/.<instance>/bin/``
+            # this by copying its binary into ``/home/niwa/.niwa/bin/``
             # inside `_install_systemd_unit`; we mirror that pattern
             # here for the hosting binary.
-            niwa_home = Path("/home/niwa") / f".{cfg.instance_name}"
+            niwa_home = Path("/home/niwa") / ".niwa"
             (niwa_home / "bin").mkdir(parents=True, exist_ok=True)
             niwa_hosting_dest = niwa_home / "bin" / "hosting-server.py"
             shutil.copy(str(dest), str(niwa_hosting_dest))
@@ -2571,7 +2560,7 @@ def install_hosting_server(cfg: WizardConfig) -> None:
             # From here on the unit points at the niwa-readable copy.
             dest = niwa_hosting_dest
 
-            shared_dir = Path("/opt") / cfg.instance_name
+            shared_dir = Path("/opt") / "niwa"
             hosting_projects_dir = shared_dir / "data" / "projects"
             hosting_projects_dir.mkdir(parents=True, exist_ok=True)
             # Defense in depth against sub-bug 18a
@@ -2596,7 +2585,7 @@ def install_hosting_server(cfg: WizardConfig) -> None:
             )
             unit_dir = Path("/etc/systemd/system")
             unit = f"""[Unit]
-Description=Niwa hosting server ({cfg.instance_name})
+Description=Niwa hosting server
 After=network.target
 
 [Service]
@@ -2624,7 +2613,7 @@ WantedBy=multi-user.target
             unit_dir = Path.home() / ".config" / "systemd" / "user"
             unit_dir.mkdir(parents=True, exist_ok=True)
             unit = f"""[Unit]
-Description=Niwa hosting server ({cfg.instance_name})
+Description=Niwa hosting server
 After=network.target
 
 [Service]
@@ -2888,13 +2877,12 @@ def cmd_status(args) -> None:
         err("No niwa install found. Use --dir to specify the location, or run 'niwa install'.")
         sys.exit(1)
     env = _read_env_file(install_dir / "secrets" / "mcp.env")
-    instance = env.get("INSTANCE_NAME", "?")
     streaming_port = env.get("NIWA_GATEWAY_STREAMING_PORT", "?")
     sse_port = env.get("NIWA_GATEWAY_SSE_PORT", "?")
     caddy_port = env.get("NIWA_CADDY_PORT", "?")
     app_port = env.get("NIWA_APP_PORT", "?")
 
-    header(f"Niwa install: {instance}")
+    header("Niwa install: niwa")
     print(f"  Location:  {install_dir}")
     print(f"  Endpoints:")
     print(f"    Gateway streaming HTTP:  http://localhost:{streaming_port}/mcp")
@@ -2905,7 +2893,7 @@ def cmd_status(args) -> None:
     print(f"  {BOLD}Containers:{RESET}")
     try:
         out = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={instance}-",
+            ["docker", "ps", "-a", "--filter", "name=niwa-",
              "--format", "  {{.Names}}\\t{{.Status}}"],
             capture_output=True, text=True, timeout=8,
         )
@@ -2946,13 +2934,12 @@ def cmd_uninstall(args) -> None:
         sys.exit(1)
 
     env = _read_env_file(install_dir / "secrets" / "mcp.env")
-    instance = env.get("INSTANCE_NAME", "niwa")
 
-    header(f"Uninstall niwa: {instance}")
+    header("Uninstall niwa")
     print(f"  Location:        {install_dir}")
-    print(f"  Will stop:       all {instance}-* containers")
-    print(f"  Will remove:     docker images for {instance}-tasks-mcp, {instance}-notes-mcp, "
-          f"{instance}-platform-mcp, {instance}-app")
+    print("  Will stop:       all niwa-* containers")
+    print("  Will remove:     docker images for niwa-tasks-mcp, niwa-notes-mcp, "
+          "niwa-platform-mcp, niwa-app")
     print(f"  Will delete:     {install_dir} (including DB and logs)")
     print()
     if not args.yes:
@@ -2973,14 +2960,14 @@ def cmd_uninstall(args) -> None:
 
     # Remove images (both versioned and legacy :latest)
     images = [
-        f"{instance}-tasks-mcp:{NIWA_VERSION}",
-        f"{instance}-notes-mcp:{NIWA_VERSION}",
-        f"{instance}-platform-mcp:{NIWA_VERSION}",
-        f"{instance}-app:{NIWA_VERSION}",
-        f"{instance}-tasks-mcp:latest",
-        f"{instance}-notes-mcp:latest",
-        f"{instance}-platform-mcp:latest",
-        f"{instance}-app:latest",
+        f"niwa-tasks-mcp:{NIWA_VERSION}",
+        f"niwa-notes-mcp:{NIWA_VERSION}",
+        f"niwa-platform-mcp:{NIWA_VERSION}",
+        f"niwa-app:{NIWA_VERSION}",
+        "niwa-tasks-mcp:latest",
+        "niwa-notes-mcp:latest",
+        "niwa-platform-mcp:latest",
+        "niwa-app:latest",
     ]
     for img in images:
         result = subprocess.run(["docker", "rmi", img], capture_output=True, text=True)
@@ -3011,7 +2998,7 @@ def cmd_uninstall(args) -> None:
 
     # Stop task executor (launchd / systemd)
     if env.get("NIWA_EXECUTOR_ENABLED") == "1":
-        _uninstall_task_executor(install_dir, instance)
+        _uninstall_task_executor(install_dir)
 
     # Delete install dir
     if args.keep_data:
@@ -3046,8 +3033,6 @@ def cmd_logs(args) -> None:
     if not install_dir:
         err("No niwa install found.")
         sys.exit(1)
-    env = _read_env_file(install_dir / "secrets" / "mcp.env")
-    instance = env.get("INSTANCE_NAME", "niwa")
     role = args.service or "mcp-gateway"
     # Special: 'executor' is the host-side launchd/systemd worker, not a container
     if role == "executor":
@@ -3062,7 +3047,7 @@ def cmd_logs(args) -> None:
             pass
         return
     # Otherwise: docker container logs
-    container = f"{instance}-{role}"
+    container = f"niwa-{role}"
     info(f"Showing last {args.tail} lines of {container} (Ctrl+C to exit)...")
     try:
         subprocess.run(["docker", "logs", "--tail", str(args.tail), "-f", container])
@@ -3576,11 +3561,11 @@ def build_quick_config(args) -> WizardConfig:
     cfg.detected["docker_socket"] = sock
 
     # --- Naming & location ---
-    cfg.instance_name = (getattr(args, "instance", None) or "niwa")
+    # PR-A3: single-instance. Install dir is ``--dir`` or ``~/.niwa``.
     if getattr(args, "dir", None):
         cfg.niwa_home = Path(args.dir).expanduser().resolve()
     else:
-        cfg.niwa_home = Path.home() / f".{cfg.instance_name}"
+        cfg.niwa_home = Path.home() / ".niwa"
 
     # --- DB ---
     cfg.db_mode = "fresh"
@@ -3704,7 +3689,6 @@ def print_quick_plan(cfg: WizardConfig) -> None:
     """Print the resolved quick-install plan so the operator can eyeball it."""
     header("Niwa install --quick plan")
     print(f"  Mode:              {cfg.quick_mode}")
-    print(f"  Instance name:     {cfg.instance_name}")
     print(f"  Install location:  {cfg.niwa_home}")
     print(f"  Database:          fresh at {cfg.db_path}")
     print(f"  Workspace:         {cfg.fs_workspace}")
@@ -4086,10 +4070,8 @@ def main():
             "so the admin's login and wired integrations don't break."
         ),
     )
-    p_install.add_argument("--instance",
-                           help="Instance name (default: niwa). Quick install only.")
     p_install.add_argument("--dir",
-                           help="Install directory (default: ~/.<instance>). Quick install only.")
+                           help="Install directory (default: ~/.niwa). Quick install only.")
     p_install.add_argument("--force", action="store_true",
                            help="Overwrite an existing install even when the --mode differs "
                                 "from the recorded one. DB data is preserved.")

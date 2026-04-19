@@ -257,12 +257,11 @@ def test_systemctl_restart_failure_sets_needs_restart(tmp_path):
     assert any("systemctl" in w.lower() for w in manifest["warnings"])
 
 
-def test_systemctl_restart_uses_instance_prefixed_service_name(tmp_path):
-    """Regression: el engine pintaba ``niwa-executor.service`` cuando
-    el install dir era ``.niwa`` (instance=='niwa'), pero setup.py
-    siempre instala el unit como ``niwa-{instance}-executor.service``.
-    El restart automático fallaba y el operador tenía que adivinar
-    el nombre correcto."""
+def test_systemctl_restart_uses_fixed_service_name(tmp_path):
+    """PR-A3: Niwa is single-instance. The executor unit installed by
+    ``setup.py`` is always ``niwa-executor.service`` — no more
+    ``{instance}`` suffix derived from the install dir name.
+    """
     inst = _install(tmp_path)  # install_dir = tmp_path / ".niwa"
     r = _clean_repo_runner()
     r.on(["docker", "compose"], returncode=0)
@@ -278,7 +277,7 @@ def test_systemctl_restart_uses_instance_prefixed_service_name(tmp_path):
                      if c[:2] == ["systemctl", "restart"]]
     assert restart_calls, "engine should have called systemctl restart"
     unit = restart_calls[0][2]
-    assert unit == "niwa-niwa-executor.service", unit
+    assert unit == "niwa-executor.service", unit
 
 
 # ── Real backup file is created ──────────────────────────────────────
