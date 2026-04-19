@@ -37,6 +37,7 @@ import type {
   CapabilityProfileResponse,
   CapabilityProfilePatch,
   Deployment,
+  Readiness,
 } from '../types';
 
 // ── Tasks ──
@@ -219,6 +220,16 @@ export function useServices() {
   return useQuery({
     queryKey: ['services'],
     queryFn: () => api<Service[]>('services'),
+  });
+}
+
+// ── Readiness (PR-A5) ──
+export function useReadiness() {
+  return useQuery({
+    queryKey: ['readiness'],
+    queryFn: () => api<Readiness>('readiness'),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
   });
 }
 
