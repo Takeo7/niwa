@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   attachments TEXT,
   parent_task_id TEXT,  -- PR-55: follow-up tasks link back to their parent (waiting_input reply, etc.)
   retry_from_run_id TEXT,  -- PR-57: marker; executor reads it to create a retry-linked backend_run
+  resume_from_run_id TEXT,  -- FIX-20260420: marker; set by POST /api/tasks/:id/respond so the executor creates a resume-linked run.
+  pending_followup_message TEXT,  -- FIX-20260420: user's message to Claude when resuming from waiting_input. Consumed by the adapter, then cleared.
   decompose INTEGER NOT NULL DEFAULT 0,  -- PR-B4a: ask planner tier to split this task before executing
   -- v0.2 execution columns (migration 007)
   requested_backend_profile_id TEXT REFERENCES backend_profiles(id) ON DELETE SET NULL,
@@ -199,6 +201,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_retry_from_run_id
   ON tasks(retry_from_run_id) WHERE retry_from_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_resume_from_run_id
+  ON tasks(resume_from_run_id) WHERE resume_from_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_scheduled ON tasks(scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, status);
