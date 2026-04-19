@@ -11,6 +11,7 @@ import {
   Modal,
   TextInput,
   Textarea,
+  Select,
   Loader,
   Center,
 } from '@mantine/core';
@@ -29,8 +30,24 @@ import {
   useDeleteRoutine,
   useToggleRoutine,
   useRunRoutine,
+  useProjects,
 } from '../../../shared/api/queries';
-import type { Routine } from '../../../shared/types';
+import type {
+  Routine,
+  RoutineAction,
+  ImprovementType,
+} from '../../../shared/types';
+
+const ACTION_OPTIONS: { value: RoutineAction; label: string }[] = [
+  { value: 'script', label: 'Script' },
+  { value: 'improve', label: 'Improve (plantilla)' },
+];
+
+const IMPROVEMENT_TYPE_OPTIONS: { value: ImprovementType; label: string }[] = [
+  { value: 'functional', label: 'functional' },
+  { value: 'stability', label: 'stability' },
+  { value: 'security', label: 'security' },
+];
 
 function cronToHuman(cron: string): string {
   if (!cron) return '-';
@@ -46,6 +63,7 @@ function cronToHuman(cron: string): string {
 
 export function RoutinesPanel() {
   const { data: routines, isLoading } = useRoutines();
+  const { data: projects } = useProjects();
   const createRoutine = useCreateRoutine();
   const updateRoutine = useUpdateRoutine();
   const deleteRoutine = useDeleteRoutine();
@@ -58,6 +76,9 @@ export function RoutinesPanel() {
   const [schedule, setSchedule] = useState('');
   const [description, setDescription] = useState('');
   const [command, setCommand] = useState('');
+  const [action, setAction] = useState<RoutineAction>('script');
+  const [improvementType, setImprovementType] = useState<ImprovementType | ''>('');
+  const [projectId, setProjectId] = useState<string>('');
 
   const openNew = () => {
     setEditing(null);
@@ -65,6 +86,9 @@ export function RoutinesPanel() {
     setSchedule('');
     setDescription('');
     setCommand('');
+    setAction('script');
+    setImprovementType('');
+    setProjectId('');
     setEditorOpen(true);
   };
 
@@ -73,31 +97,48 @@ export function RoutinesPanel() {
     setName(r.name);
     setSchedule(r.schedule);
     setDescription(r.description || '');
+    const routineAction: RoutineAction =
+      (r.action as RoutineAction | undefined) ?? 'script';
+    setAction(routineAction);
+    setImprovementType((r.improvement_type ?? '') as ImprovementType | '');
+    const cfg = (r.action_config ?? {}) as Record<string, unknown>;
+    setProjectId(typeof cfg.project_id === 'string' ? cfg.project_id : '');
     setCommand(
-      r.action_config
-        ? (r.action_config as Record<string, string>).script || (r.action_config as Record<string, string>).command || JSON.stringify(r.action_config)
+      routineAction === 'script'
+        ? ((cfg.script as string) || (cfg.command as string) || (typeof cfg === 'object' ? JSON.stringify(cfg) : ''))
         : '',
     );
     setEditorOpen(true);
   };
 
   const handleSave = async () => {
-    const data = {
+    const baseData: Record<string, unknown> = {
       name,
       schedule,
       description,
-      action_type: 'script',
-      action_config: { script: command },
+      action,
     };
+    if (action === 'improve') {
+      baseData.improvement_type = improvementType;
+      baseData.action_config = { project_id: projectId };
+    } else {
+      baseData.action_config = { script: command };
+      baseData.improvement_type = null;
+    }
     if (editing) {
-      await updateRoutine.mutateAsync({ id: editing.id, ...data });
+      await updateRoutine.mutateAsync({ id: editing.id, ...baseData });
       notifications.show({ title: 'Rutina actualizada', message: name, color: 'green' });
     } else {
-      await createRoutine.mutateAsync(data);
+      await createRoutine.mutateAsync(baseData);
       notifications.show({ title: 'Rutina creada', message: name, color: 'green' });
     }
     setEditorOpen(false);
   };
+
+  const saveDisabled =
+    !name.trim() ||
+    !schedule.trim() ||
+    (action === 'improve' && (!improvementType || !projectId));
 
   const handleDelete = async (r: Routine) => {
     await deleteRoutine.mutateAsync(r.id);
@@ -146,6 +187,11 @@ export function RoutinesPanel() {
                       <Badge size="xs" color={enabled ? 'green' : 'gray'}>
                         {enabled ? 'Activa' : 'Inactiva'}
                       </Badge>
+                      {r.improvement_type ? (
+                        <Badge size="xs" color="violet" variant="light">
+                          improve:{r.improvement_type}
+                        </Badge>
+                      ) : null}
                     </Group>
                     <Group gap="md">
                       <Text size="xs" c="dimmed">
@@ -231,14 +277,54 @@ export function RoutinesPanel() {
             minRows={2}
             placeholder="Descripción opcional"
           />
-          <Textarea
-            label="Comando / Script"
-            value={command}
-            onChange={(e) => setCommand(e.currentTarget.value)}
-            minRows={3}
-            placeholder="echo 'hola mundo'"
-            styles={{ input: { fontFamily: 'monospace' } }}
+          <Select
+            label="Tipo de acción"
+            data={ACTION_OPTIONS}
+            value={action}
+            onChange={(value) => {
+              const next = (value as RoutineAction | null) ?? 'script';
+              setAction(next);
+              if (next !== 'improve') {
+                setImprovementType('');
+                setProjectId('');
+              }
+            }}
+            allowDeselect={false}
           />
+          {action === 'improve' ? (
+            <>
+              <Select
+                label="Tipo de mejora"
+                data={IMPROVEMENT_TYPE_OPTIONS}
+                value={improvementType || null}
+                onChange={(value) => setImprovementType((value as ImprovementType | null) ?? '')}
+                placeholder="Elige una plantilla"
+                required
+              />
+              <Select
+                label="Proyecto"
+                data={(projects ?? []).map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                }))}
+                value={projectId || null}
+                onChange={(value) => setProjectId(value ?? '')}
+                placeholder="Elige el proyecto"
+                searchable
+                required
+                nothingFoundMessage="Sin proyectos"
+              />
+            </>
+          ) : (
+            <Textarea
+              label="Comando / Script"
+              value={command}
+              onChange={(e) => setCommand(e.currentTarget.value)}
+              minRows={3}
+              placeholder="echo 'hola mundo'"
+              styles={{ input: { fontFamily: 'monospace' } }}
+            />
+          )}
           <Group justify="flex-end" mt="sm">
             <Button variant="subtle" onClick={() => setEditorOpen(false)}>
               Cancelar
@@ -246,7 +332,7 @@ export function RoutinesPanel() {
             <Button
               onClick={handleSave}
               loading={createRoutine.isPending || updateRoutine.isPending}
-              disabled={!name.trim() || !schedule.trim()}
+              disabled={saveDisabled}
             >
               {editing ? 'Guardar' : 'Crear'}
             </Button>

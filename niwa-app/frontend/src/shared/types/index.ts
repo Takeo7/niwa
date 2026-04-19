@@ -321,13 +321,18 @@ export interface HistoryResponse {
 }
 
 // ── Routine ──
+export type RoutineAction = 'create_task' | 'script' | 'webhook' | 'improve';
+export type ImprovementType = 'functional' | 'stability' | 'security';
+
 export interface Routine {
   id: string;
   name: string;
   description?: string;
   schedule: string;
+  action?: RoutineAction;
   action_type?: string;
   action_config?: Record<string, unknown>;
+  improvement_type?: ImprovementType | null;
   enabled: boolean | number;
   last_run?: string | null;
   next_run?: string | null;
