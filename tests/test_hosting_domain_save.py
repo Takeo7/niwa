@@ -268,6 +268,27 @@ def test_save_domain_requires_non_empty(server, monkeypatch):
     assert out["error"] == "domain_required"
 
 
+def test_save_domain_rejects_caddyfile_injection_even_with_force(server, monkeypatch):
+    """``force=true`` must not let an admin inject Caddy directives via a
+    malformed domain string. The FQDN gate runs BEFORE validation, so
+    the DNS probes (which return True on unresolvable hosts) can never
+    be reached with a string containing whitespace / ``{`` / ``}`` /
+    newlines."""
+    h = server["hosting"]
+    _patch_probes(h, monkeypatch)
+    evil = "evil.com\n}\n:80 {\n    root * /etc\n    file_server\n}"
+    status, out = _request(
+        server["base"], "/api/hosting/domain",
+        method="POST", body={"domain": evil, "force": True},
+    )
+    assert status == 400, out
+    assert out["ok"] is False
+    assert out["error"] == "private_or_invalid_host"
+    # Nothing persisted, Caddyfile never touched.
+    assert _get_setting(server["app"], "svc.hosting.domain") in (None, "")
+    assert server["reload_calls"]["n"] == 0
+
+
 # ──────────────────────── Caddyfile / env fallback ──────────────────────
 
 def test_generate_caddyfile_uses_db_domain_over_env(server, monkeypatch):

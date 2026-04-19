@@ -4,10 +4,24 @@ Each deployed project gets served at its slug subdomain.
 """
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
+
+# Syntactic FQDN gate used by ``save_domain``. Enforced *before* any
+# validation / persistence so a stored domain can never contain
+# whitespace, newlines or Caddy metacharacters that would let a
+# ``force=true`` save inject directives into the generated Caddyfile.
+# Rules: 1–63-char labels starting+ending alphanumeric (hyphens
+# allowed in the middle), separated by dots, total ≤253 chars, TLD is
+# 2–63 letters (rejects bare IPs). Lowercased by the caller.
+_FQDN_RE = re.compile(
+    r"^(?=.{1,253}$)"
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}$"
+)
 
 PROJECTS_DIR = Path(os.environ.get("NIWA_PROJECTS_DIR", "/opt/niwatest/data/projects"))
 HOSTING_PORT = int(os.environ.get("NIWA_HOSTING_PORT", "8880"))
@@ -444,6 +458,17 @@ def save_domain(domain: str, force: bool = False) -> dict:
     clean = (domain or "").strip().lower()
     if not clean:
         return {"ok": False, "error": "domain_required", "validation": None}
+
+    # Hard gate BEFORE anything else: the value ends up verbatim in the
+    # generated Caddyfile (``f"*.{domain}:..."``), so anything other
+    # than a strict FQDN could inject arbitrary Caddy directives when
+    # the admin bypasses validation with ``force=true``.
+    if not _FQDN_RE.match(clean):
+        return {
+            "ok": False,
+            "error": "private_or_invalid_host",
+            "validation": None,
+        }
 
     validation = _validate_domain(clean)
     if validation["private"]:
