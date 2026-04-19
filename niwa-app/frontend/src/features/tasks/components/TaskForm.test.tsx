@@ -107,4 +107,29 @@ describe('TaskForm', () => {
     ).not.toThrow();
     expect(screen.getByRole('button', { name: /crear tarea/i })).toBeTruthy();
   });
+
+  // PR-B4b: "Desgranar con planner" checkbox only on create.
+  it('shows the planner decompose checkbox in create mode', () => {
+    render(wrap(<TaskForm opened onClose={() => {}} />));
+    expect(screen.getByLabelText(/desgranar con planner/i)).toBeTruthy();
+  });
+
+  it('hides the planner decompose checkbox in edit mode', () => {
+    const task: Task = {
+      id: 't-456',
+      title: 'Existing',
+      description: '',
+      status: 'pendiente',
+      priority: 'media',
+      area: 'proyecto',
+      project_id: null,
+      scheduled_for: null,
+      due_at: null,
+      urgent: 0,
+      created_at: '2025-01-01',
+      updated_at: '2025-01-01',
+    } as Task;
+    render(wrap(<TaskForm opened onClose={() => {}} task={task} />));
+    expect(screen.queryByLabelText(/desgranar con planner/i)).toBeNull();
+  });
 });

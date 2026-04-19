@@ -28,6 +28,14 @@ export interface Task {
   // stripping. Rendered as markdown in TaskDetailsTab (PR-37).
   executor_output?: string;
   parent_task_id?: string | null;
+  // PR-B4a: opt-in to the planner tier. Stored as 0/1 in SQLite.
+  // Set by TaskForm's "Desgranar con planner" checkbox.
+  decompose?: number;
+  // PR-B4b: populated by list and detail endpoints via correlated
+  // subquery; lets the UI render a ``↳ N/M`` badge on parent tasks
+  // without a second round-trip.
+  child_count_total?: number;
+  child_count_done?: number;
   // PR-39: latest run summary so the UI can show an error banner
   // without a second fetch. Populated by GET /api/tasks/:id only.
   last_run?: TaskLastRun | null;

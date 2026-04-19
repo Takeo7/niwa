@@ -9,7 +9,7 @@ from pathlib import Path
 import hosting
 from tasks_helpers import (
     load_delegations_index, enrich_tasks_with_agent_info,
-    record_task_event,
+    record_task_event, close_parent_if_children_done,
 )
 from state_machines import assert_task_transition
 
@@ -35,9 +35,18 @@ def get_task(task_id):
         # PR-52: JOIN projects so the detail endpoint also carries
         # project_slug/project_name. ``SELECT *`` isn't enough here
         # because we need columns from a second table.
+        # PR-B4b: correlated subqueries expose planner-tier child
+        # counts so the UI can render a ``↳ N/M`` badge without a
+        # second round-trip. Both counters default to 0 when the
+        # task has no children — the UI hides the badge on that.
         row = conn.execute(
             "SELECT t.*, p.slug AS project_slug, p.name AS project_name, "
-            "       p.url AS deployment_url "
+            "       p.url AS deployment_url, "
+            "       (SELECT COUNT(*) FROM tasks c "
+            "          WHERE c.parent_task_id = t.id) AS child_count_total, "
+            "       (SELECT COUNT(*) FROM tasks c "
+            "          WHERE c.parent_task_id = t.id "
+            "            AND c.status = 'hecha') AS child_count_done "
             "FROM tasks t LEFT JOIN projects p ON p.id = t.project_id "
             "WHERE t.id=?",
             (task_id,),
@@ -115,7 +124,20 @@ def get_task(task_id):
 def fetch_tasks(area=None, status=None, today_only=False, include_done=False, project_id=None):
     # PR-52: expose project_slug so the UI can link from task → project
     # without a second round-trip. project_name was already exposed.
-    query = "SELECT t.*, p.name as project_name, p.slug as project_slug FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.source != 'chat'"
+    # PR-B4b: correlated subqueries for planner-tier child counters.
+    # With ``LIMIT 500`` and the usual tasks table size the O(N) cost
+    # is immaterial; if this ever shows up in profiling, swap for a
+    # ``LEFT JOIN (SELECT parent_task_id, ...)`` aggregate.
+    query = (
+        "SELECT t.*, p.name as project_name, p.slug as project_slug, "
+        "       (SELECT COUNT(*) FROM tasks c "
+        "          WHERE c.parent_task_id = t.id) AS child_count_total, "
+        "       (SELECT COUNT(*) FROM tasks c "
+        "          WHERE c.parent_task_id = t.id "
+        "            AND c.status = 'hecha') AS child_count_done "
+        "FROM tasks t LEFT JOIN projects p ON p.id=t.project_id "
+        "WHERE t.source != 'chat'"
+    )
     params = []
     if project_id:
         query += ' AND t.project_id=?'
@@ -151,9 +173,13 @@ def create_task(payload):
     status = (payload.get('status') or 'pendiente').strip() or 'pendiente'
     priority = (payload.get('priority') or 'media').strip() or 'media'
     title = (payload.get('title') or '').strip() or 'Nueva tarea'
+    # PR-B4b: accept ``decompose`` so the TaskForm checkbox opts the
+    # task into the planner tier at creation time. Anything truthy
+    # coerces to 1; absent / falsy keeps the schema default of 0.
+    decompose = 1 if payload.get('decompose') else 0
     with _db_conn() as conn:
         conn.execute(
-            'INSERT INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,assigned_to_yume,assigned_to_claude,parent_task_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO tasks (id,title,description,area,project_id,status,priority,urgent,scheduled_for,due_at,source,notes,assigned_to_yume,assigned_to_claude,parent_task_id,decompose,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (
                 task_id,
                 title,
@@ -170,6 +196,7 @@ def create_task(payload):
                 1 if payload.get('assigned_to_yume') else 0,
                 1 if payload.get('assigned_to_claude') else 0,
                 payload.get('parent_task_id') or None,  # PR-55
+                decompose,
                 ts,
                 ts,
             ),
@@ -212,9 +239,16 @@ def update_task(task_id, payload):
         'agent_name': active_agent.get('agent_name') or '',
         'agent_status': active_agent.get('status') or '',
     }
+    parent_id = current_task.get('parent_task_id')
     with _db_conn() as conn:
         conn.execute(f'UPDATE tasks SET {", ".join(sets)} WHERE id=?', params)
         record_task_event(conn, task_id, 'completed' if status_value == 'hecha' else 'updated', event_payload)
+        # PR-B4b: when a child finishes, close the parent if this was
+        # the last open sibling. Runs inside the same transaction so
+        # the child's hecha row and the parent's closure commit
+        # atomically; callers always see a consistent pair.
+        if status_value == 'hecha' and parent_id:
+            close_parent_if_children_done(conn, parent_id, _now_iso())
         conn.commit()
     # PR-C1: auto-deploy once the transition is durable. The hook runs
     # OUTSIDE the write transaction so deploy's own DB work (Caddy
