@@ -277,6 +277,79 @@ def _exec_webhook(config: dict) -> str:
         return f"[error: {e}]"
 
 
+# ────────────────────────── OAuth token refresher ──────────────────────────
+
+# Default margin: refresh any token that expires in less than 10 min.
+# task-executor also does a last-minute refresh with a 5-min margin
+# (bin/task-executor.py:_get_openai_oauth_token). The scheduler runs
+# proactively so running tasks don't hit a stale window.
+_OAUTH_REFRESH_MARGIN_SECONDS = 600
+
+
+def _refresh_expiring_oauth_tokens(
+    db_conn_fn: Callable,
+    margin_seconds: int = _OAUTH_REFRESH_MARGIN_SECONDS,
+) -> None:
+    """Refresh oauth_tokens rows whose expires_at is within the margin.
+
+    Failures are logged and swallowed: task-executor's lazy refresh is
+    the safety net and the next tick will retry anyway.
+    """
+    import oauth
+
+    try:
+        with db_conn_fn() as conn:
+            rows = conn.execute(
+                "SELECT provider, refresh_token, expires_at "
+                "FROM oauth_tokens "
+                "WHERE refresh_token IS NOT NULL AND refresh_token != ''"
+            ).fetchall()
+    except Exception as e:
+        log.warning("OAuth refresher: cannot read oauth_tokens: %s", e)
+        return
+
+    now = time.time()
+    for row in rows:
+        provider = row["provider"]
+        refresh_token = row["refresh_token"]
+        expires_at = row["expires_at"] or 0
+        if expires_at - now >= margin_seconds:
+            continue
+        try:
+            result = oauth.refresh_access_token(provider, refresh_token)
+        except Exception as e:
+            log.warning("OAuth refresher: refresh raised for %s: %s", provider, e)
+            continue
+        if not isinstance(result, dict) or result.get("error"):
+            log.warning(
+                "OAuth refresher: %s refresh failed: %s",
+                provider,
+                (result or {}).get("error") if isinstance(result, dict) else "bad response",
+            )
+            continue
+        new_access = result.get("access_token") or ""
+        if not new_access:
+            log.warning("OAuth refresher: %s returned empty access_token", provider)
+            continue
+        new_refresh = result.get("refresh_token") or refresh_token
+        new_expires = result.get("expires_at") or 0
+        try:
+            with db_conn_fn() as conn:
+                conn.execute(
+                    "UPDATE oauth_tokens SET access_token=?, refresh_token=?, "
+                    "expires_at=?, updated_at=? WHERE provider=?",
+                    (new_access, new_refresh, new_expires, _now_iso(), provider),
+                )
+                conn.commit()
+            log.info(
+                "OAuth refresher: refreshed %s (expires_at=%s)",
+                provider,
+                new_expires,
+            )
+        except Exception as e:
+            log.warning("OAuth refresher: DB update failed for %s: %s", provider, e)
+
+
 # ────────────────────────── scheduler thread ──────────────────────────
 
 class SchedulerThread(threading.Thread):
@@ -316,6 +389,13 @@ class SchedulerThread(threading.Thread):
             rows = conn.execute(
                 "SELECT * FROM routines WHERE enabled = 1"
             ).fetchall()
+
+        # Opportunistic OAuth token refresh (PR-A7). Kept out of the
+        # routines loop so a bug here cannot delay or skip routines.
+        try:
+            _refresh_expiring_oauth_tokens(self.db_conn_fn)
+        except Exception as e:
+            log.exception("OAuth refresher raised: %s", e)
 
         for row in rows:
             routine = dict(row)
