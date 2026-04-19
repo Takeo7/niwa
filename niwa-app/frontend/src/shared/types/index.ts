@@ -567,3 +567,25 @@ export interface CapabilityProfilePatch {
   secrets_scope_json?: string;
   resource_budget_json?: string;
 }
+
+export interface ReadinessBackend {
+  slug: string;
+  display_name: string;
+  enabled: boolean;
+  has_credential: boolean;
+  auth_mode: string;
+  model_present: boolean;
+  default_model: string | null;
+  reachable: boolean;
+}
+
+export interface Readiness {
+  docker_ok: boolean;
+  db_ok: boolean;
+  admin_ok: boolean;
+  admin_detail: string;
+  backends: ReadinessBackend[];
+  hosting_ok: boolean;
+  hosting_detail: string;
+  checked_at: string;
+}

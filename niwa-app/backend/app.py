@@ -1419,6 +1419,7 @@ def fetch_security():
 
 
 fetch_health = health_service.fetch_health
+fetch_readiness = health_service.fetch_readiness
 
 
 def fetch_logs(source='all', limit=200, **_kw):
@@ -3778,6 +3779,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_collect_version_info())
         if path == '/api/health/full':
             return self._json(fetch_health())
+        if path == '/api/readiness':
+            return self._json(fetch_readiness())
         if path == '/api/stats':
             return self._json(fetch_stats())
         if path == '/api/activity':
