@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-03)
+## Layout actual (tras PR-V1-04)
 
 ```
 v1/
@@ -134,9 +134,31 @@ Schemas en `app/schemas/project.py`. `slug` valida `^[a-z0-9-]+$`,
 en rango 1024-65535 si se proporciona. Renombrar slug = borrar y
 recrear.
 
+### `tasks`
+
+| Method | Path                                  | Return                                                                                 |
+|--------|---------------------------------------|----------------------------------------------------------------------------------------|
+| GET    | `/api/projects/{slug}/tasks`          | `200` + `list[TaskRead]`, orden `created_at` ASC con tie-breaker por `id`; `404` si el slug no existe |
+| POST   | `/api/projects/{slug}/tasks`          | `201` + `TaskRead` en `status="queued"`; `404` si el slug no existe; `422` si payload inválido |
+| GET    | `/api/tasks/{task_id}`                | `200` + `TaskRead`; `404` si no existe                                                  |
+| DELETE | `/api/tasks/{task_id}`                | `204` sin cuerpo; `404` si no existe; `409` si `status in (running, waiting_input)`     |
+
+Schemas en `app/schemas/task.py`. `TaskCreate` acepta solo `title`
+(1-200 chars) y `description` opcional (hasta 10 000 chars); todos los
+demás campos (`status`, `branch_name`, `pr_url`, `pending_question`,
+timestamps) los gestiona el servicio o el executor en PRs futuros. La
+creación transita de `null → queued` en un solo commit que escribe
+dos `task_events`: `created` con el título y `status_changed` con
+`payload_json='{"from":null,"to":"queued"}'`. `DELETE` depende de las
+FKs CASCADE declaradas en PR-V1-02 para limpiar `task_events`, `runs`
+y `run_events`.
+
+`GET /api/tasks/{id}` es deliberadamente global (no scoped a
+proyecto) — SPEC §7 muestra la URL con slug pero la API solo necesita
+el id, la UI se lleva el slug como contexto.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-04: CRUD tareas + `POST /api/tasks`.
-- PR-V1-05: executor daemon en modo echo.
+- PR-V1-05: executor daemon en modo echo (lee `queued`, marca `done`).
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
