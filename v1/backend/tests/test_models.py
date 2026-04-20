@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -269,3 +269,41 @@ def test_alembic_upgrade_records_expected_revision(tmp_path: Path) -> None:
             "SELECT version_num FROM alembic_version"
         ).fetchall()
     assert rows == [(INITIAL_REVISION,)], rows
+
+
+# Each entry is (table_name, index_name, indexed_column).
+EXPECTED_FK_INDEXES = [
+    ("tasks", "ix_tasks_project_id", "project_id"),
+    ("tasks", "ix_tasks_parent_task_id", "parent_task_id"),
+    ("runs", "ix_runs_task_id", "task_id"),
+    ("task_events", "ix_task_events_task_id", "task_id"),
+    ("run_events", "ix_run_events_run_id", "run_id"),
+]
+
+
+def test_alembic_upgrade_creates_fk_indexes(tmp_path: Path) -> None:
+    """Every FK column listed in ``EXPECTED_FK_INDEXES`` must be indexed.
+
+    Missing any of these indexes would make cascade deletes and child lookups
+    O(n) on every parent row, so we assert directly against the migration
+    output via ``sa.inspect``.
+    """
+
+    db_path = tmp_path / "alembic-indexes.sqlite3"
+    result = _run_alembic_upgrade(tmp_path, db_path)
+    assert result.returncode == 0, result.stderr
+
+    engine = create_engine(f"sqlite:///{db_path}", future=True)
+    try:
+        insp = inspect(engine)
+        for table, index_name, column in EXPECTED_FK_INDEXES:
+            indexes = {ix["name"]: ix for ix in insp.get_indexes(table)}
+            assert index_name in indexes, (
+                f"expected index {index_name} on {table}; got {sorted(indexes)}"
+            )
+            assert indexes[index_name]["column_names"] == [column], (
+                f"index {index_name} covers {indexes[index_name]['column_names']}, "
+                f"expected [{column!r}]"
+            )
+    finally:
+        engine.dispose()
