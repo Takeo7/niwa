@@ -5,15 +5,24 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-03
+pr_merged: PR-V1-04
 date: 2026-04-20
 week: 1
-next_pr: PR-V1-04
+next_pr: PR-V1-05
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-04 (Tasks CRUD API) mergeado en `v1` vía
+  squash (#106). Backend `pytest -q` → 34 passed (+12 nuevos). 4
+  endpoints REST (`GET/POST /api/projects/{slug}/tasks`,
+  `GET/DELETE /api/tasks/{id}`); `POST` crea con `status=queued` y
+  escribe 2 `task_events` (`created`, `status_changed null→queued`)
+  en la misma transacción; `DELETE` bloquea estados activos con
+  `409` y cascadea `task_events`. Codex: sin blockers/majors; nota
+  menor sobre nullability de `description` (DB es NOT NULL, schema
+  acepta None → se normaliza a `""`). Aceptado.
 - **2026-04-20** — PR-V1-03 (Projects CRUD API) mergeado en `v1` vía
   squash (#105). Backend `pytest -q` → 22 passed (+11 nuevos). 5
   endpoints REST bajo `/api/projects`, schemas Pydantic v2 con
