@@ -181,6 +181,29 @@ class ClaudeCodeAdapter:
             self._outcome = "cli_ok" if self._exit_code == 0 else "cli_nonzero_exit"
         return self._exit_code
 
+    def close(self) -> None:
+        """Idempotent cleanup — kill the subprocess and join the stderr thread.
+
+        Safe to call multiple times and safe to call even if ``iter_events``
+        raised before spawning. Callers should route this through a
+        ``finally`` block so an exception mid-stream never leaks a ``Popen``.
+        After ``close()`` returns, the adapter is not reusable.
+        """
+
+        if self._proc is not None:
+            self._terminate()
+            try:
+                self._proc.wait(timeout=_SIGTERM_GRACE)
+            except subprocess.TimeoutExpired:
+                # _terminate already escalated SIGTERM→SIGKILL; ignore.
+                pass
+            except OSError:
+                pass
+            if self._exit_code is None:
+                self._exit_code = self._proc.returncode
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=1.0)
+
     def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
         if proc.stderr is None:
             return

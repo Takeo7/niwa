@@ -114,22 +114,29 @@ def run_adapter(session: Session, task: Task) -> Run:
     )
 
     try:
-        for event in adapter.iter_events():
-            _write_event(session, run, event)
-        adapter.wait()
-        outcome = adapter.outcome or "cli_ok"
-        exit_code = adapter.exit_code
-    except Exception as exc:  # noqa: BLE001 — must always settle the run
-        logger.exception("adapter crashed for task_id=%s", task.id)
-        outcome = "adapter_exception"
-        exit_code = None
-        session.add(
-            RunEvent(
-                run_id=run.id,
-                event_type="error",
-                payload_json=json.dumps({"reason": str(exc)[:500]}),
+        try:
+            for event in adapter.iter_events():
+                _write_event(session, run, event)
+            adapter.wait()
+            outcome = adapter.outcome or "cli_ok"
+            exit_code = adapter.exit_code
+        except Exception as exc:  # noqa: BLE001 — must always settle the run
+            logger.exception("adapter crashed for task_id=%s", task.id)
+            outcome = "adapter_exception"
+            exit_code = None
+            session.add(
+                RunEvent(
+                    run_id=run.id,
+                    event_type="error",
+                    payload_json=json.dumps({"reason": str(exc)[:500]}),
+                )
             )
-        )
+    finally:
+        # Guarantee the subprocess is reaped even if ``iter_events`` or
+        # ``_write_event`` raised before ``adapter.wait()`` ran — otherwise
+        # the ``Popen`` outlives the run and accumulates as a zombie in a
+        # long-running daemon.
+        adapter.close()
 
     _finalize(session, task, run, outcome=outcome, exit_code=exit_code)
     session.refresh(run)
