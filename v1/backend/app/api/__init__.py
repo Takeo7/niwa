@@ -1,0 +1,16 @@
+"""HTTP routers for the Niwa v1 API.
+
+``api_router`` is the parent router registered under ``/api`` in
+``app.main``; individual resource routers attach to it.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from .projects import router as projects_router
+
+api_router = APIRouter(prefix="/api")
+api_router.include_router(projects_router)
+
+__all__ = ["api_router"]
