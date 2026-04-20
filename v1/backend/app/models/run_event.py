@@ -19,7 +19,9 @@ class RunEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[int] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
