@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-04)
+## Layout actual (tras PR-V1-05)
 
 ```
 v1/
@@ -18,6 +18,7 @@ v1/
 │   │   ├── models/             # ORM models (SPEC §3)
 │   │   ├── schemas/            # Pydantic v2 wire shapes
 │   │   ├── services/           # pure functions over Session
+│   │   ├── executor/           # echo daemon (polling, core pipeline, CLI)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -157,8 +158,89 @@ y `run_events`.
 proyecto) — SPEC §7 muestra la URL con slug pero la API solo necesita
 el id, la UI se lleva el slug como contexto.
 
+### `runs` (read-only)
+
+| Method | Path                            | Return                                      |
+|--------|---------------------------------|---------------------------------------------|
+| GET    | `/api/tasks/{task_id}/runs`     | `200` + `list[RunRead]` (orden `created_at` ASC); `404` si `task_id` no existe |
+
+Schema en `app/schemas/run.py`. `RunRead` expone las columnas de la tabla
+`runs`. Los runs los crea el executor; no hay `POST /runs` (y no lo habrá:
+lanzar un run = crear/encolar una task).
+
+## Executor
+
+Un único proceso Python que drena `tasks.status='queued'`. SPEC §9
+Semana 1 lo deja en modo *echo*: no hay Claude CLI, no hay rama git, no
+hay verificación. El adapter real llega en Semana 2 y sustituye
+`run_echo` sin cambiar el resto del pipeline.
+
+### Layout
+
+```
+app/executor/
+├── __init__.py       # re-exports (claim_next_task, run_echo, process_pending, run_forever)
+├── core.py           # pipeline puro sobre Session
+├── runner.py         # loop de polling (SessionLocal + sleep)
+└── __main__.py       # `python -m app.executor` (argparse: --once / --interval / --verbose)
+```
+
+### Pipeline
+
+1. `claim_next_task(session)` → `Task | None`.
+   - `BEGIN IMMEDIATE` para grabbing del reserved lock SQLite antes del
+     `UPDATE`. Sin `FOR UPDATE` (SQLite no lo soporta).
+   - `UPDATE tasks SET status='running' WHERE id=? AND status='queued'`.
+     Si afecta 0 filas, otro executor ganó → devuelve `None`.
+   - Escribe `task_event` `status_changed` `{"from":"queued","to":"running"}`.
+   - Commit antes de devolver para liberar el lock rápido.
+2. `run_echo(session, task)` → `Run`.
+   - Crea `Run` en `running` con `model="echo"`, `artifact_root=""`,
+     `started_at=now()`.
+   - Escribe `run_event` `started`.
+   - Inmediatamente: `Run.status='completed'`, `exit_code=0`,
+     `outcome='echo'`, `finished_at=now()`.
+   - Escribe `run_event` `completed`.
+   - `Task.status='done'`, `completed_at=now()`.
+   - Escribe `task_event` `status_changed` `{"from":"running","to":"done"}`.
+   - Commit único de toda la transición.
+3. `process_pending(session)` → `int`. Loop de 1+2 hasta que
+   `claim_next_task` devuelve `None`. Una task = una transacción; si
+   `run_echo` peta, rollback de esa iteración y re-raise.
+
+### Estados de run (SPEC §3)
+
+- `queued` → aún sin tocar (default del modelo, no se usa hoy porque el
+  executor crea directamente en `running`).
+- `running` → recién creado, aún no cerrado.
+- `completed` → exit 0, trabajo cerrado. El MVP echo siempre llega aquí.
+- `failed` → cualquier condición de evidencia (Semana 3) falló.
+- `cancelled` → el usuario abortó (endpoint dedicado, futuro PR).
+
+### CLI
+
+```
+python -m app.executor --once              # drain y salir
+python -m app.executor                      # loop, interval=5s
+python -m app.executor --interval 0.5       # loop rápido para dev
+python -m app.executor --verbose            # log DEBUG
+```
+
+El daemon **no** se respawnea solo — cuando haya systemd unit (bootstrap,
+Semana 4) será `Restart=on-failure`. En este PR, cualquier excepción mata
+el proceso y el operador lo relanza.
+
+### Timestamps
+
+`started_at`, `finished_at` de `Run` y `completed_at` de `Task` se fijan
+con `datetime.now(timezone.utc)` desde `services/runs.py` — **no** con
+`func.now()`. SQLite `CURRENT_TIMESTAMP` es de granularidad 1 s y los
+tests (y el ordering futuro de runs) necesitan microsegundos.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-05: executor daemon en modo echo (lee `queued`, marca `done`).
+- PR-V1-06+: adapter Claude Code real (Semana 2) que reemplaza
+  `run_echo` y conecta el stream-json a la DB. El cuerpo del pipeline
+  (`claim_next_task` + `process_pending`) se mantiene.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
