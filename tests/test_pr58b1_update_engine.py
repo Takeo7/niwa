@@ -82,6 +82,7 @@ def _clean_repo_runner() -> FakeRunner:
 
 
 def _install(tmp_path: Path) -> dict:
+    import json as _json
     install_dir = tmp_path / ".niwa"
     (install_dir / "bin").mkdir(parents=True)
     (install_dir / "bin" / "task-executor.py").write_text("# old\n")
@@ -90,6 +91,14 @@ def _install(tmp_path: Path) -> dict:
     (install_dir / "data").mkdir()
     (install_dir / "data" / "niwa.sqlite3").write_text("")  # empty — will skip backup
     (install_dir / "docker-compose.yml").write_text("version: '3'\n")
+    # FIX-20260420 PR-A: the updater reads ``.install-config.json`` to
+    # pick the systemd scope. These legacy tests pin the old "system
+    # scope" call shape (``systemctl restart ...`` without ``--user``);
+    # declare that explicitly rather than relying on probe defaults.
+    (install_dir / ".install-config.json").write_text(_json.dumps({
+        "systemd_scope": "system",
+        "systemd_units": {"executor": "niwa-executor.service"},
+    }))
     repo_dir = tmp_path / "repo"
     (repo_dir / "bin").mkdir(parents=True)
     (repo_dir / "bin" / "task-executor.py").write_text("# new\n")

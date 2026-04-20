@@ -1802,7 +1802,58 @@ def execute_install(cfg: WizardConfig) -> None:
         _configure_openclaw_mcp(cfg)
 
     _post_install_smoke(cfg)
+    _write_install_config(cfg)
     print_summary(cfg)
+
+
+def _write_install_config(cfg: WizardConfig) -> None:
+    """Record install metadata the updater needs to act honestly.
+
+    Source of truth for ``bin/update_engine.py`` (FIX-20260420): without
+    this file the updater has to guess the systemd scope, compose path
+    and DB location — which is how the triple-lie incident happened
+    (updater invoked ``sudo systemctl`` against a user-scope unit and
+    kept going as if it had succeeded).
+
+    The file is safe to leave behind on uninstall (it's under the
+    install dir and gets wiped with it). Existing installs without this
+    file get a fallback + warning on the next ``niwa update``.
+    """
+    # ``executor_enabled`` wins over platform: if the installer didn't
+    # register anything (executor disabled), lying about a launchd
+    # agent on macOS would make the updater point the operator at a
+    # unit that does not exist — exactly the class of bug this FIX
+    # exists to kill. Check that first.
+    if not cfg.executor_enabled:
+        scope = "none"
+    elif sys.platform == "darwin":
+        scope = "launchd"
+    else:
+        scope = "system" if os.getuid() == 0 else "user"
+    config = {
+        "install_version": NIWA_VERSION,
+        "install_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "systemd_scope": scope,
+        "systemd_units": {
+            "executor": "niwa-executor.service",
+            "hosting": "niwa-hosting.service",
+        },
+        "compose_file": str(cfg.niwa_home / "docker-compose.yml"),
+        "db_path": str(cfg.db_path),
+        "install_dir": str(cfg.niwa_home),
+        "repo_path": str(REPO_ROOT),
+    }
+    path = cfg.niwa_home / ".install-config.json"
+    try:
+        path.write_text(json.dumps(config, indent=2) + "\n")
+        ok(f"Wrote {path} (scope={scope})")
+    except OSError as exc:
+        # Install survived 14 previous steps; don't abort the whole
+        # thing because this last file couldn't be written. The
+        # updater falls back to a probe with a visible warning when
+        # the file is missing.
+        warn(f"Could not write {path}: {exc}. "
+             "Next `niwa update` will detect scope by probing.")
 
 
 def _post_install_smoke(cfg) -> None:

@@ -279,20 +279,113 @@ def _rebuild_app(ctx: _Ctx) -> None:
         _record_warning(ctx, f"docker compose up falló: {exc}")
 
 
+def _load_install_config(install_dir: Path) -> Optional[dict]:
+    """Read ``<install_dir>/.install-config.json`` if present.
+
+    Written by ``setup.py`` at install time (FIX-20260420). Returns the
+    parsed dict, or ``None`` when the file is missing, unreadable, or
+    not valid JSON — the caller decides how to react (probe + warning,
+    or refuse).
+    """
+    path = install_dir / ".install-config.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+        return None
+
+
+def _systemd_unit_paths(unit_name: str) -> tuple[Path, Path]:
+    """Return ``(user_unit_path, system_unit_path)`` for a systemd
+    unit. Extracted to a single function so tests can monkeypatch it
+    and inject tmp paths without touching ``/etc/systemd/system``.
+
+    Both locations mirror what ``setup.py::_install_systemd_unit``
+    actually writes — changing either here requires mirroring there.
+    """
+    return (
+        Path.home() / ".config" / "systemd" / "user" / unit_name,
+        Path("/etc/systemd/system") / unit_name,
+    )
+
+
+def _detect_systemd_scope(ctx: _Ctx) -> Optional[str]:
+    """Return the systemd scope Niwa's executor was installed under.
+
+    Values: ``"user"``, ``"system"``, ``"launchd"`` (macOS — no systemd),
+    ``"none"`` (installer ran with executor disabled).
+
+    Priority:
+      1. ``.install-config.json`` (authoritative — written by setup.py).
+      2. Fallback: check where the unit file actually lives on disk.
+         The installer writes to exactly one of:
+           - ``~/.config/systemd/user/niwa-executor.service`` (user)
+           - ``/etc/systemd/system/niwa-executor.service``    (system)
+         File existence is deterministic; probing ``systemctl --user
+         is-active`` is not (review: exit 3 can't tell "unit inactive"
+         from "unit unknown", so a desktop with a system-scope unit
+         would be misdetected as user on a legacy install).
+      3. Neither unit file present → default to ``"system"`` so a
+         failing restart surfaces the ``sudo systemctl ...`` hint
+         rather than a confidently wrong ``--user`` command.
+
+    Warning is recorded whenever we fall back past step 1.
+    """
+    cfg = _load_install_config(ctx.install_dir)
+    if cfg:
+        scope = cfg.get("systemd_scope")
+        if scope in ("system", "user", "launchd", "none"):
+            return scope
+    _record_warning(
+        ctx,
+        ".install-config.json ausente o sin systemd_scope — "
+        "detectando scope por ubicación del unit file. "
+        "Reinstala para fijarlo.",
+    )
+    user_unit, system_unit = _systemd_unit_paths("niwa-executor.service")
+    if user_unit.exists():
+        return "user"
+    if system_unit.exists():
+        return "system"
+    return "system"
+
+
 def _restart_executor(ctx: _Ctx) -> None:
     # PR-A3: Niwa is single-instance; the unit is always ``niwa-executor.service``.
     service_name = "niwa-executor.service"
+    scope = _detect_systemd_scope(ctx)
+    if scope == "launchd":
+        # macOS: installer registered a launchd agent. The updater has
+        # no equivalent restart path here yet — flag for the operator.
+        _record_warning(
+            ctx,
+            "Install scope is launchd (macOS); executor restart queda "
+            "fuera del updater. Reinicia con `launchctl`.",
+        )
+        ctx.manifest["needs_restart"] = True
+        return
+    if scope == "none":
+        # Executor was disabled at install time — nothing to restart.
+        return
+    if scope == "user":
+        cmd = ["systemctl", "--user", "restart", service_name]
+        manual_hint = f"systemctl --user restart {service_name}"
+    else:  # "system" (or ``None`` fallback, which we treat as system).
+        cmd = ["systemctl", "restart", service_name]
+        manual_hint = f"sudo systemctl restart {service_name}"
     try:
-        r = _run(ctx, "systemctl", "restart", service_name, timeout=30)
+        r = _run(ctx, *cmd, timeout=30)
     except Exception as exc:
-        _record_warning(ctx, f"systemctl restart {service_name} falló: {exc}")
+        _record_warning(ctx, f"{' '.join(cmd)} falló: {exc}")
         ctx.manifest["needs_restart"] = True
         return
     if r.returncode != 0:
         _record_warning(
             ctx,
-            f"systemctl restart {service_name} devolvió {r.returncode}. "
-            f"Reinicia manualmente: sudo systemctl restart {service_name}",
+            f"{' '.join(cmd)} devolvió {r.returncode}. "
+            f"Reinicia manualmente: {manual_hint}",
         )
         ctx.manifest["needs_restart"] = True
         return
