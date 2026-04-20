@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..models import Project, Run, RunEvent, Task, TaskEvent
+from .git_workspace import GitWorkspaceError, prepare_task_branch
 
 
 logger = logging.getLogger("niwa.executor")
@@ -104,6 +105,31 @@ def run_adapter(session: Session, task: Task) -> Run:
     session.add(run)
     session.flush()
     session.add(RunEvent(run_id=run.id, event_type="started", payload_json=None))
+    session.commit()
+
+    # PR-V1-08: prepare the per-task branch BEFORE the adapter spawns. On
+    # failure we skip the adapter entirely and finalize with
+    # ``git_setup_failed`` — the task never gets to mutate the working
+    # tree, and ``task.branch_name`` stays ``None``.
+    try:
+        branch_name = prepare_task_branch(artifact_root or ".", task)
+    except GitWorkspaceError as exc:
+        logger.warning("git setup failed for task_id=%s: %s", task.id, exc)
+        session.add(
+            RunEvent(
+                run_id=run.id,
+                event_type="error",
+                payload_json=json.dumps(
+                    {"reason": f"git_setup_failed: {str(exc)[:400]}"}
+                ),
+            )
+        )
+        session.commit()
+        _finalize(session, task, run, outcome="git_setup_failed", exit_code=None)
+        session.refresh(run)
+        return run
+
+    task.branch_name = branch_name
     session.commit()
 
     adapter = ClaudeCodeAdapter(
