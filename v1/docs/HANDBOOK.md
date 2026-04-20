@@ -501,8 +501,9 @@ declara rutas dentro de `shared/AppShell.tsx` (header "Niwa v1" +
 `["projects"]` al ganar y notifica éxito/error (409 → "el slug ya
 existe").
 
-El detalle de tarea (`/projects/:slug/tasks/:id`) y `/system` llegan en
-PRs posteriores (SPEC §7).
+`/system` llega en PRs posteriores (SPEC §7). El detalle de tarea
+(`/projects/:slug/tasks/:id`) se añade en PR-V1-10 y se documenta más
+abajo.
 
 ### Tasks UI (PR-V1-06b)
 
@@ -541,6 +542,53 @@ Reglas de la capa de datos:
    (`onSettled`, tanto en success como error) para que la UI refleje
    el estado real.
 
+### Task detail + stream (PR-V1-10)
+
+Ruta `/projects/:slug/tasks/:id` (SPEC §7). Archivos:
+
+- `routes/TaskDetailRoute.tsx` — lee `:id` con `useParams`, parsea a
+  número y delega en `TaskDetail`. Invalidos renderizan alerta inline.
+- `features/tasks/TaskDetail.tsx` — compone: título (tachado si
+  `cancelled`), badge de estado, `branch_name` en `<Code>`, PR link,
+  timestamps, descripción, y `TaskEventStream` alimentado por el run
+  más reciente. Detecta 404 leyendo `ApiError.status` y muestra "Task
+  no encontrada".
+- `features/tasks/TaskEventStream.tsx` — hook custom `useEventStream
+  (runId)` que abre `new EventSource("/api/runs/:runId/events")`,
+  suscribe listeners a los tipos conocidos (`assistant`, `user`,
+  `system`, `tool_use`, `tool_result`, `result`, `message`,
+  `started`, `completed`, `failed`, `cancelled`, `error`, `unknown`)
+  más `eos`, y llama `.close()` explícitamente al recibir `eos` para
+  cancelar el auto-reconnect de SSE. Cleanup del `useEffect` cierra
+  la conexión al unmount (StrictMode-safe: el doble mount en dev no
+  abre dos streams porque cada efecto obtiene su propia instancia y
+  la cleanup la cierra). Cada evento es una fila con badge
+  `event_type` + hora `HH:MM:SS` + botón "ver payload" que colapsa
+  `<Code block>{JSON.stringify}</Code>`. Cuando llega `eos`, banner
+  "Run <final_status>" con color por `RunStatus` + exit code +
+  outcome. Runs con >1 k eventos no están virtualizados; follow-up
+  si aparece.
+- `features/tasks/api.ts::useTask(id)` — `GET /api/tasks/{id}`.
+  `useLatestRun(taskId)` — `GET /api/tasks/{id}/runs`, devuelve el
+  último (o `null` si la lista está vacía → "Run no iniciado").
+- `TaskList` es clicable: `<Table.Tr onClick={navigate(...)}>` y el
+  icono delete hace `stopPropagation` en su handler para no disparar
+  la navegación.
+
+Types en `src/api.ts`: `Run`, `RunStatus`, `RunEvent`, `EosPayload`.
+Mirror 1:1 de `backend/app/schemas/run.py` y del payload que
+`format_sse_event`/`format_sse_eos` escriben.
+
+**Mock de `EventSource` en tests.** jsdom no lo implementa. En cada
+test que lo necesite, `vi.stubGlobal("EventSource", MockEventSource)`
+dentro de `beforeEach` + `vi.unstubAllGlobals()` en `afterEach`, no
+global vía `setup.ts`. `MockEventSource` es una clase JS mínima con
+`addEventListener`/`removeEventListener`/`close` + un helper síncrono
+`_emit(eventType, data)` que dispara un `MessageEvent` al listener
+registrado. Los tests (`TaskEventStream.test.tsx`) verifican:
+renderizado de 3 eventos históricos y cierre explícito al recibir
+`eos` con ignorado de emisiones posteriores.
+
 ### Tests frontend (actualizado)
 
 Vitest (jsdom). `tests/setup.ts` añade el polyfill de `matchMedia` que
@@ -549,12 +597,16 @@ Mantine necesita. `tests/renderWithProviders.tsx` monta
 `MemoryRouter`. El mock de `fetch` se hace con `vi.stubGlobal` — Vitest
 no pasa por el proxy.
 
-Suite actual (4 casos, 4 passed):
+Suite actual (6 casos, 6 passed):
 
 - `ProjectList.test.tsx` — empty state y render de tarjetas.
 - `TaskCreateModal.test.tsx` — botón submit deshabilitado con título
   vacío; submit válido llama `POST /api/projects/:slug/tasks` con el
   payload esperado y dispara `onClose`.
+- `TaskEventStream.test.tsx` — eventos históricos via `MockEventSource`
+  se pintan en la timeline; al recibir `eos` el banner muestra el
+  estado final, el mock queda cerrado y emisiones posteriores no
+  añaden filas.
 
 ### Proxy Vite → backend
 
@@ -568,8 +620,9 @@ CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
 - PR-V1-08: ejecución aislada en rama git por task. Crear/chequear
   `niwa/<task_id>-<slug>`, sandboxear el CLI en ella, post-run con
   diff + commit + push + PR. El adapter actual queda intacto.
-- PR-V1-09+: UI de detalle de tarea (`/projects/:slug/tasks/:id`)
-  consumiendo los `run_events` del stream real, feedback de aprobación
-  humana, y verificación post-run (Semana 3 del SPEC).
+- PR-V1-11+: verificación post-run (exit code + artefactos + tests del
+  proyecto), triaje planner, modo safe con PR manual (Semana 3 del
+  SPEC). El feedback de aprobación humana en UI y el clarification
+  round-trip llegan en Semana 5.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.

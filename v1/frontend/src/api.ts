@@ -103,6 +103,49 @@ export interface TaskCreatePayload {
   description?: string | null;
 }
 
+// ---- Runs wire types (mirror backend app/schemas/run.py) ---------------
+
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface Run {
+  id: number;
+  task_id: number;
+  status: RunStatus;
+  model: string;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  outcome: string | null;
+  session_handle: string | null;
+  artifact_root: string;
+  verification_json: string | null;
+  created_at: string;
+}
+
+// Shape of one event emitted over SSE (mirrors the `data:` frame built by
+// backend/app/services/run_events.py::format_sse_event). `payload` is the
+// decoded JSON payload, not a string — the server parses it for us.
+export interface RunEvent {
+  id: number;
+  event_type: string;
+  payload: unknown;
+  created_at: string | null;
+}
+
+// Shape of the terminal `eos` frame emitted at stream close. Mirrors
+// backend format_sse_eos; `final_status` is the terminal RunStatus.
+export interface EosPayload {
+  run_id: number;
+  final_status: RunStatus;
+  exit_code: number | null;
+  outcome: string | null;
+}
+
 // Active = driving toward a terminal state; delete is forbidden by backend.
 const ACTIVE_STATUSES: readonly TaskStatus[] = ["running", "waiting_input"];
 

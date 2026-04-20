@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconAlertCircle, IconTrash } from "@tabler/icons-react";
+import { useNavigate } from "react-router-dom";
 
 import { ApiError, isTaskActive, type Task, type TaskStatus } from "../../api";
 import { useDeleteTask, useTasks } from "./api";
@@ -42,6 +43,7 @@ function formatDate(iso: string): string {
 export function TaskList({ slug }: Props) {
   const query = useTasks(slug);
   const deleteMutation = useDeleteTask(slug);
+  const navigate = useNavigate();
 
   const handleDelete = (task: Task) => {
     deleteMutation.mutate(task.id, {
@@ -103,7 +105,11 @@ export function TaskList({ slug }: Props) {
           {tasks.map((task) => {
             const active = isTaskActive(task);
             return (
-              <Table.Tr key={task.id}>
+              <Table.Tr
+                key={task.id}
+                onClick={() => navigate(`/projects/${slug}/tasks/${task.id}`)}
+                style={{ cursor: "pointer" }}
+              >
                 <Table.Td>{task.title}</Table.Td>
                 <Table.Td>
                   <Badge color={STATUS_COLOR[task.status]} variant="light">
@@ -122,7 +128,12 @@ export function TaskList({ slug }: Props) {
                         variant="subtle"
                         color="red"
                         aria-label={`Borrar tarea ${task.title}`}
-                        onClick={() => handleDelete(task)}
+                        // stopPropagation so the row's navigate handler
+                        // does not fire on delete-button clicks.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(task);
+                        }}
                         loading={
                           deleteMutation.isPending &&
                           deleteMutation.variables === task.id
