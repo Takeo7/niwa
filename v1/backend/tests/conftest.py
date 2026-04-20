@@ -92,6 +92,9 @@ def git_project(tmp_path: Path) -> Path:
     _run(["init", "-b", "main"])
     _run(["config", "user.email", "niwa@test.local"])
     _run(["config", "user.name", "Niwa Test"])
+    # Some sandboxes force commit signing globally; disable it locally so
+    # the seed commit doesn't need a real key.
+    _run(["config", "commit.gpgsign", "false"])
     (d / "README.md").write_text("seed\n")
     _run(["add", "README.md"])
     _run(["commit", "-m", "init"])

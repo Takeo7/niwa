@@ -108,11 +108,12 @@ def _fake_cli_cmd() -> str:
 def test_adapter_parses_stream_and_writes_run_events(
     session: Session,
     tmp_path: Path,
+    git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Happy path: 3 events + exit 0 → run completed, task done."""
 
-    project = _make_project(session, str(tmp_path))
+    project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="stream")
 
     script = _write_script(
@@ -155,9 +156,10 @@ def test_adapter_parses_stream_and_writes_run_events(
 def test_adapter_nonzero_exit_marks_run_failed(
     session: Session,
     tmp_path: Path,
+    git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = _make_project(session, str(tmp_path))
+    project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="boom")
 
     script = _write_script(
@@ -182,9 +184,10 @@ def test_adapter_nonzero_exit_marks_run_failed(
 def test_adapter_skips_malformed_json_lines(
     session: Session,
     tmp_path: Path,
+    git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = _make_project(session, str(tmp_path))
+    project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="garbage")
 
     # Craft the script manually — _write_script would re-JSON the garbage.
@@ -219,9 +222,10 @@ def test_adapter_skips_malformed_json_lines(
 def test_adapter_binary_missing_fails_fast(
     session: Session,
     tmp_path: Path,
+    git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = _make_project(session, str(tmp_path))
+    project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="ghost")
 
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
