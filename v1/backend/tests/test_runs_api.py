@@ -167,12 +167,7 @@ def _seed_run_with_events(
 
     from app.models import Project, Task
 
-    project = Project(
-        slug="sse-demo",
-        name="SSE Demo",
-        kind="library",
-        local_path="/tmp/sse-demo",
-    )
+    project = Project(slug="sse-demo", name="SSE Demo", kind="library", local_path="/tmp/sse-demo")
     session.add(project)
     session.flush()
     task = Task(
@@ -183,27 +178,21 @@ def _seed_run_with_events(
     )
     session.add(task)
     session.flush()
+    now = datetime.now(timezone.utc)
     run = Run(
         task_id=task.id,
         status=status,
         model="claude-code",
-        started_at=datetime.now(timezone.utc),
+        started_at=now,
+        finished_at=now if status in ("completed", "failed", "cancelled") else None,
         artifact_root="/tmp/sse-demo",
         exit_code=exit_code,
         outcome=outcome,
     )
-    if status in ("completed", "failed", "cancelled"):
-        run.finished_at = datetime.now(timezone.utc)
     session.add(run)
     session.flush()
     for i in range(event_count):
-        session.add(
-            RunEvent(
-                run_id=run.id,
-                event_type="assistant",
-                payload_json=json.dumps({"text": f"msg-{i}"}),
-            )
-        )
+        session.add(RunEvent(run_id=run.id, event_type="assistant", payload_json=json.dumps({"text": f"msg-{i}"})))
     session.commit()
     return run
 
@@ -265,36 +254,24 @@ def test_events_stream_emits_new_events_for_running_run(client, app) -> None:
     # run to ``completed`` with a final event. Uses its own session because
     # the test's session is closed; we write through the same override so
     # the in-memory DB is shared.
+    def _add(s: Session, event_type: str, payload: dict | None) -> None:
+        s.add(RunEvent(
+            run_id=run_id,
+            event_type=event_type,
+            payload_json=json.dumps(payload) if payload is not None else None,
+        ))
+        s.commit()
+
     def _writer() -> None:
         time.sleep(0.4)
         gen = override()
         s: Session = next(gen)
         try:
-            s.add(
-                RunEvent(
-                    run_id=run_id,
-                    event_type="assistant",
-                    payload_json=json.dumps({"text": "msg-1"}),
-                )
-            )
-            s.commit()
+            _add(s, "assistant", {"text": "msg-1"})
             time.sleep(0.4)
-            s.add(
-                RunEvent(
-                    run_id=run_id,
-                    event_type="assistant",
-                    payload_json=json.dumps({"text": "msg-2"}),
-                )
-            )
-            s.commit()
+            _add(s, "assistant", {"text": "msg-2"})
             time.sleep(0.4)
-            s.add(
-                RunEvent(
-                    run_id=run_id,
-                    event_type="completed",
-                    payload_json=None,
-                )
-            )
+            _add(s, "completed", None)
             run_row = s.get(Run, run_id)
             assert run_row is not None
             run_row.status = "completed"

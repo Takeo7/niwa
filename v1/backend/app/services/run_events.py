@@ -1,29 +1,17 @@
 """Helpers for the SSE ``GET /api/runs/{run_id}/events`` endpoint (PR-V1-09).
 
-The formatting helpers here are pure (no DB); the loader helpers wrap
-synchronous SQLAlchemy queries so the async generator in ``app.api.runs``
-can run them via ``asyncio.to_thread`` without introducing AsyncSession
-into the project (see brief PR-V1-09 §"Sessions SQLAlchemy dentro de
-async").
+Pure formatters + synchronous loaders. The async generator in
+``app.api.runs`` wraps the loaders in ``asyncio.to_thread`` so the
+project stays on synchronous ``Session`` (no AsyncSession).
 
-Contract of the SSE frames (brief PR-V1-09 §"Contrato del stream"):
-
-    id: <run_event.id>
-    event: <run_event.event_type>
-    data: {"id": ..., "event_type": ..., "payload": {...}, "created_at": ...}
-
-    event: eos
-    data: {"run_id": ..., "final_status": ..., "exit_code": ..., "outcome": ...}
-
-``payload_json`` is stored as a JSON string in the DB; we re-parse it so
-the SSE ``data`` field is a proper JSON object (not an escaped string).
+``payload_json`` is stored as a JSON string in DB; we re-parse it so the
+SSE ``data`` field carries a proper JSON object (not an escaped string).
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -68,10 +56,9 @@ def load_run_snapshot(session: Session, run_id: int) -> RunSnapshot | None:
 def load_events_since(
     session: Session, run_id: int, last_id: int
 ) -> list[RunEvent]:
-    """Return every event for ``run_id`` with ``id > last_id``, ASC by id.
+    """Return events for ``run_id`` with ``id > last_id``, ASC by id.
 
-    ``last_id=0`` yields the full history; the tail loop passes the max id
-    it has already emitted to pick up only fresh rows.
+    ``last_id=0`` yields the full history.
     """
 
     stmt = (
@@ -83,12 +70,7 @@ def load_events_since(
 
 
 def _parse_payload(payload_json: str | None) -> Any:
-    """Decode ``payload_json`` into a Python value.
-
-    Returns ``None`` when the column is NULL and the raw string when it is
-    not valid JSON (belt-and-braces: the adapter writes JSON, but older
-    rows or manual inserts might not).
-    """
+    """Decode ``payload_json`` into a Python value (raw string on failure)."""
 
     if payload_json is None:
         return None
@@ -98,20 +80,15 @@ def _parse_payload(payload_json: str | None) -> Any:
         return payload_json
 
 
-def _format_created_at(created_at: datetime | None) -> str | None:
-    if created_at is None:
-        return None
-    return created_at.isoformat()
-
-
 def format_sse_event(event: RunEvent) -> str:
     """Return the full SSE frame string for a single ``RunEvent``."""
 
+    created_at = event.created_at.isoformat() if event.created_at else None
     data = {
         "id": event.id,
         "event_type": event.event_type,
         "payload": _parse_payload(event.payload_json),
-        "created_at": _format_created_at(event.created_at),
+        "created_at": created_at,
     }
     return (
         f"id: {event.id}\n"

@@ -1,25 +1,14 @@
 """Runs API — SSE endpoint streaming ``run_events`` in real time (PR-V1-09).
 
-Only one route for now: ``GET /api/runs/{run_id}/events`` as
-Server-Sent Events. The stream emits every historical ``run_event`` for
-``run_id`` ordered by ``id`` ASC, then tails the DB every 200 ms until
-the parent ``Run.status`` reaches a terminal state
-(``completed|failed|cancelled``). A comment heartbeat is emitted every
-~15 s so intermediate proxies do not drop the keep-alive.
+``GET /api/runs/{run_id}/events`` emits historical events (``id`` ASC),
+then tail-polls every 200 ms until ``Run.status`` is terminal, closing
+with an ``eos`` frame. Heartbeat comment every ~15 s.
 
-Design notes (see brief PR-V1-09):
-
-- The existing ``Session`` from ``Depends(get_session)`` is used only for
-  the initial 404 check. The stream body opens a short-lived session per
-  poll via ``_open_session`` so we never hold a transaction open across
-  ``await asyncio.sleep`` boundaries.
-- ``_open_session`` calls the ``get_session`` dependency directly —
-  ``app.dependency_overrides`` is honoured (tests inject the in-memory
-  SQLite this way).
-- SQLAlchemy session is synchronous; DB work runs inside
-  ``asyncio.to_thread`` so the event loop stays responsive.
-- Heartbeat cadence is implemented by counting tail iterations (75 * 200
-  ms ≈ 15 s) instead of wall-clock comparison: cheaper and deterministic.
+The ``Session`` from ``Depends(get_session)`` only powers the initial
+404 check; the stream body opens a short-lived session per poll via
+``_open_session`` (honours ``app.dependency_overrides`` for tests) so no
+transaction is held across ``await`` points. DB work runs inside
+``asyncio.to_thread`` because the project stays on sync ``Session``.
 """
 
 from __future__ import annotations
@@ -47,12 +36,7 @@ _HEARTBEAT_EVERY_ITERATIONS = 75  # 75 * 200 ms = 15 s.
 
 @contextmanager
 def _open_session(request: Request) -> Iterator[Session]:
-    """Yield a short-lived ``Session`` honouring ``dependency_overrides``.
-
-    Looks up the current provider for ``get_session`` (test overrides or
-    the default) and drives the generator manually so ``finally`` runs
-    and the session is closed.
-    """
+    """Yield a short-lived ``Session`` honouring ``dependency_overrides``."""
 
     provider = request.app.dependency_overrides.get(get_session, get_session)
     generator = provider()
@@ -64,17 +48,11 @@ def _open_session(request: Request) -> Iterator[Session]:
 
 
 def _initial_snapshot(request: Request, run_id: int) -> svc.RunSnapshot | None:
-    """Load the run snapshot in a dedicated session."""
-
     with _open_session(request) as session:
         return svc.load_run_snapshot(session, run_id)
 
 
-def _load_events(
-    request: Request, run_id: int, last_id: int
-) -> list:
-    """Load pending events (``id > last_id``) in a dedicated session."""
-
+def _load_events(request: Request, run_id: int, last_id: int) -> list:
     with _open_session(request) as session:
         return svc.load_events_since(session, run_id, last_id)
 
@@ -82,18 +60,11 @@ def _load_events(
 async def _event_stream(
     request: Request, run_id: int
 ) -> AsyncIterator[str]:
-    """Async generator yielding SSE frames for ``run_id``.
-
-    Emits history, tails until terminal, closes with an ``eos`` frame.
-    Uses ``asyncio.to_thread`` so the synchronous SQLAlchemy session does
-    not block the event loop.
-    """
+    """Yield SSE frames for ``run_id``: history, tail, ``eos``."""
 
     last_id = 0
     heartbeat_counter = 0
 
-    # Stream historical events first; use ``last_id`` to stitch the tail
-    # without races (brief §"Race históricos↔nuevos").
     history = await asyncio.to_thread(_load_events, request, run_id, last_id)
     for event in history:
         yield svc.format_sse_event(event)
@@ -106,7 +77,6 @@ async def _event_stream(
 
         snapshot = await asyncio.to_thread(_initial_snapshot, request, run_id)
         if snapshot is None:
-            # Run was deleted mid-stream; nothing sensible to emit.
             return
 
         new_events = await asyncio.to_thread(
@@ -118,8 +88,8 @@ async def _event_stream(
                 last_id = event.id
 
         if snapshot.status in svc.TERMINAL_RUN_STATUSES:
-            # Drain any events that landed between the snapshot load and
-            # the terminal-state check so no event is lost.
+            # Drain events that landed between snapshot load and the
+            # terminal check so none is lost.
             tail = await asyncio.to_thread(
                 _load_events, request, run_id, last_id
             )
@@ -143,11 +113,7 @@ async def stream_run_events(
     request: Request,
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
-    """SSE stream of ``run_events`` for ``run_id``.
-
-    Returns ``404`` JSON when the run does not exist (checked before the
-    stream starts so the client never sees an empty 200 for a missing id).
-    """
+    """SSE stream of ``run_events`` for ``run_id`` (``404`` JSON if missing)."""
 
     if not svc.run_exists(session, run_id):
         raise HTTPException(
@@ -155,16 +121,14 @@ async def stream_run_events(
             detail="Run not found",
         )
 
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        # nginx hint; harmless when no proxy is in front of us.
-        "X-Accel-Buffering": "no",
-    }
     return StreamingResponse(
         _event_stream(request, run_id),
         media_type="text/event-stream",
-        headers=headers,
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx hint; harmless without a proxy.
+        },
     )
 
 
