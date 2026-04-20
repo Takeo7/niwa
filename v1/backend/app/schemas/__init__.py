@@ -7,5 +7,12 @@ the public names so callers can write ``from app.schemas import ProjectRead``.
 from __future__ import annotations
 
 from .project import ProjectCreate, ProjectPatch, ProjectRead
+from .task import TaskCreate, TaskRead
 
-__all__ = ["ProjectCreate", "ProjectPatch", "ProjectRead"]
+__all__ = [
+    "ProjectCreate",
+    "ProjectPatch",
+    "ProjectRead",
+    "TaskCreate",
+    "TaskRead",
+]
