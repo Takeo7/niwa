@@ -1,12 +1,13 @@
 """Niwa v1 executor package.
 
 The executor is the process that drains the ``tasks`` table: it picks up
-``queued`` rows, transitions them to ``running``, creates the associated
-``Run``, streams events, and finally marks the task ``done`` (or ``failed``).
+``queued`` rows, transitions them to ``running``, spawns the Claude Code
+CLI via the adapter, streams events into ``run_events``, and finally marks
+the task ``done`` or ``failed``.
 
-PR-V1-05 lands only the skeleton plus an *echo* implementation — no Claude
-CLI adapter, no git branch, no verification. The real adapter replaces
-``run_echo`` in Semana 2.
+PR-V1-07 replaces the echo implementation from PR-V1-05 with the real
+adapter. The pipeline shape (``claim_next_task`` → ``run_*`` → event
+writes) is unchanged; only the innards of the per-task function differ.
 
 This package exposes two surfaces:
 
@@ -18,12 +19,12 @@ This package exposes two surfaces:
 
 from __future__ import annotations
 
-from .core import claim_next_task, process_pending, run_echo
+from .core import claim_next_task, process_pending, run_adapter
 from .runner import run_forever
 
 __all__ = [
     "claim_next_task",
     "process_pending",
-    "run_echo",
+    "run_adapter",
     "run_forever",
 ]

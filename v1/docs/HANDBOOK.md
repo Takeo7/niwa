@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-06b)
+## Layout actual (tras PR-V1-07)
 
 ```
 v1/
@@ -18,12 +18,15 @@ v1/
 │   │   ├── models/             # ORM models (SPEC §3)
 │   │   ├── schemas/            # Pydantic v2 wire shapes
 │   │   ├── services/           # pure functions over Session
-│   │   ├── executor/           # echo daemon (polling, core pipeline, CLI)
+│   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
+│   │   ├── executor/           # daemon (polling, pipeline, CLI entrypoint)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
 │   │   └── versions/           # initial_schema (9d205b6968c1)
 │   ├── tests/                  # pytest + TestClient
+│   │   └── fixtures/
+│   │       └── fake_claude_cli.py  # stream-json emitter (replaces real claude)
 │   └── pyproject.toml
 ├── frontend/                   # React 19 + Vite + Mantine v7
 │   ├── src/
@@ -187,17 +190,19 @@ lanzar un run = crear/encolar una task).
 
 ## Executor
 
-Un único proceso Python que drena `tasks.status='queued'`. SPEC §9
-Semana 1 lo deja en modo *echo*: no hay Claude CLI, no hay rama git, no
-hay verificación. El adapter real llega en Semana 2 y sustituye
-`run_echo` sin cambiar el resto del pipeline.
+Un único proceso Python que drena `tasks.status='queued'`. Desde PR-V1-07
+el pipeline spawnea el CLI real de Claude Code vía `app.adapters`
+(ver sección "Adapter Claude Code" más abajo). La forma del pipeline
+(`claim_next_task` → `run_*` → escrituras a `run_events` + `task_events`)
+se mantiene idéntica a la de PR-V1-05: solo cambian las entrañas del
+`run_*` por-tarea, que pasa de un echo sintético a streamear el CLI.
 
 ### Layout
 
 ```
 app/executor/
-├── __init__.py       # re-exports (claim_next_task, run_echo, process_pending, run_forever)
-├── core.py           # pipeline puro sobre Session
+├── __init__.py       # re-exports (claim_next_task, run_adapter, process_pending, run_forever)
+├── core.py           # pipeline puro sobre Session (usa ClaudeCodeAdapter)
 ├── runner.py         # loop de polling (SessionLocal + sleep)
 └── __main__.py       # `python -m app.executor` (argparse: --once / --interval / --verbose)
 ```
@@ -211,27 +216,40 @@ app/executor/
      Si afecta 0 filas, otro executor ganó → devuelve `None`.
    - Escribe `task_event` `status_changed` `{"from":"queued","to":"running"}`.
    - Commit antes de devolver para liberar el lock rápido.
-2. `run_echo(session, task)` → `Run`.
-   - Crea `Run` en `running` con `model="echo"`, `artifact_root=""`,
-     `started_at=now()`.
-   - Escribe `run_event` `started`.
-   - Inmediatamente: `Run.status='completed'`, `exit_code=0`,
-     `outcome='echo'`, `finished_at=now()`.
-   - Escribe `run_event` `completed`.
-   - `Task.status='done'`, `completed_at=now()`.
-   - Escribe `task_event` `status_changed` `{"from":"running","to":"done"}`.
-   - Commit único de toda la transición.
+2. `run_adapter(session, task)` → `Run`.
+   - Resuelve `artifact_root = project.local_path` (cadena vacía si el
+     proyecto no existe, por ahora).
+   - Crea `Run` en `running` con `model="claude-code"`,
+     `started_at=now()`, `artifact_root=<project.local_path>`.
+   - Escribe `run_event` `started` y commitea — desde ese punto cada
+     `AdapterEvent` del stream-json se persiste como `run_event` con
+     su propio commit (batch por evento; afinar a batch por N eventos
+     es un tunable para un PR posterior).
+   - Al terminar el stream, llama a `adapter.wait()` para cerrar el
+     proceso y fijar `outcome` según `exit_code`.
+   - Mapea `outcome` a estado terminal vía `_finalize`:
+     - `cli_ok` + `exit_code == 0` → `run.status='completed'`,
+       `task.status='done'`, `task.completed_at=now()`, `run_event`
+       `completed`.
+     - cualquier otro outcome (`cli_nonzero_exit`, `cli_not_found`,
+       `timeout`, `adapter_exception`) → `run.status='failed'`,
+       `task.status='failed'`, `run_event` `failed`.
+   - Excepciones del adapter se capturan (nunca dejan el run en
+     `running`): se escribe un `run_event` `error` con el mensaje y el
+     outcome queda `adapter_exception`.
 3. `process_pending(session)` → `int`. Loop de 1+2 hasta que
    `claim_next_task` devuelve `None`. Una task = una transacción; si
-   `run_echo` peta, rollback de esa iteración y re-raise.
+   `run_adapter` peta, rollback de esa iteración y re-raise.
 
 ### Estados de run (SPEC §3)
 
 - `queued` → aún sin tocar (default del modelo, no se usa hoy porque el
   executor crea directamente en `running`).
 - `running` → recién creado, aún no cerrado.
-- `completed` → exit 0, trabajo cerrado. El MVP echo siempre llega aquí.
-- `failed` → cualquier condición de evidencia (Semana 3) falló.
+- `completed` → exit 0 y `outcome='cli_ok'`, trabajo cerrado.
+- `failed` → el CLI salió con exit ≠ 0, el binario no se encontró, el
+  timeout global disparó, o el adapter crasheó (ver tabla de outcomes
+  en "Adapter Claude Code").
 - `cancelled` → el usuario abortó (endpoint dedicado, futuro PR).
 
 ### CLI
@@ -253,6 +271,94 @@ el proceso y el operador lo relanza.
 con `datetime.now(timezone.utc)` desde `services/runs.py` — **no** con
 `func.now()`. SQLite `CURRENT_TIMESTAMP` es de granularidad 1 s y los
 tests (y el ordering futuro de runs) necesitan microsegundos.
+
+## Adapter Claude Code (PR-V1-07)
+
+Encapsula el `subprocess.Popen` del CLI de Claude Code y el parser de
+su stream-json. Vive en `app/adapters/claude_code.py` y es
+**DB-agnóstico**: produce objetos Python; quien persiste es el executor
+(`core._write_event`).
+
+### Contrato del stream
+
+Formato esperado: una línea JSON por evento en stdout. Cada línea se
+parsea a un `AdapterEvent`:
+
+```
+@dataclass(frozen=True)
+class AdapterEvent:
+    kind: str                  # raw "type" del JSON; "unknown" si no viene
+    payload: dict[str, Any]    # el JSON entero, sin tocar
+    raw_line: str              # línea original (stripped) para debug
+```
+
+Reglas del parser:
+
+- Líneas vacías o que no son JSON válido → warning de log y se descartan
+  (no rompen el stream). Útil para logs de progreso mixtos que el CLI
+  pueda escribir por error.
+- Líneas cuyo JSON no es un objeto (array, número suelto…) → se
+  descartan igual.
+- El flush final de buffer sin `\n` al cerrar stdout se procesa como
+  una línea más, para no perder el último evento.
+
+### Outcomes (4)
+
+La propiedad `adapter.outcome` queda fijada en uno de estos valores al
+terminar `iter_events()` + `wait()`:
+
+| Outcome             | Se fija cuando                                                            | Run status |
+|---------------------|---------------------------------------------------------------------------|------------|
+| `cli_ok`            | `iter_events` drenó stdout limpio y `proc.wait()` devolvió `0`.           | `completed` |
+| `cli_nonzero_exit`  | `iter_events` drenó stdout limpio y el exit code fue distinto de `0`.     | `failed` |
+| `cli_not_found`     | `cli_path` es `None`, no existe en disco, o `Popen` levanta `FileNotFoundError`. | `failed` |
+| `timeout`           | El deadline global del adapter (ver env vars) se rebasó; `SIGTERM` + 5 s grace + `SIGKILL`. | `failed` |
+
+Además, `executor.core.run_adapter` captura excepciones inesperadas del
+adapter y fija `outcome='adapter_exception'` (también mapeado a
+`failed`) escribiendo un `run_event` `error` con el mensaje truncado —
+el run nunca queda atascado en `running`.
+
+### Timeout, stderr, drenaje
+
+- `selectors.DefaultSelector` sobre `proc.stdout` para que el polling
+  respete el deadline global sin bloquear en `read()`.
+- stderr se drena en un hilo daemon a un buffer de 64 KB con rotación
+  (descarta bytes viejos al rebosar) para evitar el deadlock clásico
+  de pipe-full del CLI.
+- `_terminate()` envía `SIGTERM`, espera 5 s, y escala a `SIGKILL` si
+  el proceso sigue vivo.
+
+### Env vars
+
+| Variable              | Default                | Uso                                         |
+|-----------------------|------------------------|---------------------------------------------|
+| `NIWA_CLAUDE_CLI`     | `shutil.which('claude')` | Ruta absoluta al binario. Tests la apuntan al fake. |
+| `NIWA_CLAUDE_TIMEOUT` | `1800` (s)             | Deadline global en segundos. Parseable como `float`; valores inválidos caen al default con warning. |
+
+### Fake CLI en tests
+
+`v1/backend/tests/fixtures/fake_claude_cli.py` es un script Python
+ejecutable que imita el contrato del CLI real: acepta el prompt por
+stdin, escribe una secuencia configurable de líneas JSON en stdout, y
+sale con el código que le indique la fixture. Se activa en los tests
+apuntando `NIWA_CLAUDE_CLI` al path del fake antes de invocar el
+executor, de modo que **todo el pipeline ejerce el código de producción**
+— el único mock es el binario externo.
+
+Cubre los 4 outcomes con combinaciones de args: stream normal + exit 0,
+stream + exit 1, no-existe (apuntando a path inválido), y prompt que
+duerme más que el timeout.
+
+### Nota de scope (PR-V1-08)
+
+`run_adapter` hoy ejecuta el CLI con `cwd=project.local_path` **tal
+cual**, sin crear rama git ni sandbox. La creación/check-out de una
+rama de trabajo por task (`niwa/<task_id>-<slug>`) y el post-run
+git-aware (diff, commits, PR) viven en PR-V1-08. Hasta que ese PR
+aterrice, correr el executor sobre un repo real mutará el working
+tree actual del proyecto — los tests evitan esto apuntando
+`local_path` a directorios temporales.
 
 ## Frontend
 
@@ -342,10 +448,11 @@ CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
 
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-07+: adapter Claude Code real (Semana 2) que reemplaza
-  `run_echo` y conecta el stream-json a la DB. El cuerpo del pipeline
-  (`claim_next_task` + `process_pending`) se mantiene. La UI de detalle
-  de tarea (`/projects/:slug/tasks/:id`) llega cuando haya stream real
-  que mostrar.
+- PR-V1-08: ejecución aislada en rama git por task. Crear/chequear
+  `niwa/<task_id>-<slug>`, sandboxear el CLI en ella, post-run con
+  diff + commit + push + PR. El adapter actual queda intacto.
+- PR-V1-09+: UI de detalle de tarea (`/projects/:slug/tasks/:id`)
+  consumiendo los `run_events` del stream real, feedback de aprobación
+  humana, y verificación post-run (Semana 3 del SPEC).
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.

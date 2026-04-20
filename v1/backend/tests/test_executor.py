@@ -1,15 +1,23 @@
-"""Unit tests for the echo executor (PR-V1-05).
+"""Unit tests for the adapter-driven executor (PR-V1-07).
 
-The tests drive ``process_pending`` directly — the polling loop and the CLI
-entrypoint are thin wrappers around it and are covered by manual smoke runs
-(see the brief). The race test is the only one that spins up threads.
+The seven cases below were originally written against the PR-V1-05 echo
+pipeline. PR-V1-07 replaces the echo with the real adapter, so they now
+point ``NIWA_CLAUDE_CLI`` at the fake CLI in ``tests/fixtures`` and emit a
+single ``result`` event per task — enough to exercise the happy path
+without spawning a real ``claude`` binary.
+
+The race test still spins up two threads on the same DB; it does not
+launch subprocesses (the contention happens inside
+``claim_next_task`` before any adapter work).
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +26,47 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.executor.core import claim_next_task, process_pending
 from app.models import Base, Project, Run, RunEvent, Task, TaskEvent
+
+
+FAKE_CLI_PATH = (
+    Path(__file__).parent / "fixtures" / "fake_claude_cli.py"
+).resolve()
+
+
+@pytest.fixture(autouse=True)
+def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every test at the fake CLI with a minimal one-event script.
+
+    One ``result`` line + exit 0 is the bare minimum to flip a run to
+    ``completed`` and a task to ``done`` through the real adapter path.
+    Individual tests that need a different shape (none, today) can
+    override by re-setting the env vars.
+    """
+
+    st = os.stat(FAKE_CLI_PATH)
+    os.chmod(FAKE_CLI_PATH, st.st_mode | 0o111)
+
+    script = tmp_path / "default_script.jsonl"
+    script.write_text(json.dumps({"type": "result", "exit_code": 0}) + "\n")
+
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
+    monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
+    monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+
+
+@pytest.fixture()
+def project_dir(tmp_path: Path) -> Path:
+    """A real directory on disk for ``project.local_path``.
+
+    The adapter spawns the CLI with ``cwd=project.local_path``; a
+    nonexistent path raises ``FileNotFoundError`` before we reach the
+    stream parser, which is out of scope for these tests (covered
+    explicitly in ``test_adapter.py::test_adapter_binary_missing_fails_fast``).
+    """
+
+    d = tmp_path / "project"
+    d.mkdir()
+    return d
 
 
 @pytest.fixture()
@@ -47,12 +96,12 @@ def session(Session_) -> Iterator[Session]:
         yield s
 
 
-def _make_project(session: Session, **overrides) -> Project:
+def _make_project(session: Session, local_path: str | Path = "/tmp/demo", **overrides) -> Project:
     defaults = dict(
         slug="demo",
         name="Demo",
         kind="library",
-        local_path="/tmp/demo",
+        local_path=str(local_path),
     )
     defaults.update(overrides)
     project = Project(**defaults)
@@ -90,8 +139,8 @@ def test_process_pending_nothing_to_do(session: Session) -> None:
     assert process_pending(session) == 0
 
 
-def test_process_pending_single_task(session: Session) -> None:
-    project = _make_project(session)
+def test_process_pending_single_task(session: Session, project_dir: Path) -> None:
+    project = _make_project(session, local_path=project_dir)
     task = _make_task(session, project, title="only one")
 
     assert process_pending(session) == 1
@@ -110,13 +159,13 @@ def test_process_pending_single_task(session: Session) -> None:
     run = runs[0]
     assert run.status == "completed"
     assert run.exit_code == 0
-    assert run.outcome == "echo"
-    assert run.model == "echo"
+    assert run.outcome == "cli_ok"
+    assert run.model == "claude-code"
     assert run.finished_at is not None
 
 
-def test_process_pending_multiple_tasks(session: Session) -> None:
-    project = _make_project(session)
+def test_process_pending_multiple_tasks(session: Session, project_dir: Path) -> None:
+    project = _make_project(session, local_path=project_dir)
     first = _make_task(session, project, title="first")
     second = _make_task(session, project, title="second")
     third = _make_task(session, project, title="third")
@@ -165,8 +214,8 @@ def test_process_pending_skips_non_queued(session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_writes_expected_events(session: Session) -> None:
-    project = _make_project(session)
+def test_run_writes_expected_events(session: Session, project_dir: Path) -> None:
+    project = _make_project(session, local_path=project_dir)
     task = _make_task(session, project, title="events")
 
     assert process_pending(session) == 1
@@ -178,11 +227,17 @@ def test_run_writes_expected_events(session: Session) -> None:
         .order_by(RunEvent.id.asc())
         .all()
     )
-    assert [e.event_type for e in events] == ["started", "completed"]
+    # The adapter pipeline writes: started, <stream events...>, completed.
+    types = [e.event_type for e in events]
+    assert types[0] == "started"
+    assert types[-1] == "completed"
+    # The default fake script emits exactly one ``result`` line between
+    # the synthetic bookends.
+    assert "result" in types
 
 
-def test_task_writes_status_transitions(session: Session) -> None:
-    project = _make_project(session)
+def test_task_writes_status_transitions(session: Session, project_dir: Path) -> None:
+    project = _make_project(session, local_path=project_dir)
     task = _make_task(session, project, title="transitions")
 
     assert process_pending(session) == 1

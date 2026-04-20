@@ -1,24 +1,13 @@
-"""Executor pipeline — pure functions over a SQLAlchemy ``Session``.
+"""Executor pipeline — claim queued tasks and drive the Claude adapter.
 
-Three building blocks compose the pipeline:
+* ``claim_next_task`` atomically flips the oldest ``queued`` task to
+  ``running`` using ``BEGIN IMMEDIATE`` + conditional ``UPDATE``.
+* ``run_adapter`` creates the ``Run``, streams ``AdapterEvent`` rows into
+  ``run_events`` (one commit per event — see PR-V1-07 brief, batch is a
+  follow-up tunable), and finalizes run+task based on ``adapter.outcome``.
+* ``process_pending`` loops the two above until the queue is empty.
 
-1. ``claim_next_task`` atomically flips the oldest ``queued`` task to
-   ``running`` and returns it. "Atomic" here means safe against two
-   executor instances racing: SQLite has no ``SELECT ... FOR UPDATE``, so
-   we open a ``BEGIN IMMEDIATE`` transaction (which grabs the reserved
-   write lock) and issue an ``UPDATE ... WHERE id = ? AND status = 'queued'``
-   that affects zero rows when a competitor already won. Returning ``None``
-   in that case signals "nothing to claim".
-2. ``run_echo`` does the actual echo: create the ``Run``, skip the work,
-   mark the run ``completed``, transition the task ``running → done``, and
-   write the matching event rows. Everything happens inside the caller's
-   transaction so a partial failure rolls back the whole claim.
-3. ``process_pending`` drains the queue by calling the first two in a loop
-   until ``claim_next_task`` yields ``None``. One task = one transaction.
-
-Commits are owned by this module, not by the helpers in ``services/runs.py``
-and ``services/tasks.py``, because the brief demands that task transition
-and run creation land together or not at all.
+The adapter is pure subprocess + parse; this module owns every DB write.
 """
 
 from __future__ import annotations
@@ -30,40 +19,28 @@ from datetime import datetime, timezone
 from sqlalchemy import text, update
 from sqlalchemy.orm import Session
 
-from ..models import Run, Task, TaskEvent
-from ..services.runs import complete_run, create_run
+from ..adapters import (
+    AdapterEvent,
+    ClaudeCodeAdapter,
+    resolve_cli_path,
+    resolve_timeout,
+)
+from ..models import Project, Run, RunEvent, Task, TaskEvent
 
 
 logger = logging.getLogger("niwa.executor")
 
-ECHO_MODEL = "echo"
+ADAPTER_MODEL = "claude-code"
 
 
 def claim_next_task(session: Session) -> Task | None:
-    """Atomically take ownership of the oldest ``queued`` task.
+    """Atomically take ownership of the oldest ``queued`` task."""
 
-    Uses SQLite's ``BEGIN IMMEDIATE`` to grab the reserved write lock before
-    issuing the conditional ``UPDATE``. When another executor has already
-    flipped the target row, the ``UPDATE`` affects zero rows and we return
-    ``None``; the caller treats that as "queue empty for us".
-
-    The returned task is guaranteed to be in ``running`` state and belongs
-    to this session — safe to pass into ``run_echo`` directly.
-    """
-
-    # Close any prior implicit transaction so ``BEGIN IMMEDIATE`` is fresh.
-    # SQLAlchemy's autobegin would otherwise leave a deferred transaction in
-    # place and our explicit BEGIN would 400-out.
     if session.in_transaction():
         session.rollback()
-
-    # ``BEGIN IMMEDIATE`` upgrades this connection to a reserved lock right
-    # away — no other writer can slip in between the SELECT and the UPDATE.
     session.execute(text("BEGIN IMMEDIATE"))
 
     try:
-        # Pick the oldest queued task. FOR UPDATE is unavailable on SQLite;
-        # the reserved lock above is what guarantees exclusivity.
         row = session.execute(
             text(
                 "SELECT id FROM tasks WHERE status = 'queued' "
@@ -81,8 +58,6 @@ def claim_next_task(session: Session) -> Task | None:
             .values(status="running")
         )
         if result.rowcount == 0:
-            # A competing executor claimed it between the SELECT and the
-            # UPDATE. Treat as empty queue for this call.
             session.commit()
             return None
 
@@ -99,69 +74,147 @@ def claim_next_task(session: Session) -> Task | None:
         session.rollback()
         raise
 
-    # Reload the ORM object outside the transaction — this starts a new one.
-    task = session.get(Task, task_id)
-    return task
+    return session.get(Task, task_id)
 
 
-def run_echo(session: Session, task: Task) -> Run:
-    """Run the echo pipeline for ``task`` and commit the result.
+def run_adapter(session: Session, task: Task) -> Run:
+    """Drive the Claude adapter for ``task`` and persist every step.
 
-    Creates a ``Run`` in ``running``, immediately transitions it to
-    ``completed`` (no work), and flips the task to ``done``. Two run events
-    (``started``, ``completed``) and one task event (``running → done``)
-    are written in the same transaction.
+    Maps adapter outcomes to terminal state:
+
+    * ``cli_ok``            → run ``completed``, task ``done``.
+    * ``cli_nonzero_exit``  → run ``failed``, task ``failed``.
+    * ``cli_not_found``     → run ``failed``, task ``failed``.
+    * ``timeout``           → run ``failed``, task ``failed``.
+
+    Adapter exceptions surface as ``adapter_exception`` so the run never
+    sticks in ``running``.
     """
 
-    run = create_run(session, task.id, model=ECHO_MODEL, artifact_root="")
-    complete_run(session, run, exit_code=0, outcome="echo")
+    project = session.get(Project, task.project_id)
+    artifact_root = project.local_path if project is not None else ""
 
-    now = datetime.now(timezone.utc)
-    task.status = "done"
-    task.completed_at = now
-
-    session.add(
-        TaskEvent(
-            task_id=task.id,
-            kind="status_changed",
-            message=None,
-            payload_json=json.dumps({"from": "running", "to": "done"}),
-        )
+    run = Run(
+        task_id=task.id,
+        status="running",
+        model=ADAPTER_MODEL,
+        started_at=datetime.now(timezone.utc),
+        artifact_root=artifact_root,
     )
+    session.add(run)
+    session.flush()
+    session.add(RunEvent(run_id=run.id, event_type="started", payload_json=None))
     session.commit()
+
+    adapter = ClaudeCodeAdapter(
+        cli_path=resolve_cli_path(),
+        cwd=artifact_root or ".",
+        prompt=_build_prompt(task),
+        timeout=resolve_timeout(),
+    )
+
+    try:
+        try:
+            for event in adapter.iter_events():
+                _write_event(session, run, event)
+            adapter.wait()
+            outcome = adapter.outcome or "cli_ok"
+            exit_code = adapter.exit_code
+        except Exception as exc:  # noqa: BLE001 — must always settle the run
+            logger.exception("adapter crashed for task_id=%s", task.id)
+            outcome = "adapter_exception"
+            exit_code = None
+            session.add(
+                RunEvent(
+                    run_id=run.id,
+                    event_type="error",
+                    payload_json=json.dumps({"reason": str(exc)[:500]}),
+                )
+            )
+    finally:
+        # Guarantee the subprocess is reaped even if ``iter_events`` or
+        # ``_write_event`` raised before ``adapter.wait()`` ran — otherwise
+        # the ``Popen`` outlives the run and accumulates as a zombie in a
+        # long-running daemon.
+        adapter.close()
+
+    _finalize(session, task, run, outcome=outcome, exit_code=exit_code)
     session.refresh(run)
     return run
 
 
 def process_pending(session: Session) -> int:
-    """Drain every ``queued`` task currently visible to this session.
-
-    Returns the number of tasks processed. Stops on the first ``None`` from
-    ``claim_next_task`` — empty queue, or every claim lost the race. A
-    failing ``run_echo`` rolls back that one iteration and re-raises; the
-    loop does **not** swallow errors because the brief explicitly excludes
-    retry logic from this PR.
-    """
+    """Drain every ``queued`` task currently visible to this session."""
 
     processed = 0
     while True:
         task = claim_next_task(session)
         if task is None:
             break
-        try:
-            run_echo(session, task)
-        except Exception:
-            session.rollback()
-            logger.exception("echo run failed for task_id=%s", task.id)
-            raise
+        # ``run_adapter`` swallows adapter exceptions internally (see its
+        # try/except/finally), so nothing we handle here would ever fire.
+        run_adapter(session, task)
         processed += 1
-        logger.info("echoed task_id=%s", task.id)
+        logger.info("ran adapter for task_id=%s", task.id)
     return processed
 
 
-__all__ = [
-    "ECHO_MODEL",
-    "claim_next_task",
-    "process_pending",
-    "run_echo",
-]
+def _build_prompt(task: Task) -> str:
+    """Minimal prompt: title + description. System-prompt rules ship later."""
+
+    parts: list[str] = []
+    if task.title:
+        parts.append(f"# Task: {task.title}")
+    if task.description:
+        parts.append(task.description)
+    return "\n\n".join(parts) if parts else "Complete the assigned task."
+
+
+def _write_event(session: Session, run: Run, event: AdapterEvent) -> None:
+    session.add(
+        RunEvent(
+            run_id=run.id,
+            event_type=event.kind,
+            payload_json=json.dumps(event.payload),
+        )
+    )
+    session.commit()
+
+
+def _finalize(
+    session: Session,
+    task: Task,
+    run: Run,
+    *,
+    outcome: str,
+    exit_code: int | None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    success = outcome == "cli_ok" and (exit_code == 0)
+
+    run.finished_at = now
+    run.exit_code = exit_code
+    run.outcome = outcome
+    run.status = "completed" if success else "failed"
+
+    terminal = "completed" if success else "failed"
+    session.add(RunEvent(run_id=run.id, event_type=terminal, payload_json=None))
+
+    new_status = "done" if success else "failed"
+    from_status = task.status
+    task.status = new_status
+    if success:
+        task.completed_at = now
+
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": new_status}),
+        )
+    )
+    session.commit()
+
+
+__all__ = ["ADAPTER_MODEL", "claim_next_task", "process_pending", "run_adapter"]
