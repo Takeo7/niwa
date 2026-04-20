@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-05)
+## Layout actual (tras PR-V1-06b)
 
 ```
 v1/
@@ -35,11 +35,14 @@ v1/
 │   │   │   └── AppShell.tsx    # header + <Outlet/>
 │   │   ├── routes/             # route wrappers (ProjectsRoute,
 │   │   │                       # ProjectDetailRoute)
-│   │   └── features/projects/  # list, create modal, detail, hooks
+│   │   └── features/
+│   │       ├── projects/       # list, create modal, detail, hooks
+│   │       └── tasks/          # list, create modal, hooks (+ polling)
 │   ├── tests/                  # vitest + @testing-library/react
 │   │   ├── setup.ts            # jsdom matchMedia polyfill
 │   │   ├── renderWithProviders.tsx
-│   │   └── ProjectList.test.tsx
+│   │   ├── ProjectList.test.tsx
+│   │   └── TaskCreateModal.test.tsx
 │   ├── index.html
 │   ├── vite.config.ts          # proxy /api → :8000 + vitest config
 │   └── package.json
@@ -118,10 +121,11 @@ upgrade head`; la reversión es `alembic downgrade base`.
 - **Backend:** `cd v1/backend && pytest -q` (fixture `client` monta
   `TestClient` sobre `app.main:app`).
 - **Frontend:** `cd v1/frontend && npm test` (vitest + jsdom). Suite
-  actual: `tests/ProjectList.test.tsx` (2 casos: empty state y dos
-  tarjetas renderizadas). El helper `renderWithProviders` monta
-  `MantineProvider` + `QueryClientProvider` (retry=false) + `MemoryRouter`
-  para aislar los componentes del router/fetch global.
+  actual: 4 casos (`ProjectList.test.tsx` × 2 + `TaskCreateModal.test.tsx`
+  × 2). El helper `renderWithProviders` monta `MantineProvider` +
+  `QueryClientProvider` (retry=false) + `MemoryRouter` para aislar los
+  componentes del router/fetch global. Ver "Tests frontend" más abajo
+  para el detalle.
 
 ## API
 
@@ -267,8 +271,7 @@ declara rutas dentro de `shared/AppShell.tsx` (header "Niwa v1" +
   proyecto" que abre `ProjectCreateModal`. Empty state literal
   `"No projects yet"` (los tests dependen del string).
 - `/projects/:slug` → `features/projects/ProjectDetail.tsx` — nombre +
-  kind + placeholder de una línea para la futura lista de tareas
-  (PR-V1-06b).
+  kind + bloque de tareas (lista embebida + botón "Nueva tarea").
 
 `features/projects/api.ts` expone `useProjects`, `useProject(slug)` y
 `useCreateProject` sobre `/api/projects`; la mutation invalida
@@ -278,14 +281,44 @@ existe").
 El detalle de tarea (`/projects/:slug/tasks/:id`) y `/system` llegan en
 PRs posteriores (SPEC §7).
 
-### Proxy Vite → backend
+### Tasks UI (PR-V1-06b)
 
-`vite.config.ts` declara `server.proxy['/api'] → http://127.0.0.1:8000`.
-Así evitamos abrir CORS en FastAPI: el backend mantiene `127.0.0.1` sin
-CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
-`/api/...` que el dev server tunela.
+`features/tasks/` cuelga del detalle de proyecto con tres piezas:
 
-### Tests frontend
+- `TaskList.tsx` — tabla de tareas (título, badge de estado, fecha,
+  botón delete). Empty state literal `"No tasks yet"`. El color del
+  badge se mapea en un `STATUS_COLOR` local a `TaskList`, no en
+  `api.ts`, porque es pura decisión de render.
+- `TaskCreateModal.tsx` — modal Mantine con `title` (requerido,
+  1-200 chars) y `description` (textarea autosize, opcional). El
+  botón "Crear" está `disabled` hasta que `form.isValid("title")`
+  devuelve `true`; el submit hace `POST /api/projects/:slug/tasks`
+  vía `useCreateTask`, muestra toast y cierra el modal.
+- `features/tasks/api.ts` — hooks `useTasks(slug, { enablePolling })`,
+  `useCreateTask(slug)`, `useDeleteTask(slug)`.
+
+Reglas de la capa de datos:
+
+1. **Polling condicional.** `useTasks` pasa `refetchInterval` como
+   función del `QueryState`: devuelve `false` mientras `data` esté
+   `undefined` (cold start) o la lista no tenga ninguna tarea en
+   `queued|running|waiting_input`; devuelve `2000` ms cuando sí la
+   tiene. El helper puro `hasInFlightTask(tasks)` vive en
+   `src/api.ts` y lo comparten futuros consumidores (spinners, etc.).
+   La opción `enablePolling:false` está para permitir desactivar el
+   timer desde tests sin mockear el hook.
+2. **Create → refetch inmediato.** `useCreateTask` invalida
+   `["tasks", slug]` en `onSuccess`, no depende de la ventana de 2 s
+   del polling.
+3. **Delete con 409.** El botón solo se pinta para estados
+   `inbox|queued|done|failed|cancelled` (helper `isTaskActive` en
+   `src/api.ts`). Si el backend igualmente responde `409` (porque la
+   tarea transicionó a `running|waiting_input` entre render y click),
+   se muestra un toast legible y se invalida la query
+   (`onSettled`, tanto en success como error) para que la UI refleje
+   el estado real.
+
+### Tests frontend (actualizado)
 
 Vitest (jsdom). `tests/setup.ts` añade el polyfill de `matchMedia` que
 Mantine necesita. `tests/renderWithProviders.tsx` monta
@@ -293,12 +326,26 @@ Mantine necesita. `tests/renderWithProviders.tsx` monta
 `MemoryRouter`. El mock de `fetch` se hace con `vi.stubGlobal` — Vitest
 no pasa por el proxy.
 
+Suite actual (4 casos, 4 passed):
+
+- `ProjectList.test.tsx` — empty state y render de tarjetas.
+- `TaskCreateModal.test.tsx` — botón submit deshabilitado con título
+  vacío; submit válido llama `POST /api/projects/:slug/tasks` con el
+  payload esperado y dispara `onClose`.
+
+### Proxy Vite → backend
+
+`vite.config.ts` declara `server.proxy['/api'] → http://127.0.0.1:8000`.
+Así evitamos abrir CORS en FastAPI: el backend mantiene `127.0.0.1` sin
+CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
+`/api/...` que el dev server tunela.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-06b: tasks UI — lista, create modal, delete, polling del
-  estado dentro de `ProjectDetail`.
 - PR-V1-07+: adapter Claude Code real (Semana 2) que reemplaza
   `run_echo` y conecta el stream-json a la DB. El cuerpo del pipeline
-  (`claim_next_task` + `process_pending`) se mantiene.
+  (`claim_next_task` + `process_pending`) se mantiene. La UI de detalle
+  de tarea (`/projects/:slug/tasks/:id`) llega cuando haya stream real
+  que mostrar.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
