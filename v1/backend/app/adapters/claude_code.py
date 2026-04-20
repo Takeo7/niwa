@@ -7,6 +7,12 @@ Only stdlib. ``selectors`` makes the stdout read non-blocking so the
 global timeout can actually fire. stderr drains in a daemon thread into
 a bounded buffer (64 KB) to avoid a pipe-full deadlock.
 
+Known limitation: the prompt is written to the child's stdin in a single
+blocking ``write`` + ``close``. Prompts larger than the OS pipe buffer
+(~64 KB on Linux) can stall until the CLI starts draining. Today's MVP
+tasks are short enough that this is not a real risk, but callers
+generating mega-prompts should switch to a chunked writer.
+
 Outcomes: ``cli_ok``, ``cli_nonzero_exit``, ``cli_not_found``, ``timeout``.
 """
 
