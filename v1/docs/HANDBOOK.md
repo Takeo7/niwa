@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-07)
+## Layout actual (tras PR-V1-08)
 
 ```
 v1/
@@ -19,7 +19,8 @@ v1/
 │   │   ├── schemas/            # Pydantic v2 wire shapes
 │   │   ├── services/           # pure functions over Session
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
-│   │   ├── executor/           # daemon (polling, pipeline, CLI entrypoint)
+│   │   ├── executor/           # daemon (polling, pipeline, git workspace,
+│   │   │                       # CLI entrypoint)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -202,7 +203,8 @@ se mantiene idéntica a la de PR-V1-05: solo cambian las entrañas del
 ```
 app/executor/
 ├── __init__.py       # re-exports (claim_next_task, run_adapter, process_pending, run_forever)
-├── core.py           # pipeline puro sobre Session (usa ClaudeCodeAdapter)
+├── core.py           # pipeline puro sobre Session (usa ClaudeCodeAdapter + git_workspace)
+├── git_workspace.py  # prepare_task_branch + build_branch_name (PR-V1-08)
 ├── runner.py         # loop de polling (SessionLocal + sleep)
 └── __main__.py       # `python -m app.executor` (argparse: --once / --interval / --verbose)
 ```
@@ -221,10 +223,15 @@ app/executor/
      proyecto no existe, por ahora).
    - Crea `Run` en `running` con `model="claude-code"`,
      `started_at=now()`, `artifact_root=<project.local_path>`.
-   - Escribe `run_event` `started` y commitea — desde ese punto cada
-     `AdapterEvent` del stream-json se persiste como `run_event` con
-     su propio commit (batch por evento; afinar a batch por N eventos
-     es un tunable para un PR posterior).
+   - Escribe `run_event` `started` y commitea.
+   - **PR-V1-08:** llama `prepare_task_branch(local_path, task)` y
+     persiste `task.branch_name`. En `GitWorkspaceError` escribe
+     `run_event` `error` con `reason="git_setup_failed: ..."`,
+     finaliza con `outcome='git_setup_failed'` y **no** invoca al
+     adapter. Ver §"Git workspace (PR-V1-08)".
+   - Spawnea el adapter; cada `AdapterEvent` del stream-json se
+     persiste como `run_event` con su propio commit (batch por evento;
+     afinar a batch por N eventos es un tunable para un PR posterior).
    - Al terminar el stream, llama a `adapter.wait()` para cerrar el
      proceso y fijar `outcome` según `exit_code`.
    - Mapea `outcome` a estado terminal vía `_finalize`:
@@ -232,8 +239,9 @@ app/executor/
        `task.status='done'`, `task.completed_at=now()`, `run_event`
        `completed`.
      - cualquier otro outcome (`cli_nonzero_exit`, `cli_not_found`,
-       `timeout`, `adapter_exception`) → `run.status='failed'`,
-       `task.status='failed'`, `run_event` `failed`.
+       `timeout`, `adapter_exception`, `git_setup_failed`) →
+       `run.status='failed'`, `task.status='failed'`, `run_event`
+       `failed`.
    - Excepciones del adapter se capturan (nunca dejan el run en
      `running`): se escribe un `run_event` `error` con el mensaje y el
      outcome queda `adapter_exception`.
@@ -350,15 +358,45 @@ Cubre los 4 outcomes con combinaciones de args: stream normal + exit 0,
 stream + exit 1, no-existe (apuntando a path inválido), y prompt que
 duerme más que el timeout.
 
-### Nota de scope (PR-V1-08)
+## Git workspace (PR-V1-08)
 
-`run_adapter` hoy ejecuta el CLI con `cwd=project.local_path` **tal
-cual**, sin crear rama git ni sandbox. La creación/check-out de una
-rama de trabajo por task (`niwa/<task_id>-<slug>`) y el post-run
-git-aware (diff, commits, PR) viven en PR-V1-08. Hasta que ese PR
-aterrice, correr el executor sobre un repo real mutará el working
-tree actual del proyecto — los tests evitan esto apuntando
-`local_path` a directorios temporales.
+Antes de spawnear el adapter, `run_adapter` llama a
+`prepare_task_branch(project.local_path, task)` en
+`app/executor/git_workspace.py`: **cada task corre en su propia rama
+git**, aislando los cambios de Niwa de los del usuario.
+
+**Branch name** — `niwa/task-<task.id>-<slug>`, con slug puro
+(`build_branch_name(task)`): lowercase, `[^a-z0-9]+ → -`, strip `-`
+inicial/final, truncar a 30, fallback `untitled` si queda vacío. El
+brief trae un ejemplo con slug de 25 chars; la regla (30) es la fuente
+de verdad, la implementación aplica 30.
+
+**Invariantes** — el path debe ser un repo git
+(`git rev-parse --is-inside-work-tree`) con working tree limpio
+(`git status --porcelain` vacío). Sin stash automático: el usuario es
+responsable de dejar el repo limpio. Si la rama ya existe (reintento),
+se hace `git checkout` sin reset — los commits previos se preservan.
+
+**Flujo en `run_adapter`** — crea `Run` + `started`, llama
+`prepare_task_branch`. En éxito persiste `task.branch_name` y spawnea
+el adapter. En `GitWorkspaceError` escribe `RunEvent(error,
+reason="git_setup_failed: ...")`, finaliza con
+`outcome='git_setup_failed'`, `exit_code=None`, y **no invoca al
+adapter**. Outcomes posibles para `Run`: `cli_ok` /
+`cli_nonzero_exit` / `cli_not_found` / `timeout` /
+`adapter_exception` / `git_setup_failed`.
+
+**Fuera de scope** — no commit, no push, no PR, no GC de ramas. HEAD
+detached y submódulos: aceptable para MVP. Sin protección contra
+carrera usuario↔executor en la misma working tree (SPEC §2 asume uso
+monousuario).
+
+**Tests** — `tests/test_git_workspace.py` (5 cases) + fixture
+`git_project(tmp_path)` en `conftest.py` (repo con commit seed +
+`commit.gpgsign=false` local, algunos sandboxes fuerzan gpg) +
+`test_executor.py::test_runs_fail_on_git_setup_error` para el outcome
+end-to-end. `test_adapter.py` y `test_runs_api.py` migrados a
+`git_project`.
 
 ## Frontend
 

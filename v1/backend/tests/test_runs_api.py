@@ -42,14 +42,15 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture()
-def project_payload(tmp_path: Path) -> dict[str, Any]:
-    local = tmp_path / "demo_project"
-    local.mkdir()
+def project_payload(git_project: Path) -> dict[str, Any]:
+    """Reuse the shared ``git_project`` fixture so the executor's git
+    workspace prep (PR-V1-08) finds a real repo with a clean tree."""
+
     return {
         "slug": "demo",
         "name": "Demo",
         "kind": "library",
-        "local_path": str(local),
+        "local_path": str(git_project),
     }
 
 
