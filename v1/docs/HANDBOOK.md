@@ -27,11 +27,21 @@ v1/
 │   └── pyproject.toml
 ├── frontend/                   # React 19 + Vite + Mantine v7
 │   ├── src/
-│   │   ├── main.tsx            # MantineProvider + React Query
-│   │   ├── App.tsx             # landing
-│   │   └── api.ts              # fetch wrapper a /api
+│   │   ├── main.tsx            # MantineProvider + Notifications +
+│   │   │                       # QueryClient + BrowserRouter
+│   │   ├── App.tsx             # <Routes> → / and /projects/:slug
+│   │   ├── api.ts              # apiFetch + wire types
+│   │   ├── shared/
+│   │   │   └── AppShell.tsx    # header + <Outlet/>
+│   │   ├── routes/             # route wrappers (ProjectsRoute,
+│   │   │                       # ProjectDetailRoute)
+│   │   └── features/projects/  # list, create modal, detail, hooks
+│   ├── tests/                  # vitest + @testing-library/react
+│   │   ├── setup.ts            # jsdom matchMedia polyfill
+│   │   ├── renderWithProviders.tsx
+│   │   └── ProjectList.test.tsx
 │   ├── index.html
-│   ├── vite.config.ts          # proxy /api → :8000
+│   ├── vite.config.ts          # proxy /api → :8000 + vitest config
 │   └── package.json
 ├── data/                       # SQLite dev DB vive aquí
 ├── docs/
@@ -107,8 +117,11 @@ upgrade head`; la reversión es `alembic downgrade base`.
 
 - **Backend:** `cd v1/backend && pytest -q` (fixture `client` monta
   `TestClient` sobre `app.main:app`).
-- **Frontend:** `cd v1/frontend && npm test` (vitest + jsdom, aún sin
-  tests en PR-V1-01 — suite vacía pasa con "no tests found").
+- **Frontend:** `cd v1/frontend && npm test` (vitest + jsdom). Suite
+  actual: `tests/ProjectList.test.tsx` (2 casos: empty state y dos
+  tarjetas renderizadas). El helper `renderWithProviders` monta
+  `MantineProvider` + `QueryClientProvider` (retry=false) + `MemoryRouter`
+  para aislar los componentes del router/fetch global.
 
 ## API
 
@@ -237,9 +250,54 @@ con `datetime.now(timezone.utc)` desde `services/runs.py` — **no** con
 `func.now()`. SQLite `CURRENT_TIMESTAMP` es de granularidad 1 s y los
 tests (y el ordering futuro de runs) necesitan microsegundos.
 
+## Frontend
+
+React 19 + Vite + Mantine v7 + TanStack Query + React Router 7. No hay
+state manager global: React Query hace de caché servidor-side y Mantine
+maneja el UI state (forms, modals, notifs).
+
+### Shell y rutas (PR-V1-06a)
+
+`src/main.tsx` monta de fuera a dentro: `MantineProvider` →
+`Notifications` → `QueryClientProvider` → `BrowserRouter`. `App.tsx`
+declara rutas dentro de `shared/AppShell.tsx` (header "Niwa v1" +
+`<Outlet/>`):
+
+- `/` → `features/projects/ProjectList.tsx` — cards + botón "Nuevo
+  proyecto" que abre `ProjectCreateModal`. Empty state literal
+  `"No projects yet"` (los tests dependen del string).
+- `/projects/:slug` → `features/projects/ProjectDetail.tsx` — nombre +
+  kind + placeholder de una línea para la futura lista de tareas
+  (PR-V1-06b).
+
+`features/projects/api.ts` expone `useProjects`, `useProject(slug)` y
+`useCreateProject` sobre `/api/projects`; la mutation invalida
+`["projects"]` al ganar y notifica éxito/error (409 → "el slug ya
+existe").
+
+El detalle de tarea (`/projects/:slug/tasks/:id`) y `/system` llegan en
+PRs posteriores (SPEC §7).
+
+### Proxy Vite → backend
+
+`vite.config.ts` declara `server.proxy['/api'] → http://127.0.0.1:8000`.
+Así evitamos abrir CORS en FastAPI: el backend mantiene `127.0.0.1` sin
+CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
+`/api/...` que el dev server tunela.
+
+### Tests frontend
+
+Vitest (jsdom). `tests/setup.ts` añade el polyfill de `matchMedia` que
+Mantine necesita. `tests/renderWithProviders.tsx` monta
+`MantineProvider` + `QueryClientProvider` (retry=false) +
+`MemoryRouter`. El mock de `fetch` se hace con `vi.stubGlobal` — Vitest
+no pasa por el proxy.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-06+: adapter Claude Code real (Semana 2) que reemplaza
+- PR-V1-06b: tasks UI — lista, create modal, delete, polling del
+  estado dentro de `ProjectDetail`.
+- PR-V1-07+: adapter Claude Code real (Semana 2) que reemplaza
   `run_echo` y conecta el stream-json a la DB. El cuerpo del pipeline
   (`claim_next_task` + `process_pending`) se mantiene.
 
