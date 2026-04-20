@@ -1,10 +1,12 @@
 """Unit tests for the Claude Code adapter + executor integration (PR-V1-07).
 
-Every test drives ``process_pending`` against a real subprocess — the fake
+Most tests drive ``process_pending`` against a real subprocess — the fake
 Claude CLI in ``tests/fixtures/fake_claude_cli.py`` emits the exact
 stream-json lines the real ``claude`` CLI would emit, so nothing mocks
-``subprocess`` itself. The four cases track the outcomes declared in the
-brief: happy path, non-zero exit, malformed JSON line, and missing binary.
+``subprocess`` itself. The four brief-declared outcomes (happy path,
+non-zero exit, malformed JSON line, missing binary) are complemented by
+two ``close()`` tests that guard the mid-stream cleanup path added as a
+codex-review fix-up.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.adapters import ClaudeCodeAdapter
 from app.executor.core import process_pending
 from app.models import Base, Project, Run, RunEvent, Task
 
@@ -233,3 +236,75 @@ def test_adapter_binary_missing_fails_fast(
     run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.status == "failed"
     assert run.outcome == "cli_not_found"
+
+
+def test_adapter_close_terminates_subprocess_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``close()`` must reap the Popen even if ``iter_events`` was abandoned.
+
+    Simulates the blocker-2 path: the executor loop raised mid-stream (e.g.
+    SQLite locked during a per-event commit) so ``wait()`` never ran. The
+    ``finally: adapter.close()`` in ``run_adapter`` is the safety net.
+    """
+
+    # Script with a sleep between lines so the CLI is still running when we
+    # break out of iter_events. 50 ms/line × 5 lines = 250 ms of runway.
+    script = tmp_path / "script.jsonl"
+    script.write_text(
+        "\n".join(
+            json.dumps({"type": "assistant", "message": {"content": f"x{i}"}})
+            for i in range(5)
+        )
+        + "\n"
+    )
+    cli = _fake_cli_cmd()
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", cli)
+    monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
+    monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+    monkeypatch.setenv("FAKE_CLAUDE_DELAY_MS", "50")
+
+    adapter = ClaudeCodeAdapter(
+        cli_path=cli,
+        cwd=str(tmp_path),
+        prompt="hi",
+        timeout=30.0,
+    )
+
+    events = adapter.iter_events()
+    # Pull one event, then walk away — mimics an exception mid-stream.
+    first = next(events)
+    assert first.kind == "assistant"
+
+    proc = adapter._proc  # internal, but the whole point of the test
+    assert proc is not None
+    assert proc.poll() is None, "precondition: child still running"
+
+    adapter.close()
+    assert proc.poll() is not None, "close() must reap the subprocess"
+
+    # Second call must not raise and must not block.
+    adapter.close()
+
+
+def test_adapter_close_is_safe_when_spawn_never_happened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``close()`` on an adapter whose CLI was missing must be a no-op."""
+
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "nope"))
+    adapter = ClaudeCodeAdapter(
+        cli_path=str(tmp_path / "nope"),
+        cwd=str(tmp_path),
+        prompt="hi",
+        timeout=5.0,
+    )
+    # Drain iter_events so the "cli_not_found" outcome is set without spawn.
+    list(adapter.iter_events())
+    assert adapter.outcome == "cli_not_found"
+
+    # No Popen → close() must still be safe.
+    adapter.close()
+    adapter.close()
