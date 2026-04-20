@@ -5,16 +5,34 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-06b
+pr_merged: PR-V1-07
 date: 2026-04-20
 week: 2
-next_pr: PR-V1-07
-week_status: week-1.5-complete-awaiting-approval-for-week-2
+next_pr: PR-V1-08
+week_status: week-2-in-progress
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-07 (Claude Code adapter with stream-json
+  parser) mergeado en `v1` vía squash (#110). Backend `pytest -q`
+  → **50 passed** (+6 nuevos: 4 adapter + 2 regression close()).
+  Frontend 4 sin cambios. **925 LOC netas** — hard-cap 400 superado
+  a 700 inicial + 118 de fix-ups tras codex; aceptado vía **opción
+  A** por el humano (brief internamente inconsistente: 4 tests
+  declarados como pipeline end-to-end obligan a migrar executor +
+  test_runs_api en el mismo PR). Arranca Semana 2 del SPEC §9:
+  `run_echo` sustituido por `run_adapter` que spawnea `claude -p
+  --output-format stream-json --verbose` con `selectors` +
+  stderr-drain-thread + `close()` idempotente (terminate → join →
+  wait). Fake CLI fixture sin deps nuevas (stdlib puro). Codex
+  primera pasada: 2 majors tratados como blockers (adapter sin
+  args stream-json, zombies en excepción); ambos resueltos con
+  fix commits + regression tests en la misma rama antes del
+  merge. 2 minors: docstring sobre stdin bloqueante y dead code
+  en `process_pending` limpiados. **Fuera de scope (sigue en
+  08/09/10):** rama git `niwa/<slug>`, SSE endpoint, UI de stream.
 - **2026-04-20** — PR-V1-06b (UI tasks list + create + delete +
   polling) mergeado en `v1` vía squash (#109). Frontend `npm test
   -- --run` → 4 passed (+2 nuevos sobre 06a). 571 LOC sin lockfile,
