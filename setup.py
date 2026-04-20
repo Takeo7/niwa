@@ -1830,6 +1830,16 @@ def _write_install_config(cfg: WizardConfig) -> None:
         scope = "launchd"
     else:
         scope = "system" if os.getuid() == 0 else "user"
+    # PR-B: app container/image identity so the updater can run
+    # ``docker inspect`` / ``--force-recreate`` against the exact
+    # names the installer tagged. The compose template uses
+    # ``${INSTANCE_NAME}-app[:${NIWA_VERSION}]``; INSTANCE_NAME is
+    # currently hardcoded to ``niwa`` (see env_vars above) but the
+    # updater reads these keys instead of duplicating that
+    # assumption.
+    instance_name = "niwa"
+    app_container_name = f"{instance_name}-app"
+    app_image_ref = f"{instance_name}-app:{NIWA_VERSION}"
     config = {
         "install_version": NIWA_VERSION,
         "install_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1838,6 +1848,8 @@ def _write_install_config(cfg: WizardConfig) -> None:
             "executor": "niwa-executor.service",
             "hosting": "niwa-hosting.service",
         },
+        "app_container_name": app_container_name,
+        "app_image_ref": app_image_ref,
         "compose_file": str(cfg.niwa_home / "docker-compose.yml"),
         "db_path": str(cfg.db_path),
         "install_dir": str(cfg.niwa_home),

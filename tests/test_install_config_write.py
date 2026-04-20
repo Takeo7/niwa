@@ -118,7 +118,8 @@ def test_written_config_has_expected_keys(tmp_path, monkeypatch):
     setup._write_install_config(_fake_cfg(niwa_home, executor_enabled=True))
     config = _read_config(niwa_home)
     assert {"install_version", "install_timestamp", "systemd_scope",
-            "systemd_units", "compose_file", "db_path",
+            "systemd_units", "app_container_name", "app_image_ref",
+            "compose_file", "db_path",
             "install_dir", "repo_path"} <= set(config)
     assert config["systemd_units"] == {
         "executor": "niwa-executor.service",
@@ -126,3 +127,20 @@ def test_written_config_has_expected_keys(tmp_path, monkeypatch):
     }
     assert config["compose_file"] == str(niwa_home / "docker-compose.yml")
     assert config["install_dir"] == str(niwa_home)
+
+
+def test_written_config_app_identity_matches_compose_template(tmp_path, monkeypatch):
+    # PR-B regression guard: the updater reads these to locate the
+    # container and image. Must match what the compose template
+    # renders (``${INSTANCE_NAME}-app`` and
+    # ``${INSTANCE_NAME}-app:${NIWA_VERSION}``). INSTANCE_NAME is
+    # hardcoded to ``niwa`` in setup.py; changing that requires
+    # mirroring here.
+    niwa_home = tmp_path / ".niwa"
+    niwa_home.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    setup._write_install_config(_fake_cfg(niwa_home, executor_enabled=True))
+    config = _read_config(niwa_home)
+    assert config["app_container_name"] == "niwa-app"
+    assert config["app_image_ref"] == f"niwa-app:{setup.NIWA_VERSION}"
