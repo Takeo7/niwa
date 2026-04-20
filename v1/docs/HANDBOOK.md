@@ -189,6 +189,85 @@ Schema en `app/schemas/run.py`. `RunRead` expone las columnas de la tabla
 `runs`. Los runs los crea el executor; no hay `POST /runs` (y no lo habrá:
 lanzar un run = crear/encolar una task).
 
+### SSE run events (PR-V1-09)
+
+| Method | Path                            | Return                                      |
+|--------|---------------------------------|---------------------------------------------|
+| GET    | `/api/runs/{run_id}/events`     | `200` + `text/event-stream` (SSE); `404` JSON si `run_id` no existe |
+
+Transporte unidireccional server→client para que la UI (PR-V1-10) pinte
+el stream del adapter en vivo sin polling del CRUD. La implementación
+vive en `app/api/runs.py` (router) y `app/services/run_events.py`
+(helpers puros + lectores sobre `Session`).
+
+**Formato de cada frame (evento histórico o nuevo):**
+
+```
+id: <run_event.id>
+event: <run_event.event_type>
+data: {"id": 42, "event_type": "assistant", "payload": {...}, "created_at": "2026-..."}
+```
+
+`payload_json` de DB se parsea con `json.loads` antes de re-dumpearlo
+dentro de `data`, así el cliente recibe un objeto JSON y no una string
+escapada.
+
+**Terminación (`eos`):** cuando `Run.status` llega a
+`completed|failed|cancelled`, el stream emite un último frame y cierra:
+
+```
+event: eos
+data: {"run_id": 7, "final_status": "completed", "exit_code": 0, "outcome": "cli_ok"}
+```
+
+Antes del `eos` se drenan los eventos pendientes (por si alguno aterrizó
+entre el snapshot del estado y la comprobación de terminalidad), así
+ningún `run_event` se pierde.
+
+**Comportamiento runs terminales vs vivos:**
+
+- **Terminal** (run ya `completed|failed|cancelled`): emite los
+  históricos + `eos` en un solo pase, sin polling.
+- **Vivo** (`running`): emite los históricos, luego tail-polls cada
+  200 ms (`await asyncio.sleep(0.2)`, no busy-loop) leyendo
+  `WHERE id > last_emitted_id ORDER BY id ASC`. Cierra con `eos`
+  cuando el estado transiciona a terminal.
+
+**Heartbeat:** cada ~15 s (75 iteraciones del tail × 200 ms) emite
+`: heartbeat\n\n` — comentario SSE ignorado por `EventSource` pero
+mantiene el keep-alive vivo a través de proxies.
+
+**Sessions SQLAlchemy.** El proyecto usa `Session` sincrono; el generator
+async no mantiene una sesión abierta. Cada poll abre una sesión
+corta-vida vía `_open_session(request)` (honra
+`app.dependency_overrides`, así los tests inyectan la DB in-memory) y la
+cierra inmediatamente. Las queries corren bajo `asyncio.to_thread` para
+no bloquear el event loop.
+
+**Orden monotónico.** El tail usa `id > last_id` en lugar de `created_at`
+para garantizar orden estable aunque dos eventos compartan timestamp
+(SQLite con granularidad de segundo).
+
+**404.** Si `run_id` no existe, la respuesta es `404` JSON
+(`{"detail": "Run not found"}`) **antes** de iniciar el stream — el
+cliente nunca ve un `200` con SSE vacío.
+
+**Headers:** `Content-Type: text/event-stream`, `Cache-Control:
+no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no` (hint a
+nginx; inofensivo si no hay proxy delante).
+
+**Límites conocidos** (aceptados por el MVP):
+
+- **Sin paginación.** El histórico completo se emite antes del tail;
+  para runs de miles de eventos puede tardar. Follow-up si duele.
+- **Sin cancel desde UI.** Solo se observa; cancelar runs vivos
+  requiere protocolo adapter↔executor que no existe todavía.
+- **Sin resume / `waiting_input`.** Clarification round-trip es
+  Semana 5.
+- **Client disconnect.** Se comprueba `request.is_disconnected()` en
+  cada iteración del tail; en el pase histórico inicial el runtime
+  cerrará el task cuando el cliente desconecte.
+
 ## Executor
 
 Un único proceso Python que drena `tasks.status='queued'`. Desde PR-V1-07
