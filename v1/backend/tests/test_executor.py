@@ -1,10 +1,13 @@
-"""Unit tests for the adapter-driven executor (PR-V1-07).
+"""Unit tests for the adapter-driven executor (PR-V1-07, PR-V1-08).
 
-The seven cases below were originally written against the PR-V1-05 echo
-pipeline. PR-V1-07 replaces the echo with the real adapter, so they now
-point ``NIWA_CLAUDE_CLI`` at the fake CLI in ``tests/fixtures`` and emit a
-single ``result`` event per task — enough to exercise the happy path
-without spawning a real ``claude`` binary.
+PR-V1-07 replaced the echo with the real adapter path; PR-V1-08 layers
+``prepare_task_branch`` on top so every task runs on a
+``niwa/task-<id>-<slug>`` branch. The happy-path cases now use the
+``git_project`` fixture (see ``conftest.py``) — a real git repo with one
+seed commit — and assert ``task.branch_name`` is persisted before the
+adapter spawns. The new ``test_runs_fail_on_git_setup_error`` pins the
+failure path: a non-git ``local_path`` must terminate the task ``failed``
+without the adapter ever running.
 
 The race test still spins up two threads on the same DB; it does not
 launch subprocesses (the contention happens inside
@@ -25,6 +28,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.executor.core import claim_next_task, process_pending
+from app.executor.git_workspace import build_branch_name
 from app.models import Base, Project, Run, RunEvent, Task, TaskEvent
 
 
@@ -52,21 +56,6 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
-
-
-@pytest.fixture()
-def project_dir(tmp_path: Path) -> Path:
-    """A real directory on disk for ``project.local_path``.
-
-    The adapter spawns the CLI with ``cwd=project.local_path``; a
-    nonexistent path raises ``FileNotFoundError`` before we reach the
-    stream parser, which is out of scope for these tests (covered
-    explicitly in ``test_adapter.py::test_adapter_binary_missing_fails_fast``).
-    """
-
-    d = tmp_path / "project"
-    d.mkdir()
-    return d
 
 
 @pytest.fixture()
@@ -139,8 +128,8 @@ def test_process_pending_nothing_to_do(session: Session) -> None:
     assert process_pending(session) == 0
 
 
-def test_process_pending_single_task(session: Session, project_dir: Path) -> None:
-    project = _make_project(session, local_path=project_dir)
+def test_process_pending_single_task(session: Session, git_project: Path) -> None:
+    project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="only one")
 
     assert process_pending(session) == 1
@@ -153,6 +142,8 @@ def test_process_pending_single_task(session: Session, project_dir: Path) -> Non
     assert refreshed.completed_at.tzinfo is None or isinstance(
         refreshed.completed_at, datetime
     )
+    # PR-V1-08: the branch name is persisted before the adapter spawns.
+    assert refreshed.branch_name == build_branch_name(task)
 
     runs = session.query(Run).filter(Run.task_id == task.id).all()
     assert len(runs) == 1
@@ -164,8 +155,8 @@ def test_process_pending_single_task(session: Session, project_dir: Path) -> Non
     assert run.finished_at is not None
 
 
-def test_process_pending_multiple_tasks(session: Session, project_dir: Path) -> None:
-    project = _make_project(session, local_path=project_dir)
+def test_process_pending_multiple_tasks(session: Session, git_project: Path) -> None:
+    project = _make_project(session, local_path=git_project)
     first = _make_task(session, project, title="first")
     second = _make_task(session, project, title="second")
     third = _make_task(session, project, title="third")
@@ -214,8 +205,8 @@ def test_process_pending_skips_non_queued(session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_writes_expected_events(session: Session, project_dir: Path) -> None:
-    project = _make_project(session, local_path=project_dir)
+def test_run_writes_expected_events(session: Session, git_project: Path) -> None:
+    project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="events")
 
     assert process_pending(session) == 1
@@ -236,8 +227,8 @@ def test_run_writes_expected_events(session: Session, project_dir: Path) -> None
     assert "result" in types
 
 
-def test_task_writes_status_transitions(session: Session, project_dir: Path) -> None:
-    project = _make_project(session, local_path=project_dir)
+def test_task_writes_status_transitions(session: Session, git_project: Path) -> None:
+    project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="transitions")
 
     assert process_pending(session) == 1
@@ -310,3 +301,61 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
         final = s.get(Task, task_id)
         assert final is not None
         assert final.status == "running"
+
+
+# ---------------------------------------------------------------------------
+# Git workspace failure — non-git local_path (PR-V1-08)
+# ---------------------------------------------------------------------------
+
+
+def test_runs_fail_on_git_setup_error(
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-git ``local_path`` must fail the task before the adapter spawns.
+
+    The fake CLI is re-pointed at a path that does not exist; if the
+    executor ever reached the adapter, it would bubble up as
+    ``cli_not_found`` instead of the expected ``git_setup_failed`` and
+    this test would catch it.
+    """
+
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
+
+    plain = tmp_path / "no-git-here"
+    plain.mkdir()
+    project = _make_project(session, local_path=plain)
+    task = _make_task(session, project, title="needs git")
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.branch_name is None
+
+    runs = session.query(Run).filter(Run.task_id == task.id).all()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == "failed"
+    assert run.outcome == "git_setup_failed"
+    # Adapter was never spawned: no exit code, no ``started`` event from
+    # the CLI (we still write the synthetic ``started`` bookend before
+    # trying the git setup — the diagnostic signal is the missing
+    # stream events and the terminal ``error``).
+    assert run.exit_code is None
+
+    events = (
+        session.query(RunEvent)
+        .filter(RunEvent.run_id == run.id)
+        .order_by(RunEvent.id.asc())
+        .all()
+    )
+    types = [e.event_type for e in events]
+    # No ``result`` / ``assistant`` / ``tool_use`` from the CLI stream —
+    # just the executor's own bookends plus the error payload.
+    assert "result" not in types
+    error_events = [e for e in events if e.event_type == "error"]
+    assert error_events, "expected an error event on git_setup_failed"
+    payload = json.loads(error_events[0].payload_json or "{}")
+    assert "git_setup_failed" in payload.get("reason", "")
