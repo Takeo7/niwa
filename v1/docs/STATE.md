@@ -5,16 +5,35 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-05
+pr_merged: PR-V1-06b
 date: 2026-04-20
-week: 1
-next_pr: PR-V1-06
-week_status: week-1-complete-awaiting-approval
+week: 2
+next_pr: PR-V1-07
+week_status: week-1.5-complete-awaiting-approval-for-week-2
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-06b (UI tasks list + create + delete +
+  polling) mergeado en `v1` vía squash (#109). Frontend `npm test
+  -- --run` → 4 passed (+2 nuevos sobre 06a). 571 LOC sin lockfile,
+  bajo hard-cap 600. Completa la segunda mitad del PR-V1-06
+  original: `TaskList` embebido en `ProjectDetail`,
+  `TaskCreateModal`, delete con `409` toast, `refetchInterval`
+  gated por `hasInFlightTask`. Codex: LGTM sin hallazgos. Cero
+  backend tocado, cero deps nuevas.
+- **2026-04-20** — PR-V1-06a (UI shell + routing + projects CRUD)
+  mergeado en `v1` vía squash (#108). Frontend `npm test -- --run`
+  → 2 passed (+2 nuevos desde 0). 524 LOC sin lockfile, bajo
+  hard-cap 600. Primera mitad del PR-V1-06 original tras split:
+  Mantine shell, React Router, React Query, Notifications, 3 deps
+  pre-aprobadas (`@mantine/form`, `@mantine/notifications`,
+  `@tabler/icons-react`), Vite proxy `/api → :8000`, rutas `/` y
+  `/projects/:slug`. Codex: LGTM sin hallazgos.
+- **2026-04-20** — PR-V1-06 original (UI mínima combinada) marcado
+  **superseded** por 06a+06b al exceder el hard-cap 600 LOC (scope
+  combinado ≈1000 LOC). Split acordado con el humano.
 - **2026-04-20** — PR-V1-05 (Executor echo daemon) mergeado en `v1`
   vía squash (#107). Backend `pytest -q` → 44 passed (+10 nuevos: 7
   executor + 3 runs API). Cierra Semana 1 del SPEC: pipeline E2E
