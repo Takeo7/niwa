@@ -196,25 +196,29 @@ def test_run_event_fk(session: Session) -> None:
     session.rollback()
 
 
-def test_alembic_upgrade_creates_tables(tmp_path: Path) -> None:
-    """Run ``alembic upgrade head`` against a temp DB and inspect the schema."""
+EXPECTED_TABLES = {"projects", "tasks", "task_events", "runs", "run_events"}
+INITIAL_REVISION = "9d205b6968c1"
+
+
+def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:
+    """Invoke ``alembic upgrade head`` against ``db_path`` in a subprocess.
+
+    Uses ``-x db_url=...`` so ``env.py`` ignores the dev DB and writes the
+    schema to the temp file. ``NIWA_CONFIG`` is pointed at a non-existent path
+    so ``load_settings`` still falls back to defaults if the override ever
+    regresses — the subprocess must never touch ``v1/data/niwa-v1.sqlite3``.
+    """
 
     backend_dir = Path(__file__).resolve().parents[1]
-    db_path = tmp_path / "alembic-smoke.sqlite3"
-    url = f"sqlite:///{db_path}"
-
     env = os.environ.copy()
-    # Point NIWA_CONFIG at a non-existent path so load_settings falls back to
-    # defaults, and override the Alembic URL via -x to decouple from dev DB.
     env["NIWA_CONFIG"] = str(tmp_path / "no-config.toml")
-
-    result = subprocess.run(
+    return subprocess.run(
         [
             sys.executable,
             "-m",
             "alembic",
             "-x",
-            f"db_url={url}",
+            f"db_url=sqlite:///{db_path}",
             "upgrade",
             "head",
         ],
@@ -225,23 +229,43 @@ def test_alembic_upgrade_creates_tables(tmp_path: Path) -> None:
         text=True,
     )
 
+
+def test_alembic_upgrade_creates_tables(tmp_path: Path) -> None:
+    """Run ``alembic upgrade head`` against a temp DB and inspect the output."""
+
+    db_path = tmp_path / "alembic-smoke.sqlite3"
+    result = _run_alembic_upgrade(tmp_path, db_path)
+    assert result.returncode == 0, result.stderr
+    assert db_path.is_file(), "alembic did not create the target DB file"
+
+    # Verify the migration artefact itself — do NOT fall back to create_all,
+    # otherwise a broken migration would still appear green.
+    with sqlite3.connect(db_path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert EXPECTED_TABLES.issubset(names), (
+        f"migration did not create expected tables; got {names}"
+    )
+
+
+def test_alembic_upgrade_records_expected_revision(tmp_path: Path) -> None:
+    """After ``upgrade head``, ``alembic_version`` must pin the initial rev.
+
+    This is the negative-case partner to ``test_alembic_upgrade_creates_tables``:
+    if the migration ever stops applying cleanly or the revision id drifts,
+    the check below must fail — guarding against false-green regressions.
+    """
+
+    db_path = tmp_path / "alembic-revision.sqlite3"
+    result = _run_alembic_upgrade(tmp_path, db_path)
     assert result.returncode == 0, result.stderr
 
-    # The migration uses the engine URL from env.py (dev DB), so we also verify
-    # that Base.metadata still declares exactly the five SPEC §3 tables — the
-    # contract this test guards.
-    expected = {"projects", "tasks", "task_events", "runs", "run_events"}
-    assert expected.issubset(set(Base.metadata.tables.keys()))
-
-    # And that the migration file itself creates those five tables when run
-    # against a fresh SQLite (via Base.metadata.create_all, which mirrors what
-    # the migration emits).
-    check_engine = create_engine(url, future=True)
-    Base.metadata.create_all(check_engine)
-    with check_engine.connect() as conn:
-        rows = conn.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).all()
-    names = {r[0] for r in rows}
-    assert expected.issubset(names)
-    check_engine.dispose()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchall()
+    assert rows == [(INITIAL_REVISION,)], rows
