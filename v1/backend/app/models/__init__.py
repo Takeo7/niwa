@@ -6,7 +6,7 @@ Alembic's ``env.py`` can import ``app.models`` and pick up the full metadata.
 
 from __future__ import annotations
 
-from app.db import Base
+from ..db import Base
 
 from .project import Project
 from .task import Task
