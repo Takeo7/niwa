@@ -1,7 +1,7 @@
 """FastAPI entrypoint for Niwa v1.
 
-Exposes only ``/api/health`` in this PR; CRUD and executor wiring arrive in
-later PRs per the SPEC §9 milestones.
+Mounts ``/api/health`` plus the resource routers registered by
+``app.api.api_router`` (projects today, tasks/runs in future PRs).
 """
 
 from __future__ import annotations
@@ -9,8 +9,10 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from . import __version__
+from .api import api_router
 
 app = FastAPI(title="Niwa v1", version=__version__)
+app.include_router(api_router)
 
 
 @app.get("/api/health")
