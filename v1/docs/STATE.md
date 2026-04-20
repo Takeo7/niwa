@@ -5,15 +5,23 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-02
+pr_merged: PR-V1-03
 date: 2026-04-20
 week: 1
-next_pr: PR-V1-03
+next_pr: PR-V1-04
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-03 (Projects CRUD API) mergeado en `v1` vía
+  squash (#105). Backend `pytest -q` → 22 passed (+11 nuevos). 5
+  endpoints REST bajo `/api/projects`, schemas Pydantic v2 con
+  validación de `slug`/`deploy_port`, service layer thin, `409` en
+  slug duplicado, fixture con engine in-memory aislado por test.
+  Codex: 1 `minor` (resolución de `updated_at` en `test_patch_project`,
+  1 s de granularidad hace el assert `>=` trivial); no-blocker,
+  follow-up si regresa.
 - **2026-04-20** — PR-V1-02 (Data models + initial Alembic migration)
   mergeado en `v1` vía squash (#104). Backend `pytest -q` → 11 passed
   (1 health + 10 modelos). Codex-reviewer marcó 3 `major` + 1 `minor`
