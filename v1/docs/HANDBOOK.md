@@ -5,17 +5,20 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-02)
+## Layout actual (tras PR-V1-03)
 
 ```
 v1/
 ├── backend/                    # FastAPI app (Python 3.11+)
 │   ├── app/
 │   │   ├── __init__.py         # __version__
-│   │   ├── main.py             # FastAPI factory, /api/health
+│   │   ├── main.py             # FastAPI factory, /api/health, api_router
 │   │   ├── config.py           # ~/.niwa/config.toml loader
 │   │   ├── db.py               # SQLAlchemy engine + Base + FK PRAGMA
-│   │   └── models/             # ORM models (SPEC §3)
+│   │   ├── models/             # ORM models (SPEC §3)
+│   │   ├── schemas/            # Pydantic v2 wire shapes
+│   │   ├── services/           # pure functions over Session
+│   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
 │   │   └── versions/           # initial_schema (9d205b6968c1)
@@ -106,9 +109,34 @@ upgrade head`; la reversión es `alembic downgrade base`.
 - **Frontend:** `cd v1/frontend && npm test` (vitest + jsdom, aún sin
   tests en PR-V1-01 — suite vacía pasa con "no tests found").
 
+## API
+
+Las rutas HTTP se montan bajo `/api` desde `app/api/__init__.py`. Cada
+recurso tiene su propio módulo (un `APIRouter`) que re-exporta
+`router`; el router raíz `api_router` los incluye. La dependencia
+compartida `get_session` vive en `app/api/deps.py` y los tests la
+sobrescriben vía `app.dependency_overrides` para inyectar una DB
+aislada en memoria.
+
+### `projects`
+
+| Method | Path                       | Return                     |
+|--------|----------------------------|----------------------------|
+| GET    | `/api/projects`            | `200` + `list[ProjectRead]`, orden `created_at` ASC |
+| POST   | `/api/projects`            | `201` + `ProjectRead`; `409` si `slug` duplicado; `422` si payload inválido |
+| GET    | `/api/projects/{slug}`     | `200` + `ProjectRead`; `404` si no existe |
+| PATCH  | `/api/projects/{slug}`     | `200` + `ProjectRead`; `422` si se intenta tocar `slug`; `404` si no existe |
+| DELETE | `/api/projects/{slug}`     | `204` sin cuerpo; `404` si no existe |
+
+Schemas en `app/schemas/project.py`. `slug` valida `^[a-z0-9-]+$`,
+3-40 chars; `kind` ∈ `{web-deployable, library, script}`;
+`autonomy_mode` ∈ `{safe, dangerous}` con default `safe`; `deploy_port`
+en rango 1024-65535 si se proporciona. Renombrar slug = borrar y
+recrear.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-03: CRUD proyectos y tareas. `POST /api/tasks`.
-- PR-V1-04: executor daemon en modo echo.
+- PR-V1-04: CRUD tareas + `POST /api/tasks`.
+- PR-V1-05: executor daemon en modo echo.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
