@@ -5,15 +5,23 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-01
+pr_merged: PR-V1-02
 date: 2026-04-20
 week: 1
-next_pr: PR-V1-02
+next_pr: PR-V1-03
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-02 (Data models + initial Alembic migration)
+  mergeado en `v1` vía squash (#104). Backend `pytest -q` → 11 passed
+  (1 health + 10 modelos). Codex-reviewer marcó 3 `major` + 1 `minor`
+  en primera pasada: test de migración con false-green, mutación de
+  la dev DB, e índices de FK faltantes. Fix-up sobre la misma rama
+  resolvió los 4 hallazgos antes del merge (env.py lee `-x db_url`,
+  tests usan `tmp_path`, 5 índices `ix_*` añadidos con reversibilidad
+  y test de presencia).
 - **2026-04-20** — PR-V1-01 (Skeleton FastAPI + React + SQLite)
   mergeado en `v1` vía squash (#103). Backend `pytest -q` → 1 passed.
   Frontend `vitest --run` → 0 tests collected. 585 LOC (sin lockfile)
