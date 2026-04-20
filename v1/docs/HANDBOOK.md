@@ -362,90 +362,41 @@ duerme más que el timeout.
 
 Antes de spawnear el adapter, `run_adapter` llama a
 `prepare_task_branch(project.local_path, task)` en
-`app/executor/git_workspace.py`. Esto garantiza que **cada task corre en
-su propia rama git** y no mezcla cambios del usuario con los de Niwa.
+`app/executor/git_workspace.py`: **cada task corre en su propia rama
+git**, aislando los cambios de Niwa de los del usuario.
 
-### Formato del branch name
+**Branch name** — `niwa/task-<task.id>-<slug>`, con slug puro
+(`build_branch_name(task)`): lowercase, `[^a-z0-9]+ → -`, strip `-`
+inicial/final, truncar a 30, fallback `untitled` si queda vacío. El
+brief trae un ejemplo con slug de 25 chars; la regla (30) es la fuente
+de verdad, la implementación aplica 30.
 
-```
-niwa/task-<task.id>-<slug>
-```
+**Invariantes** — el path debe ser un repo git
+(`git rev-parse --is-inside-work-tree`) con working tree limpio
+(`git status --porcelain` vacío). Sin stash automático: el usuario es
+responsable de dejar el repo limpio. Si la rama ya existe (reintento),
+se hace `git checkout` sin reset — los commits previos se preservan.
 
-`<slug>` deriva de `task.title` con la función pura
-`build_branch_name(task)`:
+**Flujo en `run_adapter`** — crea `Run` + `started`, llama
+`prepare_task_branch`. En éxito persiste `task.branch_name` y spawnea
+el adapter. En `GitWorkspaceError` escribe `RunEvent(error,
+reason="git_setup_failed: ...")`, finaliza con
+`outcome='git_setup_failed'`, `exit_code=None`, y **no invoca al
+adapter**. Outcomes posibles para `Run`: `cli_ok` /
+`cli_nonzero_exit` / `cli_not_found` / `timeout` /
+`adapter_exception` / `git_setup_failed`.
 
-1. lowercase;
-2. `[^a-z0-9]+` → `-`;
-3. strip leading/trailing `-`;
-4. truncar a 30 caracteres;
-5. si resulta vacío (título solo símbolos) → `untitled`.
+**Fuera de scope** — no commit, no push, no PR, no GC de ramas. HEAD
+detached y submódulos: aceptable para MVP. Sin protección contra
+carrera usuario↔executor en la misma working tree (SPEC §2 asume uso
+monousuario).
 
-El `task.id` garantiza unicidad entre tasks del mismo proyecto; el slug
-da legibilidad.
-
-> Nota: el brief (docs/plans/PR-V1-08) trae un ejemplo trabajado con 25
-> chars en el slug; la regla literal "truncar a 30" es la fuente de
-> verdad y la implementación aplica 30. La discrepancia se flagea aquí
-> para que un futuro PR alinee el ejemplo si se prefiere.
-
-### Invariantes
-
-`prepare_task_branch` exige dos cosas sobre `project.local_path`:
-
-1. **Es un repo git** (`git rev-parse --is-inside-work-tree` == `true`).
-   Bare repos y directorios planos son rechazados.
-2. **Working tree limpio** (`git status --porcelain` vacío). No hay
-   stash automático — la responsabilidad es del usuario: si el repo
-   está sucio cuando encola la task, la task falla.
-
-Si la rama `niwa/task-<id>-<slug>` **ya existe** (p. ej. reintento
-manual tras un `git_setup_failed`), se hace `git checkout` sin reset y
-se reutiliza. Los commits previos en esa rama se preservan.
-
-### Outcomes y flujo en el executor
-
-`run_adapter` en `app/executor/core.py`:
-
-1. Crea `Run` + `RunEvent(started)`.
-2. Llama `prepare_task_branch`. En éxito persiste `task.branch_name`.
-3. En fallo (`GitWorkspaceError`) escribe `RunEvent(error)` con
-   `payload_json={"reason": "git_setup_failed: <mensaje>"}`, finaliza
-   con `outcome='git_setup_failed'`, `run.exit_code=None`, y **NO
-   invoca al adapter**.
-4. En éxito spawnea el adapter como antes.
-
-Outcomes posibles para un `Run` tras este PR:
-
-- `cli_ok` / `cli_nonzero_exit` / `cli_not_found` / `timeout` /
-  `adapter_exception` (del adapter, ver §Adapter).
-- `git_setup_failed` (de `prepare_task_branch`).
-
-### Fuera del scope de este PR
-
-- **No hay commit al final del run.** El working tree queda con los
-  cambios de Niwa no commiteados. PR-V1-11+ (finalize).
-- **No hay push al remote.** PR-V1-11+.
-- **No se abre PR GitHub.** PR-V1-12+.
-- **No hay garbage collection** de ramas viejas.
-- **HEAD detached** en el proyecto: `git checkout -b` parte desde donde
-  esté. Aceptable para MVP.
-- **Submódulos**: `git checkout -b` no los inicializa.
-- **Carrera usuario vs executor** en la misma working tree: sin
-  protección — uso monousuario local por diseño (SPEC §2).
-
-### Tests
-
-- `tests/test_git_workspace.py` (5 cases): `build_branch_name` table,
-  creates+switches, reuses existing, rejects non-git, rejects dirty.
-- `tests/test_executor.py::test_runs_fail_on_git_setup_error`: outcome
-  end-to-end con project apuntando a directorio no-git.
-- La fixture `git_project(tmp_path)` vive en `conftest.py` y crea un
-  repo con un commit seed + `commit.gpgsign=false` local (algunos
-  sandboxes fuerzan gpg globalmente).
-- `test_executor.py` happy-path assert `task.branch_name ==
-  build_branch_name(task)` para confirmar la persistencia.
-- Tests de `test_adapter.py` y `test_runs_api.py` migrados a
-  `git_project` en lugar de `tmp_path` crudo.
+**Tests** — `tests/test_git_workspace.py` (5 cases) + fixture
+`git_project(tmp_path)` en `conftest.py` (repo con commit seed +
+`commit.gpgsign=false` local, algunos sandboxes fuerzan gpg) +
+`test_executor.py::test_runs_fail_on_git_setup_error` para el outcome
+end-to-end. `test_adapter.py` y `test_runs_api.py` migrados a
+`git_project`.
 
 ## Frontend
 

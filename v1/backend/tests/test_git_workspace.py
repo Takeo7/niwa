@@ -3,8 +3,8 @@
 The module owns the "branch per task" invariant — every task is executed
 on a `niwa/task-<id>-<slug>` branch in the project's working tree. These
 tests pin the four failure/reuse paths the executor needs to rely on,
-plus a pure ``build_branch_name`` case table because slug derivation
-drives the on-disk branch layout.
+plus a pure ``build_branch_name`` case table. Repo setup reuses the
+shared ``git_project`` fixture from ``conftest.py``.
 """
 
 from __future__ import annotations
@@ -23,34 +23,11 @@ from app.models import Task
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run a git command without relying on the module under test.
-
-    Used by these tests to set up repos; calling ``prepare_task_branch``'s
-    own helper here would couple the tests to the SUT's internals.
-    """
+    """Thin wrapper so tests don't call the SUT's own ``_run_git`` helper."""
 
     return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        check=True,
-        capture_output=True,
-        text=True,
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True
     )
-
-
-def _init_repo(path: Path) -> None:
-    """Create a git repo with a single commit so ``HEAD`` is defined."""
-
-    path.mkdir(parents=True, exist_ok=True)
-    _git(["init", "-b", "main"], cwd=path)
-    _git(["config", "user.email", "niwa@test.local"], cwd=path)
-    _git(["config", "user.name", "Niwa Test"], cwd=path)
-    # Disable gpg signing locally — some CI/sandbox environments force it
-    # on globally and break test-only commits.
-    _git(["config", "commit.gpgsign", "false"], cwd=path)
-    (path / "README.md").write_text("seed\n")
-    _git(["add", "README.md"], cwd=path)
-    _git(["commit", "-m", "init"], cwd=path)
 
 
 def _make_task(task_id: int, title: str) -> Task:
@@ -96,65 +73,57 @@ def test_build_branch_name_cases() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_task_branch_creates_and_switches(tmp_path: Path) -> None:
-    repo = tmp_path / "proj"
-    _init_repo(repo)
+def test_prepare_task_branch_creates_and_switches(git_project: Path) -> None:
     task = _make_task(42, "Fix: login crashes on empty email")
 
-    name = prepare_task_branch(str(repo), task)
+    name = prepare_task_branch(str(git_project), task)
 
     assert name == "niwa/task-42-fix-login-crashes-on-empty-ema"
-    current = _git(["branch", "--show-current"], cwd=repo).stdout.strip()
+    current = _git(["branch", "--show-current"], cwd=git_project).stdout.strip()
     assert current == name
 
 
-def test_prepare_reuses_existing_branch(tmp_path: Path) -> None:
-    repo = tmp_path / "proj"
-    _init_repo(repo)
+def test_prepare_reuses_existing_branch(git_project: Path) -> None:
     task = _make_task(42, "Fix: login crashes on empty email")
     name = build_branch_name(task)
 
     # Create the target branch up front with an extra commit on it so we
     # can assert nothing gets reset.
-    _git(["checkout", "-b", name], cwd=repo)
-    (repo / "seed.txt").write_text("existing\n")
-    _git(["add", "seed.txt"], cwd=repo)
-    _git(["commit", "-m", "existing work"], cwd=repo)
-    _git(["checkout", "main"], cwd=repo)
+    _git(["checkout", "-b", name], cwd=git_project)
+    (git_project / "seed.txt").write_text("existing\n")
+    _git(["add", "seed.txt"], cwd=git_project)
+    _git(["commit", "-m", "existing work"], cwd=git_project)
+    _git(["checkout", "main"], cwd=git_project)
 
-    returned = prepare_task_branch(str(repo), task)
+    returned = prepare_task_branch(str(git_project), task)
 
     assert returned == name
-    current = _git(["branch", "--show-current"], cwd=repo).stdout.strip()
+    current = _git(["branch", "--show-current"], cwd=git_project).stdout.strip()
     assert current == name
     # The extra commit survives — no reset, no force-recreate.
-    assert (repo / "seed.txt").exists()
-    log = _git(["log", "--oneline"], cwd=repo).stdout
+    assert (git_project / "seed.txt").exists()
+    log = _git(["log", "--oneline"], cwd=git_project).stdout
     assert "existing work" in log
 
 
 def test_prepare_rejects_non_git_dir(tmp_path: Path) -> None:
     plain = tmp_path / "not-a-repo"
     plain.mkdir()
-    task = _make_task(1, "whatever")
 
     with pytest.raises(GitWorkspaceError) as excinfo:
-        prepare_task_branch(str(plain), task)
+        prepare_task_branch(str(plain), _make_task(1, "whatever"))
 
     assert "not a git repository" in str(excinfo.value).lower()
 
 
-def test_prepare_rejects_dirty_working_tree(tmp_path: Path) -> None:
-    repo = tmp_path / "proj"
-    _init_repo(repo)
+def test_prepare_rejects_dirty_working_tree(git_project: Path) -> None:
     # Leave an uncommitted modification behind.
-    (repo / "README.md").write_text("dirty\n")
-    task = _make_task(1, "whatever")
+    (git_project / "README.md").write_text("dirty\n")
 
     with pytest.raises(GitWorkspaceError) as excinfo:
-        prepare_task_branch(str(repo), task)
+        prepare_task_branch(str(git_project), _make_task(1, "whatever"))
 
     msg = str(excinfo.value).lower()
     assert "dirty" in msg or "uncommitted" in msg or "working tree" in msg
     # No stash happened — the modification is still there.
-    assert (repo / "README.md").read_text() == "dirty\n"
+    assert (git_project / "README.md").read_text() == "dirty\n"
