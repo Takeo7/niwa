@@ -5,16 +5,52 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-07
+pr_merged: PR-V1-10
 date: 2026-04-20
-week: 2
-next_pr: PR-V1-08
-week_status: week-2-in-progress
+week: 3
+next_pr: PR-V1-11
+week_status: week-2-complete-awaiting-approval-for-week-3
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-10 (UI task detail con stream en vivo)
+  mergeado en `v1` vía squash (#113). Frontend `npm test -- --run`
+  → **6 passed** (+2 `TaskEventStream.test.tsx`). Backend 59 sin
+  cambios. **506 LOC netas** (código puro 314 bajo cap 400; test
+  139 + HANDBOOK 53 empujan al total). Cierra Semana 2: la UI
+  consume el SSE vía `useEventStream(runId)` hook, timeline con
+  `event_type` + timestamp + payload colapsable, `MockEventSource`
+  inyectado vía `vi.stubGlobal` por test, navegación desde
+  `TaskList.Tr` con `stopPropagation` en el botón delete. Codex:
+  LGTM sin hallazgos. Cero deps npm nuevas, cero backend tocado.
+- **2026-04-20** — PR-V1-09 (SSE endpoint para run events)
+  mergeado en `v1` vía squash (#112). Backend `pytest -q` → 59
+  passed (+3 SSE). **541 LOC netas** (462 código+tests + 79 docs);
+  aceptado como excepción documentada (precedente 06b/07).
+  `GET /api/runs/{id}/events` como `StreamingResponse`; async
+  generator con `asyncio.to_thread` para queries SQLAlchemy sync
+  (no AsyncSession), `last_emitted_id` monotónico, drain terminal
+  antes del `eos`, heartbeat 15 s vía contador (75 × 200 ms),
+  `json.loads`+re-dump para `payload` (sin double-escape), 404
+  JSON antes de iniciar stream. Tests con `httpx.AsyncClient` +
+  timeout 10 s y writer thread sincronizado para run vivo.
+  Codex: LGTM. Cero cambios en adapter/executor/frontend, cero
+  deps nuevas.
+- **2026-04-20** — PR-V1-08 (Git workspace: branch per task)
+  mergeado en `v1` vía squash (#111). Backend `pytest -q` → 56
+  passed (+5 git_workspace + 1 outcome específico; 7 de executor
+  migrados a fixture `git_project`). **381 LOC netas** bajo cap.
+  `prepare_task_branch(local_path, task)` antes del adapter spawn:
+  validación repo git (`rev-parse --git-dir`) + working tree limpio
+  (`status --porcelain`) + create-or-reuse (`show-ref` → `checkout`
+  con o sin `-b`). `build_branch_name(task)` puro: `niwa/task-<id>-
+  <slug>`, slug truncado a 30 con `strip("-")` post-truncate.
+  Outcome `git_setup_failed` → run failed sin invocar adapter,
+  `task.branch_name` queda `None`. Codex: LGTM, sin hallazgos.
+  Cero deps, cero frontend, cero commit/push de git en runs
+  (finalize es futuro).
 - **2026-04-20** — PR-V1-07 (Claude Code adapter with stream-json
   parser) mergeado en `v1` vía squash (#110). Backend `pytest -q`
   → **50 passed** (+6 nuevos: 4 adapter + 2 regression close()).
@@ -31,7 +67,7 @@ blockers: []
   args stream-json, zombies en excepción); ambos resueltos con
   fix commits + regression tests en la misma rama antes del
   merge. 2 minors: docstring sobre stdin bloqueante y dead code
-  en `process_pending` limpiados. **Fuera de scope (sigue en
+  en `process_pending` limpiados. **Fuera de scope (siguió en
   08/09/10):** rama git `niwa/<slug>`, SSE endpoint, UI de stream.
 - **2026-04-20** — PR-V1-06b (UI tasks list + create + delete +
   polling) mergeado en `v1` vía squash (#109). Frontend `npm test
