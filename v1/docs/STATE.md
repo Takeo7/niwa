@@ -5,15 +5,25 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-04
+pr_merged: PR-V1-05
 date: 2026-04-20
 week: 1
-next_pr: PR-V1-05
+next_pr: PR-V1-06
+week_status: week-1-complete-awaiting-approval
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-20** — PR-V1-05 (Executor echo daemon) mergeado en `v1`
+  vía squash (#107). Backend `pytest -q` → 44 passed (+10 nuevos: 7
+  executor + 3 runs API). Cierra Semana 1 del SPEC: pipeline E2E
+  observable `POST /tasks → queued → executor echo → done + Run
+  completed`. `claim_next_task` atómico vía `BEGIN IMMEDIATE` +
+  `UPDATE ... WHERE status='queued'`, race test con threads ≤1
+  winner. `GET /api/tasks/{id}/runs` expuesto. Codex: 2 minors
+  (assert tautológico sobre tzinfo, `winners <= 1` permisivo).
+  No-blocker, aceptados.
 - **2026-04-20** — PR-V1-04 (Tasks CRUD API) mergeado en `v1` vía
   squash (#106). Backend `pytest -q` → 34 passed (+12 nuevos). 4
   endpoints REST (`GET/POST /api/projects/{slug}/tasks`,
