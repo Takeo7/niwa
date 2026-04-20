@@ -1,6 +1,19 @@
-import { Alert, Badge, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { useState } from "react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Divider,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
+import { IconAlertCircle, IconPlus } from "@tabler/icons-react";
 
+import { TaskCreateModal } from "../tasks/TaskCreateModal";
+import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
 
 interface Props {
@@ -9,6 +22,7 @@ interface Props {
 
 export function ProjectDetail({ slug }: Props) {
   const query = useProject(slug);
+  const [modalOpen, setModalOpen] = useState(false);
 
   if (query.isLoading) {
     return (
@@ -39,7 +53,26 @@ export function ProjectDetail({ slug }: Props) {
         </Badge>
         <Text c="dimmed" size="sm">/{p.slug}</Text>
       </Group>
-      <Text c="dimmed">Tareas — próximamente en PR-V1-06b.</Text>
+
+      <Divider my="xs" />
+
+      <Group justify="space-between" align="center">
+        <Title order={4}>Tareas</Title>
+        <Button
+          leftSection={<IconPlus size={16} />}
+          onClick={() => setModalOpen(true)}
+        >
+          Nueva tarea
+        </Button>
+      </Group>
+
+      <TaskList slug={slug} />
+
+      <TaskCreateModal
+        slug={slug}
+        opened={modalOpen}
+        onClose={() => setModalOpen(false)}
+      />
     </Stack>
   );
 }
