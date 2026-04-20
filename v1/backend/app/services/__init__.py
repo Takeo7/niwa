@@ -7,6 +7,6 @@ here keeps HTTP concerns out of the services themselves.
 
 from __future__ import annotations
 
-from . import projects
+from . import projects, tasks
 
-__all__ = ["projects"]
+__all__ = ["projects", "tasks"]
