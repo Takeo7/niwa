@@ -110,6 +110,24 @@ def test_load_install_config_malformed_returns_none(tmp_path):
     assert update_engine._load_install_config(install_dir) is None
 
 
+def test_load_install_config_binary_returns_none(tmp_path):
+    # A corrupted binary file must fall back to ``None`` instead of
+    # raising UnicodeDecodeError out of the updater.
+    install_dir = tmp_path / ".niwa"
+    install_dir.mkdir()
+    (install_dir / ".install-config.json").write_bytes(b"\xff\xfe\x00\x01garbage")
+    assert update_engine._load_install_config(install_dir) is None
+
+
+def test_load_install_config_non_dict_returns_none(tmp_path):
+    # Valid JSON that isn't an object (e.g. a list) is not a usable
+    # config — treat as missing.
+    install_dir = tmp_path / ".niwa"
+    install_dir.mkdir()
+    (install_dir / ".install-config.json").write_text("[1, 2, 3]")
+    assert update_engine._load_install_config(install_dir) is None
+
+
 def test_load_install_config_roundtrip(tmp_path):
     install_dir = tmp_path / ".niwa"
     install_dir.mkdir()
@@ -134,55 +152,82 @@ def test_detect_scope_honours_config(tmp_path, scope):
     assert ctx.manifest["warnings"] == []
 
 
-def test_detect_scope_ignores_unknown_config_value(tmp_path):
-    # Hand-edited nonsense value → fall through to probe (and warning).
+def test_detect_scope_ignores_unknown_config_value(tmp_path, monkeypatch):
+    # Hand-edited nonsense value → fall through to unit-file check
+    # (and warning). User unit on disk wins the fallback.
     r = FakeRunner()
-    r.on(["systemctl", "--user", "is-active"], returncode=0,
-         stdout="active\n")
     ctx = _make_ctx(tmp_path, r)
     (ctx.install_dir / ".install-config.json").write_text(json.dumps({
         "systemd_scope": "hogwash",
     }))
+    user_unit, _ = _override_unit_paths(monkeypatch, tmp_path)
+    user_unit.write_text("[Unit]\n")
     assert update_engine._detect_systemd_scope(ctx) == "user"
     assert any("install-config" in w.lower() for w in ctx.manifest["warnings"])
 
 
-# ── _detect_systemd_scope: probe fallback ────────────────────────────
+# ── _detect_systemd_scope: unit-file fallback ────────────────────────
 
 
-def test_detect_scope_missing_config_probe_active_is_user(tmp_path):
+def _override_unit_paths(monkeypatch, tmp_path):
+    """Point the unit-file probe at a pair of tmp paths so tests can
+    create or omit files without touching the real host."""
+    user_unit = tmp_path / "user" / "niwa-executor.service"
+    system_unit = tmp_path / "system" / "niwa-executor.service"
+    user_unit.parent.mkdir(parents=True, exist_ok=True)
+    system_unit.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        update_engine, "_systemd_unit_paths",
+        lambda _name: (user_unit, system_unit),
+    )
+    return user_unit, system_unit
+
+
+def test_detect_scope_missing_config_user_unit_present(tmp_path, monkeypatch):
+    # Legacy install without .install-config.json but with a user-scope
+    # unit file on disk → user.
     r = FakeRunner()
-    r.on(["systemctl", "--user", "is-active"], returncode=0,
-         stdout="active\n")
     ctx = _make_ctx(tmp_path, r)
+    user_unit, _ = _override_unit_paths(monkeypatch, tmp_path)
+    user_unit.write_text("[Unit]\n")
     assert update_engine._detect_systemd_scope(ctx) == "user"
     assert any("install-config" in w.lower() for w in ctx.manifest["warnings"])
 
 
-def test_detect_scope_missing_config_probe_inactive_is_user(tmp_path):
-    # Exit 3 = inactive/unknown. The --user bus still answered, which
-    # is the signal we care about for "user scope is reachable".
+def test_detect_scope_missing_config_system_unit_present(tmp_path, monkeypatch):
+    # Desktop with --user bus reachable BUT the real unit lives in
+    # system scope. Probe-based detection would have said "user"
+    # here (exit 3 from systemctl --user is-active) and led to a
+    # failing restart + wrong hint. File-based detection is correct.
     r = FakeRunner()
-    r.on(["systemctl", "--user", "is-active"], returncode=3,
-         stdout="inactive\n")
     ctx = _make_ctx(tmp_path, r)
+    _, system_unit = _override_unit_paths(monkeypatch, tmp_path)
+    system_unit.write_text("[Unit]\n")
+    assert update_engine._detect_systemd_scope(ctx) == "system"
+
+
+def test_detect_scope_missing_config_no_unit_defaults_to_system(tmp_path, monkeypatch):
+    # Neither unit file exists: pick system so a failing restart
+    # surfaces the ``sudo systemctl`` hint rather than a confidently
+    # wrong --user command.
+    r = FakeRunner()
+    ctx = _make_ctx(tmp_path, r)
+    _override_unit_paths(monkeypatch, tmp_path)  # both absent
+    assert update_engine._detect_systemd_scope(ctx) == "system"
+
+
+def test_detect_scope_missing_config_both_units_present(tmp_path, monkeypatch):
+    # Belt-and-suspenders installs may leave both files around (a
+    # migration from system to user, or vice versa). User wins —
+    # setup.py's non-root path is what most humans run, and a stale
+    # /etc/systemd unit that's disabled wouldn't be touched by
+    # ``systemctl --user restart``.
+    r = FakeRunner()
+    ctx = _make_ctx(tmp_path, r)
+    user_unit, system_unit = _override_unit_paths(monkeypatch, tmp_path)
+    user_unit.write_text("[Unit]\n")
+    system_unit.write_text("[Unit]\n")
     assert update_engine._detect_systemd_scope(ctx) == "user"
-
-
-def test_detect_scope_missing_config_probe_no_bus_is_system(tmp_path):
-    # Exit 1 = systemctl --user can't reach a user bus → system scope.
-    r = FakeRunner()
-    r.on(["systemctl", "--user", "is-active"], returncode=1,
-         stderr="Failed to connect to bus\n")
-    ctx = _make_ctx(tmp_path, r)
-    assert update_engine._detect_systemd_scope(ctx) == "system"
-
-
-def test_detect_scope_probe_oserror_falls_back_to_system(tmp_path):
-    def boom(*_a, **_k):
-        raise OSError("systemctl: not found")
-    ctx = _make_ctx(tmp_path, boom)
-    assert update_engine._detect_systemd_scope(ctx) == "system"
 
 
 # ── _restart_executor: scope-aware command ───────────────────────────
@@ -256,15 +301,29 @@ def test_restart_executor_none_scope_is_noop(tmp_path):
     assert ctx.manifest["components_updated"] == []
 
 
-def test_restart_executor_missing_config_probes_then_runs_user(tmp_path):
-    # No config → probe says user bus is reachable → restart runs
-    # on --user, and the warning about the missing config surfaces.
+def test_restart_executor_missing_config_user_unit_runs_user(tmp_path, monkeypatch):
+    # No config + user unit file present → restart runs on --user,
+    # and the warning about the missing config surfaces.
     r = FakeRunner()
-    r.on(["systemctl", "--user", "is-active", "niwa-executor.service"],
-         returncode=0, stdout="active\n")
     r.on(["systemctl", "--user", "restart", "niwa-executor.service"],
          returncode=0)
     ctx = _make_ctx(tmp_path, r)
+    user_unit, _ = _override_unit_paths(monkeypatch, tmp_path)
+    user_unit.write_text("[Unit]\n")
     update_engine._restart_executor(ctx)
     assert ["systemctl", "--user", "restart", "niwa-executor.service"] in r.calls
+    assert any("install-config" in w.lower() for w in ctx.manifest["warnings"])
+
+
+def test_restart_executor_missing_config_system_unit_runs_system(tmp_path, monkeypatch):
+    # No config + only system unit present → restart stays on
+    # system scope, warning surfaces.
+    r = FakeRunner()
+    r.on(["systemctl", "restart", "niwa-executor.service"], returncode=0)
+    ctx = _make_ctx(tmp_path, r)
+    _, system_unit = _override_unit_paths(monkeypatch, tmp_path)
+    system_unit.write_text("[Unit]\n")
+    update_engine._restart_executor(ctx)
+    assert ["systemctl", "restart", "niwa-executor.service"] in r.calls
+    assert not any("--user" in c for c in r.calls)
     assert any("install-config" in w.lower() for w in ctx.manifest["warnings"])

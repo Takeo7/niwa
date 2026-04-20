@@ -1819,12 +1819,17 @@ def _write_install_config(cfg: WizardConfig) -> None:
     install dir and gets wiped with it). Existing installs without this
     file get a fallback + warning on the next ``niwa update``.
     """
-    if sys.platform == "darwin":
-        scope = "launchd"
-    elif cfg.executor_enabled:
-        scope = "system" if os.getuid() == 0 else "user"
-    else:
+    # ``executor_enabled`` wins over platform: if the installer didn't
+    # register anything (executor disabled), lying about a launchd
+    # agent on macOS would make the updater point the operator at a
+    # unit that does not exist — exactly the class of bug this FIX
+    # exists to kill. Check that first.
+    if not cfg.executor_enabled:
         scope = "none"
+    elif sys.platform == "darwin":
+        scope = "launchd"
+    else:
+        scope = "system" if os.getuid() == 0 else "user"
     config = {
         "install_version": NIWA_VERSION,
         "install_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1839,8 +1844,16 @@ def _write_install_config(cfg: WizardConfig) -> None:
         "repo_path": str(REPO_ROOT),
     }
     path = cfg.niwa_home / ".install-config.json"
-    path.write_text(json.dumps(config, indent=2) + "\n")
-    ok(f"Wrote {path} (scope={scope})")
+    try:
+        path.write_text(json.dumps(config, indent=2) + "\n")
+        ok(f"Wrote {path} (scope={scope})")
+    except OSError as exc:
+        # Install survived 14 previous steps; don't abort the whole
+        # thing because this last file couldn't be written. The
+        # updater falls back to a probe with a visible warning when
+        # the file is missing.
+        warn(f"Could not write {path}: {exc}. "
+             "Next `niwa update` will detect scope by probing.")
 
 
 def _post_install_smoke(cfg) -> None:

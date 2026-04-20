@@ -283,8 +283,9 @@ def _load_install_config(install_dir: Path) -> Optional[dict]:
     """Read ``<install_dir>/.install-config.json`` if present.
 
     Written by ``setup.py`` at install time (FIX-20260420). Returns the
-    parsed dict, or ``None`` when the file is missing or malformed —
-    the caller decides how to react (probe + warning, or refuse).
+    parsed dict, or ``None`` when the file is missing, unreadable, or
+    not valid JSON — the caller decides how to react (probe + warning,
+    or refuse).
     """
     path = install_dir / ".install-config.json"
     if not path.exists():
@@ -292,27 +293,45 @@ def _load_install_config(install_dir: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text())
         return data if isinstance(data, dict) else None
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
         return None
+
+
+def _systemd_unit_paths(unit_name: str) -> tuple[Path, Path]:
+    """Return ``(user_unit_path, system_unit_path)`` for a systemd
+    unit. Extracted to a single function so tests can monkeypatch it
+    and inject tmp paths without touching ``/etc/systemd/system``.
+
+    Both locations mirror what ``setup.py::_install_systemd_unit``
+    actually writes — changing either here requires mirroring there.
+    """
+    return (
+        Path.home() / ".config" / "systemd" / "user" / unit_name,
+        Path("/etc/systemd/system") / unit_name,
+    )
 
 
 def _detect_systemd_scope(ctx: _Ctx) -> Optional[str]:
     """Return the systemd scope Niwa's executor was installed under.
 
     Values: ``"user"``, ``"system"``, ``"launchd"`` (macOS — no systemd),
-    ``"none"`` (installer ran with executor disabled), or ``None`` only
-    if we literally cannot probe anything.
+    ``"none"`` (installer ran with executor disabled).
 
     Priority:
       1. ``.install-config.json`` (authoritative — written by setup.py).
-      2. Fallback: probe ``systemctl --user is-active <executor>``.
-         Exit 0 (active) or 3 (inactive/unknown) means the ``--user``
-         bus exists and knows (or not) about the unit — user scope.
-         Any other exit / ``OSError`` implies no ``--user`` session is
-         reachable, so the unit must be system scope.
+      2. Fallback: check where the unit file actually lives on disk.
+         The installer writes to exactly one of:
+           - ``~/.config/systemd/user/niwa-executor.service`` (user)
+           - ``/etc/systemd/system/niwa-executor.service``    (system)
+         File existence is deterministic; probing ``systemctl --user
+         is-active`` is not (review: exit 3 can't tell "unit inactive"
+         from "unit unknown", so a desktop with a system-scope unit
+         would be misdetected as user on a legacy install).
+      3. Neither unit file present → default to ``"system"`` so a
+         failing restart surfaces the ``sudo systemctl ...`` hint
+         rather than a confidently wrong ``--user`` command.
 
-    Matches the two scopes ``setup.py::_install_systemd_unit`` actually
-    writes. Warning is recorded when we have to fall back.
+    Warning is recorded whenever we fall back past step 1.
     """
     cfg = _load_install_config(ctx.install_dir)
     if cfg:
@@ -322,15 +341,14 @@ def _detect_systemd_scope(ctx: _Ctx) -> Optional[str]:
     _record_warning(
         ctx,
         ".install-config.json ausente o sin systemd_scope — "
-        "detectando scope por probe. Reinstala para fijarlo.",
+        "detectando scope por ubicación del unit file. "
+        "Reinstala para fijarlo.",
     )
-    unit_name = "niwa-executor.service"
-    try:
-        r = _run(ctx, "systemctl", "--user", "is-active", unit_name, timeout=10)
-    except Exception:
-        return "system"
-    if r.returncode in (0, 3):
+    user_unit, system_unit = _systemd_unit_paths("niwa-executor.service")
+    if user_unit.exists():
         return "user"
+    if system_unit.exists():
+        return "system"
     return "system"
 
 
