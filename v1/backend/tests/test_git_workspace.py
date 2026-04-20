@@ -45,6 +45,9 @@ def _init_repo(path: Path) -> None:
     _git(["init", "-b", "main"], cwd=path)
     _git(["config", "user.email", "niwa@test.local"], cwd=path)
     _git(["config", "user.name", "Niwa Test"], cwd=path)
+    # Disable gpg signing locally — some CI/sandbox environments force it
+    # on globally and break test-only commits.
+    _git(["config", "commit.gpgsign", "false"], cwd=path)
     (path / "README.md").write_text("seed\n")
     _git(["add", "README.md"], cwd=path)
     _git(["commit", "-m", "init"], cwd=path)
@@ -64,10 +67,12 @@ def _make_task(task_id: int, title: str) -> Task:
 
 
 def test_build_branch_name_cases() -> None:
-    # Normal title.
+    # Normal title — slug is lowercase, symbols collapse to ``-``, truncated
+    # to 30 characters (brief rule; the brief's worked example used a 25-char
+    # slug, which we flag at review time — the rule is the source of truth).
     assert (
         build_branch_name(_make_task(42, "Fix: login crashes on empty email"))
-        == "niwa/task-42-fix-login-crashes-on-empt"
+        == "niwa/task-42-fix-login-crashes-on-empty-ema"
     )
     # Symbols and consecutive separators collapse.
     assert (
@@ -98,7 +103,7 @@ def test_prepare_task_branch_creates_and_switches(tmp_path: Path) -> None:
 
     name = prepare_task_branch(str(repo), task)
 
-    assert name == "niwa/task-42-fix-login-crashes-on-empt"
+    assert name == "niwa/task-42-fix-login-crashes-on-empty-ema"
     current = _git(["branch", "--show-current"], cwd=repo).stdout.strip()
     assert current == name
 
