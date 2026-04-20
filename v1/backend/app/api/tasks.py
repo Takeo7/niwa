@@ -15,7 +15,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from ..schemas import TaskCreate, TaskRead
+from ..schemas import RunRead, TaskCreate, TaskRead
+from ..services import runs as runs_service
 from ..services import tasks as service
 from .deps import get_session
 
@@ -78,6 +79,27 @@ def get_task(
             detail="task not found",
         )
     return TaskRead.model_validate(task)
+
+
+@tasks_router.get("/{task_id}/runs", response_model=list[RunRead])
+def list_runs_for_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> list[RunRead]:
+    """Return every run associated with ``task_id``.
+
+    ``404`` when the task id does not exist. Empty list (``200``) when the
+    task exists but has not been picked up by the executor yet.
+    """
+
+    try:
+        rows = runs_service.list_runs_for_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    return [RunRead.model_validate(row) for row in rows]
 
 
 @tasks_router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
