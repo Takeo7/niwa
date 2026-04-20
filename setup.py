@@ -1802,7 +1802,45 @@ def execute_install(cfg: WizardConfig) -> None:
         _configure_openclaw_mcp(cfg)
 
     _post_install_smoke(cfg)
+    _write_install_config(cfg)
     print_summary(cfg)
+
+
+def _write_install_config(cfg: WizardConfig) -> None:
+    """Record install metadata the updater needs to act honestly.
+
+    Source of truth for ``bin/update_engine.py`` (FIX-20260420): without
+    this file the updater has to guess the systemd scope, compose path
+    and DB location — which is how the triple-lie incident happened
+    (updater invoked ``sudo systemctl`` against a user-scope unit and
+    kept going as if it had succeeded).
+
+    The file is safe to leave behind on uninstall (it's under the
+    install dir and gets wiped with it). Existing installs without this
+    file get a fallback + warning on the next ``niwa update``.
+    """
+    if sys.platform == "darwin":
+        scope = "launchd"
+    elif cfg.executor_enabled:
+        scope = "system" if os.getuid() == 0 else "user"
+    else:
+        scope = "none"
+    config = {
+        "install_version": NIWA_VERSION,
+        "install_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "systemd_scope": scope,
+        "systemd_units": {
+            "executor": "niwa-executor.service",
+            "hosting": "niwa-hosting.service",
+        },
+        "compose_file": str(cfg.niwa_home / "docker-compose.yml"),
+        "db_path": str(cfg.db_path),
+        "install_dir": str(cfg.niwa_home),
+        "repo_path": str(REPO_ROOT),
+    }
+    path = cfg.niwa_home / ".install-config.json"
+    path.write_text(json.dumps(config, indent=2) + "\n")
+    ok(f"Wrote {path} (scope={scope})")
 
 
 def _post_install_smoke(cfg) -> None:

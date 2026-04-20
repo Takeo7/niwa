@@ -279,20 +279,95 @@ def _rebuild_app(ctx: _Ctx) -> None:
         _record_warning(ctx, f"docker compose up falló: {exc}")
 
 
+def _load_install_config(install_dir: Path) -> Optional[dict]:
+    """Read ``<install_dir>/.install-config.json`` if present.
+
+    Written by ``setup.py`` at install time (FIX-20260420). Returns the
+    parsed dict, or ``None`` when the file is missing or malformed —
+    the caller decides how to react (probe + warning, or refuse).
+    """
+    path = install_dir / ".install-config.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _detect_systemd_scope(ctx: _Ctx) -> Optional[str]:
+    """Return the systemd scope Niwa's executor was installed under.
+
+    Values: ``"user"``, ``"system"``, ``"launchd"`` (macOS — no systemd),
+    ``"none"`` (installer ran with executor disabled), or ``None`` only
+    if we literally cannot probe anything.
+
+    Priority:
+      1. ``.install-config.json`` (authoritative — written by setup.py).
+      2. Fallback: probe ``systemctl --user is-active <executor>``.
+         Exit 0 (active) or 3 (inactive/unknown) means the ``--user``
+         bus exists and knows (or not) about the unit — user scope.
+         Any other exit / ``OSError`` implies no ``--user`` session is
+         reachable, so the unit must be system scope.
+
+    Matches the two scopes ``setup.py::_install_systemd_unit`` actually
+    writes. Warning is recorded when we have to fall back.
+    """
+    cfg = _load_install_config(ctx.install_dir)
+    if cfg:
+        scope = cfg.get("systemd_scope")
+        if scope in ("system", "user", "launchd", "none"):
+            return scope
+    _record_warning(
+        ctx,
+        ".install-config.json ausente o sin systemd_scope — "
+        "detectando scope por probe. Reinstala para fijarlo.",
+    )
+    unit_name = "niwa-executor.service"
+    try:
+        r = _run(ctx, "systemctl", "--user", "is-active", unit_name, timeout=10)
+    except Exception:
+        return "system"
+    if r.returncode in (0, 3):
+        return "user"
+    return "system"
+
+
 def _restart_executor(ctx: _Ctx) -> None:
     # PR-A3: Niwa is single-instance; the unit is always ``niwa-executor.service``.
     service_name = "niwa-executor.service"
+    scope = _detect_systemd_scope(ctx)
+    if scope == "launchd":
+        # macOS: installer registered a launchd agent. The updater has
+        # no equivalent restart path here yet — flag for the operator.
+        _record_warning(
+            ctx,
+            "Install scope is launchd (macOS); executor restart queda "
+            "fuera del updater. Reinicia con `launchctl`.",
+        )
+        ctx.manifest["needs_restart"] = True
+        return
+    if scope == "none":
+        # Executor was disabled at install time — nothing to restart.
+        return
+    if scope == "user":
+        cmd = ["systemctl", "--user", "restart", service_name]
+        manual_hint = f"systemctl --user restart {service_name}"
+    else:  # "system" (or ``None`` fallback, which we treat as system).
+        cmd = ["systemctl", "restart", service_name]
+        manual_hint = f"sudo systemctl restart {service_name}"
     try:
-        r = _run(ctx, "systemctl", "restart", service_name, timeout=30)
+        r = _run(ctx, *cmd, timeout=30)
     except Exception as exc:
-        _record_warning(ctx, f"systemctl restart {service_name} falló: {exc}")
+        _record_warning(ctx, f"{' '.join(cmd)} falló: {exc}")
         ctx.manifest["needs_restart"] = True
         return
     if r.returncode != 0:
         _record_warning(
             ctx,
-            f"systemctl restart {service_name} devolvió {r.returncode}. "
-            f"Reinicia manualmente: sudo systemctl restart {service_name}",
+            f"{' '.join(cmd)} devolvió {r.returncode}. "
+            f"Reinicia manualmente: {manual_hint}",
         )
         ctx.manifest["needs_restart"] = True
         return
