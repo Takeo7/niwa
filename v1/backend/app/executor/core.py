@@ -151,12 +151,9 @@ def process_pending(session: Session) -> int:
         task = claim_next_task(session)
         if task is None:
             break
-        try:
-            run_adapter(session, task)
-        except Exception:
-            session.rollback()
-            logger.exception("adapter run failed for task_id=%s", task.id)
-            raise
+        # ``run_adapter`` swallows adapter exceptions internally (see its
+        # try/except/finally), so nothing we handle here would ever fire.
+        run_adapter(session, task)
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
     return processed
