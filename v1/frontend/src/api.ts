@@ -71,3 +71,54 @@ export interface ProjectCreatePayload {
   deploy_port?: number | null;
   autonomy_mode?: AutonomyMode;
 }
+
+// ---- Tasks wire types (mirror backend app/schemas/task.py) --------------
+
+export type TaskStatus =
+  | "inbox"
+  | "queued"
+  | "running"
+  | "waiting_input"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export interface Task {
+  id: number;
+  project_id: number;
+  parent_task_id: number | null;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  branch_name: string | null;
+  pr_url: string | null;
+  pending_question: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface TaskCreatePayload {
+  title: string;
+  description?: string | null;
+}
+
+// Active = driving toward a terminal state; delete is forbidden by backend.
+const ACTIVE_STATUSES: readonly TaskStatus[] = ["running", "waiting_input"];
+
+export function isTaskActive(task: Task): boolean {
+  return ACTIVE_STATUSES.includes(task.status);
+}
+
+// In-flight = worth polling for; covers `queued` waiting for the executor
+// and anything already running. Used to gate React Query's refetchInterval.
+const IN_FLIGHT_STATUSES: readonly TaskStatus[] = [
+  "queued",
+  "running",
+  "waiting_input",
+];
+
+export function hasInFlightTask(tasks: Task[] | undefined): boolean {
+  if (!tasks) return false;
+  return tasks.some((t) => IN_FLIGHT_STATUSES.includes(t.status));
+}
