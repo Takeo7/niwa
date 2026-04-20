@@ -46,6 +46,15 @@ class AdapterEvent:
 class ClaudeCodeAdapter:
     """Run the Claude CLI and stream parsed events."""
 
+    # ``-p``              : headless (non-interactive) mode.
+    # ``--output-format`` : stream-json, one JSON event per stdout line.
+    # ``--verbose``       : without it, stream-json emits only the final
+    #                       result message — we need the intermediate
+    #                       assistant/tool_use events too. This matches
+    #                       v0.2's ``niwa-app/backend/backend_adapters/
+    #                       claude_code.py`` command construction.
+    DEFAULT_ARGS: tuple[str, ...] = ("-p", "--output-format", "stream-json", "--verbose")
+
     def __init__(
         self,
         cli_path: str | None,
@@ -88,9 +97,10 @@ class ClaudeCodeAdapter:
             self._outcome = "cli_not_found"
             return
 
+        cmd = [self._cli_path, *self.DEFAULT_ARGS, *self._extra_args]
         try:
             proc = subprocess.Popen(
-                [self._cli_path, *self._extra_args],
+                cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
