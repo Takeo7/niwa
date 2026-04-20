@@ -311,16 +311,11 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
 def test_runs_fail_on_git_setup_error(
     session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A non-git ``local_path`` must fail the task before the adapter spawns.
+    """A non-git ``local_path`` must fail the task before the adapter spawns."""
 
-    The fake CLI is re-pointed at a path that does not exist; if the
-    executor ever reached the adapter, it would bubble up as
-    ``cli_not_found`` instead of the expected ``git_setup_failed`` and
-    this test would catch it.
-    """
-
+    # If the executor ever reached the adapter this would surface as
+    # ``cli_not_found``, not the expected ``git_setup_failed``.
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
-
     plain = tmp_path / "no-git-here"
     plain.mkdir()
     project = _make_project(session, local_path=plain)
@@ -334,27 +329,14 @@ def test_runs_fail_on_git_setup_error(
     assert refreshed.status == "failed"
     assert refreshed.branch_name is None
 
-    runs = session.query(Run).filter(Run.task_id == task.id).all()
-    assert len(runs) == 1
-    run = runs[0]
+    run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.status == "failed"
     assert run.outcome == "git_setup_failed"
-    # Adapter was never spawned: no exit code, no ``started`` event from
-    # the CLI (we still write the synthetic ``started`` bookend before
-    # trying the git setup — the diagnostic signal is the missing
-    # stream events and the terminal ``error``).
-    assert run.exit_code is None
+    assert run.exit_code is None  # adapter never spawned
 
-    events = (
-        session.query(RunEvent)
-        .filter(RunEvent.run_id == run.id)
-        .order_by(RunEvent.id.asc())
-        .all()
-    )
+    events = session.query(RunEvent).filter(RunEvent.run_id == run.id).all()
     types = [e.event_type for e in events]
-    # No ``result`` / ``assistant`` / ``tool_use`` from the CLI stream —
-    # just the executor's own bookends plus the error payload.
-    assert "result" not in types
+    assert "result" not in types  # no CLI stream reached the DB
     error_events = [e for e in events if e.event_type == "error"]
     assert error_events, "expected an error event on git_setup_failed"
     payload = json.loads(error_events[0].payload_json or "{}")
