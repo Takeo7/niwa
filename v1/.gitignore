@@ -9,6 +9,7 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+*.tsbuildinfo
 
 # SQLite dev DB (see v1/data/.gitkeep)
 data/*.sqlite3
