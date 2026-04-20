@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiFetch,
   hasInFlightTask,
+  type Run,
   type Task,
   type TaskCreatePayload,
 } from "../../api";
@@ -52,6 +53,30 @@ export function useCreateTask(slug: string) {
       // newly created row shows up on the next tick.
       qc.invalidateQueries({ queryKey: tasksKey(slug) });
     },
+  });
+}
+
+// Fetches a single task by id — powers the detail route when the user
+// hits /tasks/:id directly (no list in cache).
+export function useTask(taskId: number | undefined) {
+  return useQuery<Task>({
+    queryKey: ["task", taskId] as const,
+    queryFn: () => apiFetch<Task>(`/tasks/${taskId}`),
+    enabled: Boolean(taskId),
+  });
+}
+
+// Returns the most recent run for `taskId`, or `null` when the executor
+// has not picked the task up yet. Runs list is already ordered by id ASC
+// from the backend (see runs_service.list_runs_for_task); we pop the tail.
+export function useLatestRun(taskId: number | undefined) {
+  return useQuery<Run | null>({
+    queryKey: ["task", taskId, "latest-run"] as const,
+    queryFn: async () => {
+      const runs = await apiFetch<Run[]>(`/tasks/${taskId}/runs`);
+      return runs.length === 0 ? null : runs[runs.length - 1]!;
+    },
+    enabled: Boolean(taskId),
   });
 }
 
