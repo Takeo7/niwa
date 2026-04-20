@@ -250,33 +250,249 @@ def _copy_mcp_servers(ctx: _Ctx) -> None:
                 _record_warning(ctx, f"No se pudo copiar {server_name}: {exc}")
 
 
-def _rebuild_app(ctx: _Ctx) -> None:
-    compose_file = ctx.install_dir / "docker-compose.yml"
-    if not compose_file.exists():
-        _record_warning(ctx, f"docker-compose.yml no encontrado en {ctx.install_dir}")
-        return
+def _container_info(ctx: _Ctx) -> tuple[str, str]:
+    """Return ``(app_container_name, app_image_ref)`` — the identity
+    the installer tagged this Niwa install with.
+
+    The compose template uses ``${INSTANCE_NAME}-app`` and
+    ``${INSTANCE_NAME}-app:${NIWA_VERSION}``. PR-B's setup.py stores
+    the resolved values in ``.install-config.json``; the updater
+    reads them rather than duplicating the template assumptions.
+
+    Fallback on a legacy install (pre-PR-B installer): ``niwa-app``
+    + ``niwa-app:0.1.0``, matching the values setup.py was hardcoding
+    at the time PR-A shipped. A ``docker inspect`` against these
+    defaults still lines up with what the installer wrote for
+    single-instance Niwa installs.
+    """
+    cfg = _load_install_config(ctx.install_dir) or {}
+    container_name = cfg.get("app_container_name") or "niwa-app"
+    image_ref = cfg.get("app_image_ref") or "niwa-app:0.1.0"
+    return container_name, image_ref
+
+
+def capture_state(ctx: _Ctx) -> dict:
+    """Snapshot the installation so the updater can compare pre/post.
+
+    Fields (``None`` when the signal isn't available — fresh installs
+    won't have a container yet):
+
+      - ``commit_sha``          git HEAD before the pull
+      - ``schema_version``      ``MAX(version)`` in ``schema_version``
+      - ``container_image_id``  sha256 of the image the app container
+                                currently runs (``docker inspect
+                                --format '{{.Image}}'``)
+      - ``container_image_ref`` the tag the container was launched
+                                with (e.g. ``niwa-app:0.1.0``) — used
+                                to look up the post-build image id
+      - ``container_started_at`` ISO timestamp of the container's
+                                last start; post-update this must be
+                                strictly greater (PR-D will enforce).
+
+    Captures via one ``docker inspect`` with a delimited format
+    string, so tests only need to stub that single call.
+    """
+    container_name, _ = _container_info(ctx)
+    state: dict = {
+        "commit_sha": _git(ctx, "rev-parse", "HEAD"),
+        "schema_version": _read_schema_version(ctx),
+        "container_image_id": None,
+        "container_image_ref": None,
+        "container_started_at": None,
+    }
     try:
         r = _run(
-            ctx, "docker", "compose", "-f", str(compose_file),
-            "build", "--no-cache", "app", timeout=600,
+            ctx, "docker", "inspect",
+            "--format", "{{.Image}}|{{.Config.Image}}|{{.State.StartedAt}}",
+            container_name, timeout=15,
         )
+    except Exception:
+        return state
+    if r.returncode != 0:
+        return state
+    parts = (r.stdout or "").strip().split("|", 2)
+    if len(parts) == 3:
+        state["container_image_id"] = parts[0] or None
+        state["container_image_ref"] = parts[1] or None
+        state["container_started_at"] = parts[2] or None
+    return state
+
+
+def _build_and_verify_image(ctx: _Ctx, pre_state: dict) -> Optional[str]:
+    """Rebuild the app image and return the NEW image id if the build
+    produced a different image, or ``None`` if the image is unchanged
+    or the build failed.
+
+    Preconditions: ``docker-compose.yml`` exists at
+    ``<install_dir>/docker-compose.yml`` (checked by the caller).
+
+    ``None`` is a valid outcome — it means the build hit full cache
+    (no code changed since the last image) and the running container
+    is already on the correct image. The caller treats ``None`` as
+    "skip the force-recreate".
+
+    ``NIWA_UPDATE_REBUILD=1`` in the environment forces ``--no-cache``.
+
+    Build failures degrade to a warning and return ``None`` (PR-D
+    converts this to a blocker with rollback; for now we keep the
+    best-effort semantics so failed builds don't leave users worse
+    off than before this FIX).
+    """
+    compose_file = ctx.install_dir / "docker-compose.yml"
+    build_cmd = ["docker", "compose", "-f", str(compose_file), "build"]
+    if os.environ.get("NIWA_UPDATE_REBUILD") == "1":
+        build_cmd.append("--no-cache")
+    build_cmd.append("app")
+    try:
+        r = _run(ctx, *build_cmd, timeout=600)
     except Exception as exc:
         _record_warning(ctx, f"docker build falló: {exc}")
-        return
+        return None
     if r.returncode != 0:
         _record_warning(
             ctx, f"docker build app devolvió {r.returncode}: {(r.stderr or '')[:300]}",
         )
-        return
-    _record_component(ctx, "app:image")
+        return None
+    # Resolve the post-build image id. Prefer the tag the running
+    # container launched with (pre_state); fall back to what the
+    # installer registered in ``.install-config.json`` — which is the
+    # tag ``docker compose build`` just produced. ``niwa-app`` bare
+    # resolves to ``:latest`` at ``docker inspect``, which the
+    # compose template never tags, so the config-backed default is
+    # the one that actually works on fresh installs.
+    _, default_image_ref = _container_info(ctx)
+    image_ref = pre_state.get("container_image_ref") or default_image_ref
     try:
-        _run(
-            ctx, "docker", "compose", "-f", str(compose_file),
-            "up", "-d", "--no-deps", "app", timeout=120,
-        )
-        _record_component(ctx, "app:restarted")
+        r = _run(ctx, "docker", "inspect", "--format", "{{.Id}}",
+                 image_ref, timeout=15)
     except Exception as exc:
-        _record_warning(ctx, f"docker compose up falló: {exc}")
+        _record_warning(ctx, f"docker inspect {image_ref} tras build falló: {exc}")
+        return None
+    if r.returncode != 0:
+        _record_warning(
+            ctx,
+            f"docker inspect {image_ref} tras build devolvió "
+            f"{r.returncode}: {(r.stderr or '')[:200]}",
+        )
+        return None
+    new_image_id = (r.stdout or "").strip() or None
+    if not new_image_id:
+        _record_warning(ctx, f"docker inspect {image_ref} devolvió id vacío.")
+        return None
+    pre_image_id = pre_state.get("container_image_id")
+    if pre_image_id and new_image_id == pre_image_id:
+        _record_component(ctx, f"app:image unchanged ({new_image_id[:19]})")
+        return None
+    _record_component(ctx, f"app:image rebuilt → {new_image_id[:19]}")
+    return new_image_id
+
+
+def _recreate_and_verify_container(
+    ctx: _Ctx, expected_image_id: str,
+    *, poll_interval: float = 2.0, timeout_seconds: float = 30.0,
+) -> bool:
+    """Force-recreate the app container and verify it came up on the
+    expected image id. Returns True on verified recreate, False
+    otherwise (with a warning recorded — rollback lives in PR-D).
+
+    Preconditions: ``docker-compose.yml`` exists at
+    ``<install_dir>/docker-compose.yml`` (checked by the caller).
+
+    Why ``--force-recreate`` and not plain ``up -d``: ``docker compose
+    up -d`` will NOT recreate a container when the only thing that
+    changed is the image content (docker compose tracks declared
+    config, not image digest). The triple-lie bug observed on
+    2026-04-19 was exactly this — the build produced a new image id
+    but the container kept running the old one, silently.
+    """
+    compose_file = ctx.install_dir / "docker-compose.yml"
+    container_name, _ = _container_info(ctx)
+    try:
+        r = _run(
+            ctx, "docker", "compose", "-f", str(compose_file),
+            "up", "-d", "--force-recreate", "--no-deps", "app",
+            timeout=120,
+        )
+    except Exception as exc:
+        _record_warning(ctx, f"docker compose up --force-recreate falló: {exc}")
+        return False
+    if r.returncode != 0:
+        _record_warning(
+            ctx,
+            f"docker compose up --force-recreate devolvió {r.returncode}: "
+            f"{(r.stderr or '')[:300]}",
+        )
+        return False
+    deadline = time.monotonic() + timeout_seconds
+    last_observed: Optional[tuple[bool, Optional[str]]] = None
+    while time.monotonic() < deadline:
+        try:
+            r = _run(
+                ctx, "docker", "inspect",
+                "--format", "{{.State.Running}}|{{.Image}}",
+                container_name, timeout=10,
+            )
+        except Exception:
+            time.sleep(poll_interval)
+            continue
+        if r.returncode == 0:
+            parts = (r.stdout or "").strip().split("|", 1)
+            if len(parts) == 2:
+                running = parts[0].strip().lower() == "true"
+                image_id = parts[1].strip() or None
+                last_observed = (running, image_id)
+                if running and image_id == expected_image_id:
+                    _record_component(ctx, f"app:container on {image_id[:19]}")
+                    return True
+        time.sleep(poll_interval)
+    if last_observed is None:
+        _record_warning(
+            ctx,
+            f"docker inspect {container_name} no respondió en {timeout_seconds:.0f}s.",
+        )
+    else:
+        running, image_id = last_observed
+        # Distinguish "wrong image" (the 2026-04-19 regression) from
+        # "right image but container not Running" (crashloop, exit).
+        # Same warning for both would misdirect the operator.
+        if image_id == expected_image_id:
+            _record_warning(
+                ctx,
+                f"container not running (image matches {expected_image_id[:19]}, "
+                f"running=False) tras {timeout_seconds:.0f}s.",
+            )
+        else:
+            _record_warning(
+                ctx,
+                f"container runs stale image (expected {expected_image_id[:19]}, "
+                f"got {(image_id or 'none')[:19]}, running={running}) tras "
+                f"{timeout_seconds:.0f}s.",
+            )
+    return False
+
+
+def _rebuild_app(ctx: _Ctx) -> None:
+    """Build the new image and force-recreate the container.
+
+    FIX-20260420 PR-B: replaced the trust-based
+    ``build → up -d → ✓ printed`` sequence with a verified one. If
+    the build produces no new image id (cache hit) we skip the
+    recreate — the running container is already on the correct
+    image. Otherwise we force-recreate and check ``.Image`` post-up
+    matches the expected id. Mismatches degrade to warnings +
+    ``needs_restart=True`` here; PR-D converts them into rollback
+    triggers.
+    """
+    compose_file = ctx.install_dir / "docker-compose.yml"
+    if not compose_file.exists():
+        _record_warning(ctx, f"docker-compose.yml no encontrado en {ctx.install_dir}")
+        return
+    pre_state = ctx.manifest.get("pre_state") or capture_state(ctx)
+    new_image_id = _build_and_verify_image(ctx, pre_state)
+    if new_image_id is None:
+        return
+    if not _recreate_and_verify_container(ctx, new_image_id):
+        ctx.manifest["needs_restart"] = True
 
 
 def _load_install_config(install_dir: Path) -> Optional[dict]:
@@ -906,12 +1122,14 @@ def perform_update(
         return ctx.manifest
     ctx.manifest["branch"] = branch
 
-    ctx.manifest["before_commit"] = _git(ctx, "rev-parse", "HEAD")
-    # PR final 2: baseline for the post-update schema_version check
-    # in the default health-check. Read BEFORE backup so a bad
-    # backup that corrupts the DB still leaves us with a valid
-    # comparison target.
-    ctx.manifest["before_schema_version"] = _read_schema_version(ctx)
+    # PR-B: richer pre-update snapshot. ``before_commit`` and
+    # ``before_schema_version`` stay as top-level fields for
+    # backwards compatibility with pre-PR-B consumers (tests,
+    # update-log schema).
+    pre_state = capture_state(ctx)
+    ctx.manifest["pre_state"] = pre_state
+    ctx.manifest["before_commit"] = pre_state["commit_sha"]
+    ctx.manifest["before_schema_version"] = pre_state["schema_version"]
 
     if not _perform_backup(ctx):
         ctx.manifest["duration_seconds"] = round(time.monotonic() - t0, 2)
