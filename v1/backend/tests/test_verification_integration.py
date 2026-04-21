@@ -101,3 +101,36 @@ def test_sad_path_question_unanswered(
     assert len(events) == 1
     payload = json.loads(events[0].payload_json or "{}")
     assert payload == {"error_code": "question_unanswered", "outcome": "verification_failed"}
+
+
+def _tool_use_write(file_path: str) -> dict:
+    return {"type": "tool_use", "name": "Write", "input": {"file_path": file_path}}
+
+
+def test_sad_path_artifacts_outside_cwd(
+    session: Session, git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR-V1-11b sad path: absolute ``tool_use`` write outside cwd fails E4."""
+
+    task = _seed(session, git_project)
+    leak = tmp_path / "leak.txt"
+    _prime(
+        tmp_path, monkeypatch,
+        lines=[
+            _tool_use_write(str(leak)),
+            {"type": "result", "subtype": "success"},
+        ],
+        # Still touch something inside cwd so E3 passes and E4 is the
+        # check that actually trips.
+        touch=git_project / "inside.py",
+    )
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    run = session.query(Run).one()
+    assert run.status == "failed" and run.outcome == "verification_failed"
+    evidence = json.loads(run.verification_json or "{}")
+    assert evidence.get("error_code") == "artifacts_outside_cwd"
+    assert evidence.get("offending_paths") == [str(leak)]
+    assert session.get(Task, task.id).status == "failed"
