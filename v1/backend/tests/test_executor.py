@@ -150,7 +150,10 @@ def test_process_pending_single_task(session: Session, git_project: Path) -> Non
     run = runs[0]
     assert run.status == "completed"
     assert run.exit_code == 0
-    assert run.outcome == "cli_ok"
+    # PR-V1-11a: the run-level outcome is ``verified`` once the verifier
+    # has passed; the adapter's own outcome (``cli_ok``) is consumed
+    # internally by the verifier.
+    assert run.outcome == "verified"
     assert run.model == "claude-code"
     assert run.finished_at is not None
 

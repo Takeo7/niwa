@@ -136,7 +136,8 @@ def test_adapter_parses_stream_and_writes_run_events(
     run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.status == "completed"
     assert run.exit_code == 0
-    assert run.outcome == "cli_ok"
+    # PR-V1-11a: post-verify the run-level outcome is ``verified``.
+    assert run.outcome == "verified"
 
     events = (
         session.query(RunEvent)
@@ -203,7 +204,7 @@ def test_adapter_skips_malformed_json_lines(
 
     run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.status == "completed"
-    assert run.outcome == "cli_ok"
+    assert run.outcome == "verified"
 
     stream_events = (
         session.query(RunEvent)
