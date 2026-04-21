@@ -961,6 +961,51 @@ Así evitamos abrir CORS en FastAPI: el backend mantiene `127.0.0.1` sin
 CORS (SPEC §2 — binding local) y el frontend usa rutas relativas
 `/api/...` que el dev server tunela.
 
+## Triage module (PR-V1-12a)
+
+Módulo plano `app/triage.py` con una sola responsabilidad: decidir
+binariamente si una task se ejecuta directa o se parte en subtasks
+(SPEC §1, paso 1). Una llamada LLM, sin estado, sin DB.
+
+**Contrato público:**
+
+- `TriageDecision` — dataclass frozen con `kind` (`"execute"` |
+  `"split"`), `subtasks: list[str]` (vacía sii `kind=="execute"`),
+  `rationale: str`, `raw_output: str` (texto del último evento, solo
+  debug).
+- `TriageError(Exception)` — fallo del adapter, JSON ausente o
+  inválido, o shape incoherente (p.ej. `execute` con subtasks).
+- `triage_task(project, task) -> TriageDecision` — spawnea
+  `ClaudeCodeAdapter` con el prompt, drena `iter_events()` en memoria
+  (NO persiste `run_events` — triage no es un Run almacenado), llama
+  `wait()`, valida `outcome=="cli_ok" and exit_code==0`, extrae el
+  texto del último `result` o `assistant`, parsea y valida shape.
+  `adapter.close()` corre siempre en `finally`.
+
+**Prompt** — template en el módulo, se abre con la frase literal
+`"You are a triage agent for Niwa."` (keyword fijo; el fake CLI de
+12b lo usará para keyword-dispatch). Pide salida JSON en fence
+```json``` con tres campos: `decision`, `subtasks`, `rationale`.
+
+**Parser JSON (`_parse_triage_json`)** — dos ramas: primero
+`re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)`; si no
+matchea, fallback stack-based balanced-match del primer `{...}`
+respetando comillas y escapes. Si ninguna rama encuentra objeto,
+`TriageError`.
+
+**Integración en el pipeline** — en PR-V1-12b. Tras el merge de 12a
+el módulo existe y tiene unit tests verdes, pero **no se invoca desde
+`app/executor/`**. Queda como código vivo-sin-uso hasta que 12b lo
+enchufe a `run_adapter` (decidiendo antes de spawnear el adapter
+principal).
+
+**Tests** — `tests/test_triage.py` (4 cases) mockea
+`ClaudeCodeAdapter` via monkeypatch sin extender el fake CLI: un
+`_FakeAdapter` con `iter_events`/`wait`/`outcome`/`exit_code`/`close`
+scripteados. Cubre execute-en-fence, split-en-fence, JSON pelado sin
+fence (rama fallback), y error informativo cuando el CLI responde sin
+JSON.
+
 ## Próximos PRs (SPEC §9)
 
 - PR-V1-08: ejecución aislada en rama git por task. Crear/chequear
