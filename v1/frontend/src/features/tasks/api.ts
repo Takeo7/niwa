@@ -93,3 +93,20 @@ export function useDeleteTask(slug: string) {
     },
   });
 }
+
+// PR-V1-19: delivers the user clarification to the backend. On success
+// we invalidate the single-task query so the detail page re-renders as
+// `queued` with no pending_question.
+export function useRespondTask(taskId: number) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, { response: string }>({
+    mutationFn: (payload) =>
+      apiFetch<Task>(`/tasks/${taskId}/respond`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
