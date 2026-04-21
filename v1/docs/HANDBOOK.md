@@ -1263,14 +1263,144 @@ delimitador para que los paths con `/` no necesiten escaping.
 La separación entre "escribir el unit" (PR-V1-14) y "cargarlo +
 helper CLI" (PR-V1-15) evita que el bootstrap deje un daemon
 corriendo sin que el usuario haya visto primero la UI. PR-V1-15
-añadirá `niwa-executor [start|stop|status]` que abstraerá
+añade `niwa-executor [start|stop|status]` que abstrae
 `launchctl`/`systemctl --user`.
+
+## Executor launcher (PR-V1-15)
+
+`niwa-executor` es el wrapper CLI sobre el service file que
+escribió PR-V1-14. Vive en `v1/backend/app/niwa_cli.py`, stdlib
+puro (`argparse`, `subprocess`, `pathlib`, `platform`,
+`sys`, `os`). Se registra como entry point en
+`v1/backend/pyproject.toml`:
+
+```toml
+[project.scripts]
+niwa-executor = "app.niwa_cli:main"
+```
+
+Tras `pip install -e v1/backend` dentro de `~/.niwa/venv` (lo que
+hace `bootstrap.sh`), `~/.niwa/venv/bin/niwa-executor` queda en
+PATH.
+
+### CLI reference
+
+```
+niwa-executor start          # load + start (idempotente)
+niwa-executor stop           # stop + unload
+niwa-executor restart        # reload del service file
+niwa-executor status         # exit code mapeado a estado
+niwa-executor logs [--follow] [--lines N]   # tail del log
+```
+
+- `--lines`/`-n` default 50.
+- `--follow`/`-f` invoca `tail -f`; hereda stdio del padre para
+  que `Ctrl-C` mate el tail hijo.
+
+### Dispatch por OS
+
+`platform.system()` decide el backend:
+
+| Subcomando | Darwin | Linux |
+|------------|--------|-------|
+| `start`    | `launchctl load -w <plist>` | `systemctl --user enable --now niwa-executor.service` |
+| `stop`     | `launchctl unload -w <plist>` | `systemctl --user disable --now niwa-executor.service` |
+| `restart`  | `launchctl kickstart -k gui/<uid>/com.niwa.executor` | `systemctl --user restart niwa-executor.service` |
+| `status`   | `launchctl list com.niwa.executor` | `systemctl --user status niwa-executor.service` |
+
+Exit codes de `status` se propagan tal cual:
+
+- macOS `launchctl list <label>` → 0 si cargado, 113 si no.
+- Linux `systemctl --user status` → 0 si active, 3 si inactive.
+
+Otro OS (e.g. `Windows`) → exit 1 con mensaje `Unsupported OS`.
+
+Binario ausente (p. ej. `launchctl` en un Linux) → exit 127 con
+`command not found: <tool>`.
+
+### Paths canónicos
+
+- `NIWA_HOME` = `$NIWA_HOME` env (override para tests) o
+  `~/.niwa`.
+- Log: `$NIWA_HOME/logs/executor.log` — escrito por launchd /
+  systemd según el service file. Crece indefinidamente (rotate
+  queda follow-up).
+- macOS plist: `~/Library/LaunchAgents/com.niwa.executor.plist`,
+  label `com.niwa.executor`.
+- Linux unit: `niwa-executor.service` bajo
+  `~/.config/systemd/user/`.
+
+Si `start`/`restart` corren en macOS y el plist no existe, el CLI
+sale 1 con `service file missing at <path>; run v1/bootstrap.sh
+first` — la pista concreta para el usuario.
+
+### Arranque al boot/login
+
+Ni el CLI ni `bootstrap.sh` cargan el servicio por sí solos. Una
+vez el usuario corre `niwa-executor start`:
+
+- macOS: `launchctl load -w` pone el plist en la queue del user
+  launchd; al siguiente login el plist se carga solo porque el
+  template declara `RunAtLoad=true` + `KeepAlive`.
+- Linux: `systemctl --user enable --now` arranca ya y crea el
+  symlink en `default.target.wants/`; en cada login systemd-user
+  rehidrata el unit.
+
+Para ejecuciones headless en Linux (ssh sin sesión gráfica), el
+usuario necesita `loginctl enable-linger <user>` una vez; si no,
+`systemctl --user` falla sin `XDG_RUNTIME_DIR`.
+
+### Re-install tras PR-V1-15
+
+Los usuarios que corrieron `bootstrap.sh` antes de este PR tienen
+el paquete `niwa-v1-backend` instalado sin el entry point. Tienen
+que re-ejecutar el bootstrap (que hace `pip install -e` sobre un
+paquete ya instalado, refrescando metadata) para que
+`~/.niwa/venv/bin/niwa-executor` aparezca.
+
+### Known deprecations
+
+- `launchctl load -w` está deprecated en macOS 10.11+ a favor de
+  `launchctl bootstrap gui/<uid> <plist>`. El MVP usa `load`
+  porque sigue funcionando en todas las versiones target; si Apple
+  lo retira en una versión futura, migrar a `bootstrap`/`bootout`
+  es un follow-up aislado al dispatcher de `cmd_start`/`cmd_stop`.
+- `kickstart -k` requiere macOS 10.10+; asumido como precondición.
+- Sin sesión GUI activa, `gui/<uid>/<label>` puede fallar; el
+  fallback manual es `niwa-executor stop && niwa-executor start`.
+
+### Tests
+
+`tests/test_niwa_cli.py` (10 casos, cero subprocess reales):
+
+1. `test_start_macos_calls_launchctl_load` — plist presente →
+   `launchctl load -w <plist>`.
+2. `test_start_linux_calls_systemctl_enable_now` — argv
+   completo verificado.
+3. `test_start_macos_fails_when_plist_missing` — exit 1 y
+   mensaje "service file missing"; nunca llama a subprocess.
+4. `test_stop_dispatches_correct_cmd_per_platform` —
+   parametrizado Darwin/Linux.
+5. `test_status_returns_subcmd_exit_code` — exit 3 del stub se
+   propaga.
+6. `test_logs_missing_file_returns_1` — log ausente → exit 1
+   con mensaje útil.
+7. `test_logs_invokes_tail_with_lines` — `--lines 100` → argv
+   `["tail", "-n", "100", <path>]`. `--follow` NO testeado para
+   evitar `tail -f` colgante.
+8. `test_unsupported_os_returns_1` — `platform.system` →
+   `"Windows"`.
+9. `test_run_captures_file_not_found_returns_127` —
+   `subprocess.run` lanza `FileNotFoundError` → exit 127.
+
+Aislamiento: `monkeypatch.setenv("NIWA_HOME", tmp_path)` +
+`importlib.reload(app.niwa_cli)` para que las constantes de
+módulo vean el env var. `platform.system` y `subprocess.run`
+mockeados, never spawning.
 
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-15: launcher CLI `niwa-executor` que carga/arranca el
-  service file que escribió el bootstrap.
-- PR-V1-14+: modo `dangerous` (auto-merge del PR tras verify OK) y
+- PR-V1-16+: modo `dangerous` (auto-merge del PR tras verify OK) y
   deploy condicional a `localhost:PORT` cuando
   `project.kind=web-deployable`. Semana 4 del SPEC.
 
