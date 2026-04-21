@@ -521,3 +521,43 @@ def test_process_pending_splits_when_triage_says_split(
     assert payload.get("event") == "triage_split"
     assert payload.get("subtask_ids") == [t.id for t in subtasks]
     assert payload.get("rationale") == "two areas"
+
+
+# Safe mode finalize integration (PR-V1-13) — spy in for ``finalize_task``
+# that also writes ``task.pr_url`` so we can assert the executor invokes
+# it on the verified branch and the pipeline still closes the task
+# ``done``.
+
+
+def test_process_pending_finalizes_verified_run_with_gh_stub(
+    session: Session, git_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.executor.core as executor_core
+    from app.finalize import FinalizeResult
+
+    calls: list[int] = []
+    url = "https://github.com/owner/repo/pull/99"
+
+    def fake_finalize(session, run, task, project):
+        calls.append(task.id)
+        task.pr_url = url
+        session.commit()
+        return FinalizeResult(True, True, url, [])
+
+    monkeypatch.setattr(executor_core, "finalize_task", fake_finalize)
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    project = _make_project(session, local_path=git_project)
+    task = _make_task(session, project, title="finalize me")
+
+    assert process_pending(session) == 1
+    assert calls == [task.id]
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    assert refreshed.pr_url == url
+
+    run = session.query(Run).filter(Run.task_id == task.id).one()
+    assert run.outcome == "verified"
+    assert run.status == "completed"

@@ -25,6 +25,7 @@ from ..adapters import (
     resolve_cli_path,
     resolve_timeout,
 )
+from ..finalize import finalize_task
 from ..models import Project, Run, RunEvent, Task, TaskEvent
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
@@ -182,6 +183,26 @@ def run_adapter(session: Session, task: Task) -> Run:
     )
     run.verification_json = json.dumps(result.evidence)
     session.commit()
+
+    # PR-V1-13: safe-mode finalize runs on verified runs only. It is
+    # best-effort — ``finalize_task`` swallows subprocess failures and
+    # reports them on its return value, but we still guard against a
+    # catastrophic exception (e.g. DB connection dropped) so the task
+    # always reaches its terminal state below.
+    if result.passed and project is not None:
+        try:
+            fin = finalize_task(session, run, task, project)
+            logger.info(
+                "finalize task_id=%s committed=%s pushed=%s pr_url=%s skipped=%s",
+                task.id,
+                fin.committed,
+                fin.pushed,
+                fin.pr_url,
+                fin.commands_skipped,
+            )
+        except Exception:  # noqa: BLE001 — must never fail the run
+            logger.exception("finalize crashed for task_id=%s", task.id)
+
     _finalize(
         session, task, run,
         outcome="verified" if result.passed else result.outcome,
