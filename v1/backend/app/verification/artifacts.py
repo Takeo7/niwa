@@ -7,18 +7,22 @@
   ``project.kind = script`` with a non-git workspace still pass E3 —
   11c will gate further checks on ``git_available``.
 * **E4** catches writes the adapter made *outside* the task cwd. We
-  replay ``run_events`` (filtering to ``tool_use`` with a write-class
-  ``name``) and flag any absolute ``file_path`` that is not a subpath of
-  the resolved cwd. Relative paths are accepted: Claude emits them
-  relative to its own cwd, which is the task cwd. ``Bash`` tool_use is
-  not inspected — heuristic coverage of arbitrary shell is out of scope
-  for the MVP.
+  replay ``run_events`` inspecting **both** tool_use shapes Claude
+  emits: top-level ``event_type="tool_use"`` frames (legacy / fake CLI)
+  and ``tool_use`` blocks embedded inside an ``assistant`` message's
+  ``message.content[]`` (the canonical CLI shape, per v0.2
+  ``FIX-20260420``). Payloads with a write-class ``name`` are checked
+  for absolute ``file_path`` escaping the resolved cwd. Relative paths
+  are accepted: Claude emits them relative to its own cwd, which is the
+  task cwd. ``Bash`` tool_use is not inspected — heuristic coverage of
+  arbitrary shell is out of scope for the MVP.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -95,29 +99,32 @@ def _extract_write_path(payload: dict[str, Any]) -> str | None:
     return candidate
 
 
-def check_no_artifacts_outside_cwd(
-    session: Session, run: Run, cwd: Path | str, evidence: dict[str, Any]
-) -> bool:
-    """E4 — pass if every write-class tool_use stayed inside ``cwd``.
+def _iter_tool_use_payloads(
+    session: Session, run: Run
+) -> Iterator[dict[str, Any]]:
+    """Yield every ``tool_use`` payload the run emitted, in id order.
 
-    Walks the run's ``tool_use`` events in id order; for each write-class
-    payload with an absolute ``file_path``, asserts the path is a subpath
-    of ``cwd.resolve()``. On first offender returns ``False`` and fills
-    ``evidence["offending_paths"]`` with the raw (unresolved) path —
-    matching the user-visible value they'd recognise from the stream.
+    Two shapes are supported (mirroring v0.2
+    ``_extract_tool_uses_from_msg`` after ``FIX-20260420``):
+
+    1. Top-level ``event_type == "tool_use"`` — the legacy/fake shape
+       carried by a handful of unit tests and ``fake_claude.py``.
+    2. Embedded ``event_type == "assistant"`` where
+       ``payload.message.content`` is a list of blocks and one or more
+       blocks have ``type == "tool_use"`` — the **canonical** shape the
+       real Claude CLI emits. Skipping this path was the E4 blocker
+       codex flagged: real runs never see top-level frames, so every
+       real E4 pass was vacuous.
     """
-
-    cwd_resolved = Path(cwd).resolve()
 
     rows = session.execute(
         select(RunEvent)
-        .where(RunEvent.run_id == run.id, RunEvent.event_type == "tool_use")
+        .where(
+            RunEvent.run_id == run.id,
+            RunEvent.event_type.in_(("tool_use", "assistant")),
+        )
         .order_by(RunEvent.id.asc())
     ).scalars().all()
-
-    scanned = 0
-    absolute = 0
-    offender: str | None = None
 
     for row in rows:
         if row.payload_json is None:
@@ -128,6 +135,42 @@ def check_no_artifacts_outside_cwd(
             continue
         if not isinstance(payload, dict):
             continue
+        if row.event_type == "tool_use":
+            yield payload
+            continue
+        # event_type == "assistant": dig into message.content[]
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                yield block
+
+
+def check_no_artifacts_outside_cwd(
+    session: Session, run: Run, cwd: Path | str, evidence: dict[str, Any]
+) -> bool:
+    """E4 — pass if every write-class tool_use stayed inside ``cwd``.
+
+    Walks the run's ``tool_use`` payloads (both top-level and embedded
+    in assistant messages, see ``_iter_tool_use_payloads``) in id order;
+    for each write-class payload with an absolute ``file_path``, asserts
+    the path is a subpath of ``cwd.resolve()``. On first offender
+    returns ``False`` and fills ``evidence["offending_paths"]`` with the
+    raw (unresolved) path — matching the user-visible value they'd
+    recognise from the stream.
+    """
+
+    cwd_resolved = Path(cwd).resolve()
+
+    scanned = 0
+    absolute = 0
+    offender: str | None = None
+
+    for payload in _iter_tool_use_payloads(session, run):
         file_path = _extract_write_path(payload)
         if file_path is None:
             continue
