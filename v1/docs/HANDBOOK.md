@@ -1593,8 +1593,10 @@ antes de lanzar un task.
 lo corre en el threadpool), compone 4 helpers puros de
 `app/services/readiness_checks.py`:
 
-- `check_db(db_path)` — `SELECT 1` contra un engine propio (no
-  comparte pool con la app) sobre `Settings.db_path`.
+- `check_db_via_session(session)` — `SELECT 1` contra la `Session`
+  inyectada por el DI graph (`Depends(get_session)`). Usa la misma
+  DB que el resto del request: evita crear el fichero SQLite como
+  side-effect del health probe y respeta los overrides de tests.
 - `check_claude_cli(cli)` — `shutil.which(cli or "claude")`. Solo
   presencia. **No** corre `claude whoami` ni subcomandos (brief
   explícito: hit de red, lento).
@@ -1646,12 +1648,14 @@ por defecto cuando falla. Ruta `/system` registrada en `App.tsx`.
 
 ### Tests
 
-`tests/test_readiness_api.py` (5 casos): all-ok, `claude` missing,
-`gh` missing + hint, `git` excepción capturada, `db` unreachable.
+`tests/test_readiness_api.py` (6 casos): all-ok, `claude` missing,
+`gh` missing + hint, `git` excepción capturada, `db` unreachable
+(patchea `svc.check_db_via_session` para ejercitar la composición
+del endpoint) y un unit test (`test_check_db_via_session_catches_exception`)
+que pasa una session mock cuyo `execute` lanza `OperationalError`
+para ejercitar la rama `except` real del helper.
 Todos mockean `shutil.which` y `subprocess.run` via `monkeypatch`;
-ningún subprocess real se spawnea. El caso db patchea
-`svc.check_db` para ejercitar la ruta de composición sin montar
-un engine corrupto.
+ningún subprocess real se spawnea.
 
 `tests/SystemRoute.test.tsx` (2 casos): all-OK rinde 4 badges
 verde; `gh_ok=false` con hint rinde "Missing" + el texto del hint.
