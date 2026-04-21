@@ -14,11 +14,17 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+# Last 4 KB of combined stdout/stderr is stored on the run. Enough to
+# recognise which test failed without bloating the DB.
+_OUTPUT_TAIL_BYTES = 4096
 
 # ``^test:`` at column 0 is Make's rule-definition marker. We grep the
 # raw file rather than invoking ``make -n`` because that would execute
@@ -37,6 +43,19 @@ class TestRunnerChoice:
     cmd: list[str]
     tool: str  # "make" | "npm" | "pytest"
     cwd: Path
+
+
+@dataclass
+class TestRunResult:
+    """Outcome of a single ``run_project_tests`` invocation."""
+
+    __test__ = False
+
+    passed: bool           # exit_code == 0 and not timed_out
+    exit_code: int | None  # None only when timed_out
+    timed_out: bool
+    duration_s: float
+    output_tail: str       # last 4 KB of stdout+stderr combined
 
 
 def _makefile_has_test_rule(cwd: Path) -> bool:
@@ -127,7 +146,56 @@ def detect_test_runner(cwd: Path, project: Any) -> TestRunnerChoice | None:
     return None
 
 
+def _tail(stdout: str | None, stderr: str | None) -> str:
+    blob = (stdout or "") + (stderr or "")
+    if len(blob) <= _OUTPUT_TAIL_BYTES:
+        return blob
+    return blob[-_OUTPUT_TAIL_BYTES:]
+
+
+def run_project_tests(
+    choice: TestRunnerChoice, *, timeout: int = 300
+) -> TestRunResult:
+    """Run ``choice.cmd`` in ``choice.cwd`` with a hard timeout.
+
+    ``subprocess.run`` handles the kill on timeout and re-raises
+    ``TimeoutExpired`` with whatever partial output it captured; we
+    record that same tail so the operator sees where it got stuck.
+    """
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            choice.cmd,
+            cwd=str(choice.cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration = time.monotonic() - start
+        return TestRunResult(
+            passed=False,
+            exit_code=None,
+            timed_out=True,
+            duration_s=duration,
+            output_tail=_tail(exc.stdout, exc.stderr),
+        )
+
+    duration = time.monotonic() - start
+    exit_code = proc.returncode
+    return TestRunResult(
+        passed=exit_code == 0,
+        exit_code=exit_code,
+        timed_out=False,
+        duration_s=duration,
+        output_tail=_tail(proc.stdout, proc.stderr),
+    )
+
+
 __all__ = [
+    "TestRunResult",
     "TestRunnerChoice",
     "detect_test_runner",
+    "run_project_tests",
 ]
