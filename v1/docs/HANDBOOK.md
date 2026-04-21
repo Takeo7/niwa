@@ -575,7 +575,9 @@ el run y la task.
   normalmente bug del executor/operator, no se skipea).
 - E4: `artifacts_outside_cwd`.
 - E5: `tests_failed` (exit ≠ 0), `tests_timeout` (>300 s sin devolver
-  control). Skip vacío (no hay runner detectado) pasa E5 con
+  control), `tests_runner_missing` (el binario resuelto — `make`,
+  `npm`, `sys.executable` — no existe/no es ejecutable en el host).
+  Skip vacío (no hay runner detectado) pasa E5 con
   `evidence.test_reason` = `"no_test_script_detected"` |
   `"kind_script"`.
 
@@ -747,15 +749,18 @@ resuelve en este orden:
 1. `project.kind == "script"` → `None` (skip por diseño; ad-hoc
    scripts no llevan suite). El orquestador setea
    `evidence.test_reason = "kind_script"`.
-2. `cwd/Makefile` con regla `^test:` (regex sobre el fichero, sin
-   invocar `make`) → `TestRunnerChoice(cmd=["make","test","-s"],
+2. `cwd/Makefile` con regla `^test\s*:(?!=)` (regex sobre el fichero,
+   sin invocar `make`; la lookahead descarta variable-assignments tipo
+   `test := foo`) → `TestRunnerChoice(cmd=["make","test","-s"],
    tool="make", cwd=...)`.
 3. `cwd/package.json` con `scripts.test` no vacío (parse JSON) →
    `cmd=["npm","test","--silent"], tool="npm"`.
 4. `cwd/pyproject.toml` (parse con `tomllib`, stdlib 3.11+) con
    `[tool.pytest*]` o `pytest` dentro de
    `[project.optional-dependencies].test` →
-   `cmd=["python","-m","pytest","-q"], tool="pytest"`.
+   `cmd=[sys.executable,"-m","pytest","-q"], tool="pytest"`
+   (usamos `sys.executable` y no la cadena `"python"`: hosts minimal /
+   Debian modernos sólo traen `python3`).
 5. Ninguno → `None`; orquestador setea
    `evidence.test_reason = "no_test_script_detected"`.
 
@@ -775,6 +780,14 @@ consolidado del proyecto.
   devuelve `error_code="tests_timeout"`. `subprocess.run` ya mata el
   proceso. Capturamos el stdout/stderr parcial de la excepción para
   el tail.
+- `FileNotFoundError` / `PermissionError` / `OSError` al lanzar el
+  proceso (binario del runner ausente) → `passed=False`,
+  `exit_code=None`, `timed_out=False`, `output_tail` con
+  `"<ExceptionType>: <msg>"`. El orquestador lo mapea a
+  `error_code="tests_runner_missing"` — distinto de `tests_failed`
+  para que el operador sepa que el problema es la toolchain, no los
+  tests. Sin esta captura la excepción escapaba `verify_run` y dejaba
+  el run wedged en `running`.
 
 Timeout **hardcoded** a 300 s por ahora. Follow-up:
 `NIWA_VERIFY_TESTS_TIMEOUT` env var — documentado como riesgo del
