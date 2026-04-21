@@ -1509,9 +1509,82 @@ Aislamiento: `monkeypatch.setenv("NIWA_HOME", tmp_path)` +
 módulo vean el env var. `platform.system` y `subprocess.run`
 mockeados, never spawning.
 
+## Deploy local (PR-V1-17)
+
+Handler estático en el propio backend FastAPI que sirve el output
+de build de cualquier proyecto `kind="web-deployable"`. Cierra el
+hito de Semana 5 del SPEC §9 — "deploy a
+`localhost:PORT/<slug>`" — sin spawn de procesos, sin reverse
+proxy y sin gestión de puertos por proyecto.
+
+### URL y contrato
+
+```
+GET /api/deploy/{slug}/              → dist/index.html (SPA entry)
+GET /api/deploy/{slug}/{path:path}   → dist/<path>
+```
+
+- Resuelve `Project` por `slug` en DB. 404 si no existe o si
+  `kind != "web-deployable"` (mismo 404 silencioso para `library`
+  y `script`, aunque el repo tenga `dist/`).
+- Empty path o directorio → `dist/index.html`.
+- File no existente bajo `dist/` → 404.
+- Content-Type por extensión vía `FileResponse` (FastAPI). No hay
+  gzip, ni cache headers, ni ETag: MVP.
+
+Ruta final bajo el router raíz `api_router` (prefix `/api`), por
+consistencia con el resto del backend; el frontend Vite ya
+proxea `/api/*`.
+
+### Traversal guard
+
+```python
+dist = (Path(project.local_path) / "dist").resolve()
+target = (dist / path).resolve() if path else dist / "index.html"
+if target.is_dir():
+    target = target / "index.html"
+try:
+    target.resolve().relative_to(dist)
+except ValueError:
+    raise HTTPException(404, "Not found")
+```
+
+- `Path.resolve()` colapsa `..` **y** sigue symlinks. Un symlink
+  dentro de `dist/` que apunte fuera del árbol resuelve a ruta
+  absoluta externa; `relative_to(dist)` lanza `ValueError` y la
+  respuesta es 404 sin leer el file.
+- El test de traversal envía `%2E%2E/%2E%2E/secret.txt` codificado
+  para que httpx no normalice el `..` antes de llegar a FastAPI.
+
+### Known limitations (aspiracional para v1.1)
+
+- **`project.deploy_port` no se usa.** La columna sigue en schema
+  pero el MVP ignora su valor; el servicio queda siempre bajo
+  `localhost:<main_port>/api/deploy/<slug>/`. Per-port/subdominio
+  se introducirá con Caddy/Cloudflare en v1.1 (SPEC §8, punto 2).
+- **No spawn de procesos.** El proyecto no corre su propio server;
+  Niwa solo sirve lo que el build dejó en `dist/`.
+- **No build automático post-verify.** El usuario/task ejecuta
+  `npm run build` (o equivalente) aparte; `finalize.py` **no**
+  dispara deploy (el brief lo excluye explícitamente).
+- **No reverse proxy** a un daemon del proyecto. Solo static.
+- **No auth, no gzip, no cache-control.** Binding local (SPEC §2).
+- **No UI del link de deploy.** `ProjectDetail.tsx` podría mostrar
+  `http://localhost:<port>/api/deploy/<slug>/` como follow-up.
+
+### Tests
+
+`tests/test_deploy_api.py` (5 casos): index fallback, asset
+bajo `dist/assets/`, 404 por slug desconocido, 404 por
+`kind=library`, 404 por traversal sin fugar el fichero externo.
+Fixture shared `client` + `tmp_path` para montar el árbol
+`dist/` por test.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-17+: deploy condicional a `localhost:PORT` cuando
-  `project.kind=web-deployable`. Semana 5 del SPEC.
+- Semana 5 (restante): página `/system` de readiness,
+  clarification round-trip en UI, instalación en la máquina
+  de la pareja.
+- Semana 6: bugfix + jubilar v0.2.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
