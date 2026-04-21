@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-11c)
+## Layout actual (tras PR-V1-12)
 
 ```
 v1/
@@ -22,6 +22,7 @@ v1/
 │   │   ├── executor/           # daemon (polling, pipeline, git workspace,
 │   │   │                       # CLI entrypoint)
 │   │   ├── verification/       # evidence-based run verifier (PR-V1-11a/11b/11c)
+│   │   ├── triage.py           # single-call decision (PR-V1-12)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -437,6 +438,65 @@ executor, de modo que **todo el pipeline ejerce el código de producción**
 Cubre los 4 outcomes con combinaciones de args: stream normal + exit 0,
 stream + exit 1, no-existe (apuntando a path inválido), y prompt que
 duerme más que el timeout.
+
+## Triage planner (PR-V1-12)
+
+Antes de `prepare_task_branch`, `process_pending` llama a
+`triage_task(project, task)` (vive en `app/triage.py`). Es la primera
+etapa del pipeline del SPEC §4 (`[triage] → decide: execute | split`)
+y se ejecuta **una sola vez por task** — sin retries, sin loops.
+
+**Contrato** — devuelve `TriageDecision(kind, subtasks, rationale,
+raw_output)`:
+
+- `kind="execute"` → sigue el flujo normal (prepare_branch + adapter +
+  verify). `subtasks=[]`.
+- `kind="split"` → `_apply_split` crea N `Task(parent_task_id=parent.id,
+  status="queued", description="")`, marca el padre `done` sin crear
+  Run, y escribe dos `TaskEvent`:
+    - `kind="message"`, `payload={"event":"triage_split",
+      "subtask_ids":[...], "rationale":...}`. SPEC §3 fija el enum de
+      `task_events.kind` a `(created | status_changed | message |
+      verification | error)`; el marcador `triage_split` vive en el
+      payload, no es un kind nuevo (ver nota de resolución en el
+      brief de PR-V1-12).
+    - `kind="status_changed"`, `payload={"from":"running","to":"done"}`.
+- `TriageError` → `_finalize_triage_failure` crea un Run sintético
+  `status="failed"`, `outcome="triage_failed"`, un `RunEvent(error,
+  reason=...)` y un `TaskEvent(kind="verification",
+  payload.error_code="triage_failed")`. La task acaba `failed`.
+
+**Prompt** — bloque estructurado con `# Task` + `# Instructions` + `#
+Response format`. Pide JSON en fence ` ```json ... ``` `. Incluye el
+marcador `triage agent for Niwa` para que los fakes de test puedan
+detectar la llamada y servir una respuesta distinta (ver
+`FAKE_CLAUDE_TRIAGE_JSON`). `cwd` = `project.local_path` porque el
+adapter necesita un dir real, pero el prompt prohíbe writes.
+`timeout=180s` (más corto que el run normal).
+
+**Parser** — dos pases: (1) regex ` ```json\s*(\{.*?\})\s*``` ` con
+`re.DOTALL`; (2) si falla, primer bloque `{...}` balanceado desde el
+primer `{`. Cualquier fallo (sin JSON, shape inválido, `decision`
+raro, `subtasks` no-lista) levanta `TriageError`. Outcomes del adapter
+distintos de `cli_ok` también se traducen a `TriageError`.
+
+**Integración en el executor** — `executor/core.py::process_pending`
+invoca `triage_task` entre `claim_next_task` y `run_adapter`:
+
+- `execute` → `run_adapter` como siempre.
+- `split` → `_apply_split`, `continue` al siguiente task del drain.
+- `TriageError` → `_finalize_triage_failure`, `continue`.
+
+**Fuera de scope (MVP)** — sin retry, sin cancelación en vivo, sin
+límite de profundidad de splits (los subtasks pasan por triage al
+salir del queue; si se bucla, follow-up), sin validación semántica
+de los títulos de subtasks (trust the CLI).
+
+**Tests** — `tests/test_triage.py` (5 casos, todos mockean el adapter)
++ `tests/test_executor.py` (3 casos de integración: execute, split,
+triage_failed). La extensión del fake CLI
+(`FAKE_CLAUDE_TRIAGE_JSON` + detección por keyword en stdin) deja que
+un solo binario fake sirva triage y ejecución en el mismo test.
 
 ## Git workspace (PR-V1-08)
 

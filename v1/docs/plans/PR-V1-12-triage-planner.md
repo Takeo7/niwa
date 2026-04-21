@@ -284,3 +284,28 @@ por el fake CLI. Menos end-to-end pero más barato.
   extender el fake CLI. Más simple.
 - Si algo del brief es ambiguo, **PARA y reporta** antes de
   improvisar.
+
+## Resolución del orquestador (2026-04-21)
+
+SPEC §3 fija el enum de `task_events.kind` a
+`(created | status_changed | message | verification | error)`.
+`kind="triage_split"` del brief original es incompatible con esa
+restricción (el `CheckConstraint` del modelo rechazaría la inserción).
+Resuelto usando `kind="message"` + marker en el payload:
+
+```python
+TaskEvent(
+    task_id=parent.id,
+    kind="message",
+    payload_json=json.dumps({
+        "event": "triage_split",
+        "subtask_ids": [...],
+        "rationale": decision.rationale,
+    }),
+)
+```
+
+`_finalize_triage_failure` sigue con `kind="verification"` como el
+brief indicaba (ya era consistente con el enum). Sin migración, sin
+cambios al schema. Los tests aseveran el evento buscando
+`kind="message"` + `payload.event="triage_split"`.

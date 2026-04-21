@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..models import Project, Run, RunEvent, Task, TaskEvent
+from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
 
@@ -192,15 +193,38 @@ def run_adapter(session: Session, task: Task) -> Run:
 
 
 def process_pending(session: Session) -> int:
-    """Drain every ``queued`` task currently visible to this session."""
+    """Drain every ``queued`` task visible to this session.
+
+    PR-V1-12 inserts the triage stage between ``claim_next_task`` and
+    ``run_adapter``: ``execute`` -> normal pipeline, ``split`` -> parent
+    ``done`` + subtasks queued, ``TriageError`` -> ``triage_failed``.
+    """
 
     processed = 0
     while True:
         task = claim_next_task(session)
         if task is None:
             break
-        # ``run_adapter`` swallows adapter exceptions internally (see its
-        # try/except/finally), so nothing we handle here would ever fire.
+        project = session.get(Project, task.project_id)
+
+        try:
+            decision = triage_task(project, task)
+        except TriageError as exc:
+            logger.warning("triage failed for task_id=%s: %s", task.id, exc)
+            _finalize_triage_failure(session, task, project, reason=str(exc))
+            processed += 1
+            continue
+
+        if decision.kind == "split":
+            logger.info(
+                "triage split for task_id=%s into %d subtasks",
+                task.id, len(decision.subtasks),
+            )
+            _apply_split(session, task, decision)
+            processed += 1
+            continue
+
+        # ``run_adapter`` swallows adapter exceptions internally.
         run_adapter(session, task)
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
@@ -271,6 +295,79 @@ def _finalize(
             message=None,
             payload_json=json.dumps({"error_code": error_code, "outcome": outcome}),
         ))
+    session.commit()
+
+
+def _apply_split(
+    session: Session, task: Task, decision: TriageDecision
+) -> None:
+    """Close the parent and enqueue the triage-produced subtasks.
+
+    SPEC §3 fixes ``task_events.kind`` to a closed enum, so the
+    ``triage_split`` marker lives in the payload of a ``message`` event.
+    """
+
+    subtasks = [
+        Task(
+            project_id=task.project_id, parent_task_id=task.id,
+            title=title, description="", status="queued",
+        )
+        for title in decision.subtasks
+    ]
+    for s in subtasks:
+        session.add(s)
+    session.flush()
+
+    from_status = task.status
+    task.status = "done"
+    task.completed_at = datetime.now(timezone.utc)
+    session.add(TaskEvent(
+        task_id=task.id, kind="message",
+        payload_json=json.dumps({
+            "event": "triage_split",
+            "subtask_ids": [s.id for s in subtasks],
+            "rationale": decision.rationale,
+        }),
+    ))
+    session.add(TaskEvent(
+        task_id=task.id, kind="status_changed",
+        payload_json=json.dumps({"from": from_status, "to": "done"}),
+    ))
+    session.commit()
+
+
+def _finalize_triage_failure(
+    session: Session, task: Task, project: Project | None, *, reason: str
+) -> None:
+    """Terminal ``triage_failed`` path: synthetic Run + verification event."""
+
+    now = datetime.now(timezone.utc)
+    run = Run(
+        task_id=task.id, status="failed", model=ADAPTER_MODEL,
+        started_at=now, finished_at=now, exit_code=None,
+        outcome="triage_failed",
+        artifact_root=project.local_path if project is not None else "",
+    )
+    session.add(run)
+    session.flush()
+    session.add(RunEvent(
+        run_id=run.id, event_type="error",
+        payload_json=json.dumps({"reason": reason[:500]}),
+    ))
+    session.add(RunEvent(run_id=run.id, event_type="failed", payload_json=None))
+
+    from_status = task.status
+    task.status = "failed"
+    session.add(TaskEvent(
+        task_id=task.id, kind="status_changed",
+        payload_json=json.dumps({"from": from_status, "to": "failed"}),
+    ))
+    session.add(TaskEvent(
+        task_id=task.id, kind="verification",
+        payload_json=json.dumps(
+            {"error_code": "triage_failed", "outcome": "triage_failed"}
+        ),
+    ))
     session.commit()
 
 

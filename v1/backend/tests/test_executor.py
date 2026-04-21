@@ -58,6 +58,14 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+    # PR-V1-12: every task now passes through triage first. Default the
+    # fake CLI to return ``execute`` so legacy tests keep exercising the
+    # adapter+verify path unchanged. Tests that want to assert on split
+    # or failure paths patch ``triage_task`` directly.
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_TRIAGE_JSON",
+        '{"decision":"execute","subtasks":[],"rationale":"default"}',
+    )
 
 
 @pytest.fixture()
@@ -368,6 +376,15 @@ def test_runs_fail_on_git_setup_error(
 ) -> None:
     """A non-git ``local_path`` must fail the task before the adapter spawns."""
 
+    # PR-V1-12: triage runs first; stub it to ``execute`` so the test can
+    # still pin the git_setup_failed branch.
+    from app.triage import TriageDecision
+    monkeypatch.setattr(
+        "app.executor.core.triage_task",
+        lambda project, task: TriageDecision(
+            kind="execute", subtasks=[], rationale="stub", raw_output=""
+        ),
+    )
     # If the executor ever reached the adapter this would surface as
     # ``cli_not_found``, not the expected ``git_setup_failed``.
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
@@ -441,26 +458,38 @@ def test_process_pending_splits_when_triage_says_split(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Triage ``split`` closes the parent without a Run and queues subtasks."""
+    """Triage ``split`` closes the parent without a Run and queues subtasks.
 
-    from app.triage import TriageDecision
+    The first triage call produces the split; subsequent calls (the two
+    subtasks claimed by the same drain pass) raise ``TriageError`` so
+    they terminate without spawning adapters. We then assert the parent
+    closed cleanly and the subtasks were persisted with the right shape.
+    """
+
+    from app.triage import TriageDecision, TriageError
+
+    calls: list[int] = []
 
     def fake_triage(project, task):
-        return TriageDecision(
-            kind="split",
-            subtasks=["alpha", "beta"],
-            rationale="two areas",
-            raw_output="",
-        )
+        calls.append(task.id)
+        if len(calls) == 1:
+            return TriageDecision(
+                kind="split",
+                subtasks=["alpha", "beta"],
+                rationale="two areas",
+                raw_output="",
+            )
+        raise TriageError("stop-after-split")
 
     monkeypatch.setattr("app.executor.core.triage_task", fake_triage)
-    # Make sure the CLI is never spawned: point at a missing binary.
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
 
     project = _make_project(session, local_path=tmp_path)
     parent = _make_task(session, project, title="parent")
 
-    assert process_pending(session) == 1
+    # Parent + 2 subtasks all get drained (subtasks via triage_failed),
+    # but only the parent path exercises ``_apply_split``.
+    assert process_pending(session) == 3
 
     session.expire_all()
     refreshed = session.get(Task, parent.id)
@@ -468,7 +497,7 @@ def test_process_pending_splits_when_triage_says_split(
     assert refreshed.status == "done"
     assert refreshed.completed_at is not None
 
-    # No Run recorded — the adapter was bypassed entirely.
+    # No Run recorded on the parent — the adapter was bypassed entirely.
     assert session.query(Run).filter(Run.task_id == parent.id).count() == 0
 
     subtasks = (
@@ -478,8 +507,11 @@ def test_process_pending_splits_when_triage_says_split(
         .all()
     )
     assert [t.title for t in subtasks] == ["alpha", "beta"]
-    assert all(t.status == "queued" for t in subtasks)
     assert all(t.project_id == project.id for t in subtasks)
+    # Subtasks went through their own triage (which we forced to fail)
+    # and are now ``failed`` — not the focus of this test but proves
+    # the queue drained cleanly without hangs.
+    assert all(t.status == "failed" for t in subtasks)
 
     # The split marker is a ``message`` kind with ``event=triage_split``
     # in the JSON payload (SPEC §3 fixes the enum; the marker lives in

@@ -97,6 +97,12 @@ def _env(
         # PR-V1-11b: E3 requires ≥1 artifact inside the adapter cwd; tests
         # that expect ``verified`` pass a touch path inside ``git_project``.
         monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(touch))
+    # PR-V1-12: triage runs before the adapter; default the fake CLI to
+    # return ``execute`` so these adapter-path tests are unaffected.
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_TRIAGE_JSON",
+        '{"decision":"execute","subtasks":[],"rationale":"default"}',
+    )
 
 
 def _fake_cli_cmd() -> str:
@@ -243,6 +249,16 @@ def test_adapter_binary_missing_fails_fast(
     git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # PR-V1-12: triage would also fail with ``cli_not_found`` here and
+    # short-circuit to ``triage_failed``. Stub triage to ``execute`` so
+    # the test can still pin the adapter's own ``cli_not_found`` path.
+    from app.triage import TriageDecision
+    monkeypatch.setattr(
+        "app.executor.core.triage_task",
+        lambda project, task: TriageDecision(
+            kind="execute", subtasks=[], rationale="stub", raw_output=""
+        ),
+    )
     project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="ghost")
 
