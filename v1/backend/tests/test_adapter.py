@@ -97,12 +97,6 @@ def _env(
         # PR-V1-11b: E3 requires ≥1 artifact inside the adapter cwd; tests
         # that expect ``verified`` pass a touch path inside ``git_project``.
         monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(touch))
-    # PR-V1-12: triage runs before the adapter; default the fake CLI to
-    # return ``execute`` so these adapter-path tests are unaffected.
-    monkeypatch.setenv(
-        "FAKE_CLAUDE_TRIAGE_JSON",
-        '{"decision":"execute","subtasks":[],"rationale":"default"}',
-    )
 
 
 def _fake_cli_cmd() -> str:

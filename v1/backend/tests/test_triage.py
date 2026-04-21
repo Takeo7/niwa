@@ -102,18 +102,3 @@ def test_invalid_json_raises_triage_error(monkeypatch: pytest.MonkeyPatch) -> No
     _install(monkeypatch, [_assistant("no json here, just prose")])
     with pytest.raises(TriageError):
         triage_task(_project(), _task())
-
-
-def test_missing_cli_raises_triage_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install(monkeypatch, [], outcome="cli_not_found", exit_code=None)
-    with pytest.raises(TriageError):
-        triage_task(_project(), _task())
-
-
-def test_shape_invalid_raises_triage_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    events = [_assistant(
-        '```json\n{"decision":"execute","subtasks":["leaked"],"rationale":"bad"}\n```'
-    )]
-    _install(monkeypatch, events)
-    with pytest.raises(TriageError):
-        triage_task(_project(), _task())

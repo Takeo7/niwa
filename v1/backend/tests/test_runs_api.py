@@ -49,12 +49,6 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
     monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "touch-{pid}.txt")
-    # PR-V1-12: triage short-circuits to ``execute`` so the adapter +
-    # verifier path runs exactly as it did before the triage stage.
-    monkeypatch.setenv(
-        "FAKE_CLAUDE_TRIAGE_JSON",
-        '{"decision":"execute","subtasks":[],"rationale":"default"}',
-    )
 
 
 @pytest.fixture()

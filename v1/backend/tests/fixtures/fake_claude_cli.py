@@ -70,11 +70,16 @@ def main() -> int:
         except (OSError, ValueError):
             stdin_text = ""
 
-    triage_body = os.environ.get("FAKE_CLAUDE_TRIAGE_JSON")
-    if triage_body and _TRIAGE_MARKER in stdin_text:
-        # Wrap in a ```json fence so the triage parser's pass 1 matches.
-        wrapped = "```json\n" + triage_body.strip() + "\n```"
-        _emit_triage_response(wrapped)
+    if _TRIAGE_MARKER in stdin_text:
+        # Default triage response is ``execute`` so legacy tests keep
+        # exercising the adapter+verify path unchanged. Tests that want
+        # a split or malformed decision set ``FAKE_CLAUDE_TRIAGE_JSON``
+        # with the full JSON body.
+        body = os.environ.get(
+            "FAKE_CLAUDE_TRIAGE_JSON",
+            '{"decision":"execute","subtasks":[],"rationale":"default"}',
+        )
+        _emit_triage_response("```json\n" + body.strip() + "\n```")
         return 0
 
     if script_path and os.path.exists(script_path):

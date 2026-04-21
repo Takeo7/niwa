@@ -1,9 +1,9 @@
 """Triage planner — single-call ``execute | split`` decision (SPEC §4).
 
-Wraps ``ClaudeCodeAdapter`` with a dedicated prompt that asks for a JSON
-decision, parses the response, hands a ``TriageDecision`` back to
-``executor.core``. No retries, no loops. Failures raise ``TriageError``;
-the caller terminates the task with ``outcome="triage_failed"``.
+Wraps ``ClaudeCodeAdapter`` with a dedicated prompt, parses the JSON
+decision, returns a ``TriageDecision`` to ``executor.core``. No retries,
+no loops. Any failure raises ``TriageError`` and the caller terminates
+the task with ``outcome="triage_failed"``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from typing import Any
 from .adapters import ClaudeCodeAdapter, resolve_cli_path
 from .models import Project, Task
 
-
 logger = logging.getLogger("niwa.triage")
 
 _TRIAGE_TIMEOUT = 180.0
@@ -27,7 +26,7 @@ _PROMPT_MARKER = "triage agent for Niwa"
 @dataclass(frozen=True)
 class TriageDecision:
     kind: str  # "execute" | "split"
-    subtasks: list[str]  # subtask titles; empty when kind == "execute"
+    subtasks: list[str]  # titles; empty when kind == "execute"
     rationale: str
     raw_output: str
 
@@ -38,14 +37,12 @@ class TriageError(RuntimeError):
 
 def triage_task(project: Project, task: Task) -> TriageDecision:
     """Run the CLI once with a triage prompt and parse the JSON decision."""
-
     adapter = ClaudeCodeAdapter(
         cli_path=resolve_cli_path(),
         cwd=project.local_path or ".",
         prompt=_build_prompt(project, task),
         timeout=_TRIAGE_TIMEOUT,
     )
-
     texts: list[str] = []
     try:
         try:
@@ -60,24 +57,23 @@ def triage_task(project: Project, task: Task) -> TriageDecision:
     finally:
         adapter.close()
 
-    outcome = adapter.outcome or "cli_ok"
-    if outcome != "cli_ok":
-        raise TriageError(f"adapter_outcome={outcome}")
+    if (adapter.outcome or "cli_ok") != "cli_ok":
+        raise TriageError(f"adapter_outcome={adapter.outcome}")
 
     raw = "\n".join(texts).strip()
     return _build_decision(_parse_decision(raw), raw)
 
 
 def _build_prompt(project: Project, task: Task) -> str:
-    description = task.description or "(none)"
     return (
         f"You are a {_PROMPT_MARKER}. Decide if this task should be\n"
         "executed directly or split into subtasks.\n\n"
-        f"# Task\nTitle: {task.title}\nDescription: {description}\n"
+        f"# Task\nTitle: {task.title}\n"
+        f"Description: {task.description or '(none)'}\n"
         f"Project kind: {project.kind}\nProject path: {project.local_path}\n\n"
         "# Instructions\n"
         "- Single cohesive change (one bug/feature/refactor) -> \"execute\".\n"
-        "- Multiple independent changes that would land in separate PRs ->\n"
+        "- Multiple independent changes landing in separate PRs ->\n"
         "  \"split\"; list subtask titles (short, imperative, in English).\n"
         "- Do NOT modify any files. Your only output is the JSON below.\n\n"
         "# Response format (JSON only, in a ```json fence)\n"
@@ -87,8 +83,7 @@ def _build_prompt(project: Project, task: Task) -> str:
 
 
 def _extract_text(payload: dict[str, Any]) -> str:
-    """Pull free text out of a stream-json ``assistant`` or ``result`` event."""
-
+    """Pull free text out of an ``assistant`` or ``result`` stream-json event."""
     if not isinstance(payload, dict):
         return ""
     for key in ("result", "text"):
@@ -96,26 +91,22 @@ def _extract_text(payload: dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     message = payload.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, list):
-            return "\n".join(
-                item["text"] for item in content
-                if isinstance(item, dict) and isinstance(item.get("text"), str)
-            )
+    if isinstance(message, dict) and isinstance(message.get("content"), list):
+        return "\n".join(
+            item["text"] for item in message["content"]
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
     return ""
 
 
 def _parse_decision(raw: str) -> dict[str, Any]:
     """Locate a JSON object in ``raw`` and parse it, or raise ``TriageError``."""
-
     if not raw:
         raise TriageError("empty output")
     match = re.search(r"```json\s*(\{.*?\})\s*```", raw, re.DOTALL)
     if match:
         candidate = match.group(1)
     else:
-        # Fallback: first balanced ``{...}`` block.
         start = raw.find("{")
         if start < 0:
             raise TriageError("no JSON object in output")
@@ -131,7 +122,6 @@ def _parse_decision(raw: str) -> dict[str, Any]:
         if end <= 0:
             raise TriageError("unbalanced JSON braces")
         candidate = raw[start:end]
-
     try:
         parsed = json.loads(candidate)
     except ValueError as exc:
@@ -145,25 +135,17 @@ def _build_decision(data: dict[str, Any], raw_output: str) -> TriageDecision:
     decision = data.get("decision")
     if decision not in ("execute", "split"):
         raise TriageError(f"invalid decision: {decision!r}")
-
-    subtasks_raw = data.get("subtasks", [])
-    if not isinstance(subtasks_raw, list) or not all(
-        isinstance(x, str) for x in subtasks_raw
-    ):
+    raw_subtasks = data.get("subtasks", [])
+    if not isinstance(raw_subtasks, list) or not all(isinstance(x, str) for x in raw_subtasks):
         raise TriageError("subtasks must be a list of strings")
-    subtasks = [s.strip() for s in subtasks_raw if s and s.strip()]
-
-    if decision == "execute" and subtasks:
-        raise TriageError("execute decision must not carry subtasks")
-    if decision == "split" and not subtasks:
-        raise TriageError("split decision must provide at least one subtask")
-
+    subtasks = [s.strip() for s in raw_subtasks if s and s.strip()]
+    if (decision == "execute") == bool(subtasks):
+        raise TriageError(f"subtasks/decision mismatch: {decision} with {len(subtasks)}")
     rationale = data.get("rationale", "")
     if not isinstance(rationale, str):
         raise TriageError("rationale must be a string")
-
     return TriageDecision(
-        kind=decision, subtasks=subtasks, rationale=rationale, raw_output=raw_output
+        kind=decision, subtasks=subtasks, rationale=rationale, raw_output=raw_output,
     )
 
 

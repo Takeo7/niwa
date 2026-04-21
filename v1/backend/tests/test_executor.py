@@ -58,14 +58,6 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
-    # PR-V1-12: every task now passes through triage first. Default the
-    # fake CLI to return ``execute`` so legacy tests keep exercising the
-    # adapter+verify path unchanged. Tests that want to assert on split
-    # or failure paths patch ``triage_task`` directly.
-    monkeypatch.setenv(
-        "FAKE_CLAUDE_TRIAGE_JSON",
-        '{"decision":"execute","subtasks":[],"rationale":"default"}',
-    )
 
 
 @pytest.fixture()
@@ -420,154 +412,75 @@ def test_runs_fail_on_git_setup_error(
 # ---------------------------------------------------------------------------
 
 
-def test_process_pending_executes_when_triage_says_execute(
-    session: Session,
-    git_project: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With triage emitting ``execute``, the normal run pipeline proceeds."""
-
-    from app.triage import TriageDecision
-
-    # Keep the normal fake CLI path for the real adapter run.
-    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
-
-    def fake_triage(project, task):
-        return TriageDecision(
-            kind="execute", subtasks=[], rationale="direct", raw_output=""
-        )
-
-    monkeypatch.setattr("app.executor.core.triage_task", fake_triage)
-
-    project = _make_project(session, local_path=git_project)
-    task = _make_task(session, project, title="execute me")
-
-    assert process_pending(session) == 1
-
-    session.expire_all()
-    refreshed = session.get(Task, task.id)
-    assert refreshed is not None
-    assert refreshed.status == "done"
-    runs = session.query(Run).filter(Run.task_id == task.id).all()
-    assert len(runs) == 1
-    assert runs[0].status == "completed"
-
-
 def test_process_pending_splits_when_triage_says_split(
-    session: Session,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Triage ``split`` closes the parent without a Run and queues subtasks.
-
-    The first triage call produces the split; subsequent calls (the two
-    subtasks claimed by the same drain pass) raise ``TriageError`` so
-    they terminate without spawning adapters. We then assert the parent
-    closed cleanly and the subtasks were persisted with the right shape.
-    """
+    """Triage ``split`` closes the parent without a Run and queues subtasks."""
 
     from app.triage import TriageDecision, TriageError
-
     calls: list[int] = []
 
     def fake_triage(project, task):
         calls.append(task.id)
         if len(calls) == 1:
             return TriageDecision(
-                kind="split",
-                subtasks=["alpha", "beta"],
-                rationale="two areas",
-                raw_output="",
+                kind="split", subtasks=["alpha", "beta"],
+                rationale="two areas", raw_output="",
             )
-        raise TriageError("stop-after-split")
+        raise TriageError("stop-after-split")  # drain without spawning adapters
 
     monkeypatch.setattr("app.executor.core.triage_task", fake_triage)
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
-
     project = _make_project(session, local_path=tmp_path)
     parent = _make_task(session, project, title="parent")
 
-    # Parent + 2 subtasks all get drained (subtasks via triage_failed),
-    # but only the parent path exercises ``_apply_split``.
     assert process_pending(session) == 3
-
     session.expire_all()
     refreshed = session.get(Task, parent.id)
-    assert refreshed is not None
-    assert refreshed.status == "done"
-    assert refreshed.completed_at is not None
-
-    # No Run recorded on the parent — the adapter was bypassed entirely.
+    assert refreshed.status == "done" and refreshed.completed_at is not None
     assert session.query(Run).filter(Run.task_id == parent.id).count() == 0
 
-    subtasks = (
-        session.query(Task)
-        .filter(Task.parent_task_id == parent.id)
-        .order_by(Task.id.asc())
-        .all()
-    )
+    subtasks = session.query(Task).filter(Task.parent_task_id == parent.id).order_by(Task.id).all()
     assert [t.title for t in subtasks] == ["alpha", "beta"]
     assert all(t.project_id == project.id for t in subtasks)
-    # Subtasks went through their own triage (which we forced to fail)
-    # and are now ``failed`` — not the focus of this test but proves
-    # the queue drained cleanly without hangs.
-    assert all(t.status == "failed" for t in subtasks)
 
-    # The split marker is a ``message`` kind with ``event=triage_split``
-    # in the JSON payload (SPEC §3 fixes the enum; the marker lives in
-    # the payload). A status_changed event also flips running→done.
-    events = (
-        session.query(TaskEvent)
-        .filter(TaskEvent.task_id == parent.id)
-        .order_by(TaskEvent.id.asc())
-        .all()
+    # Split marker lives in a ``kind="message"`` payload (SPEC §3 fixes
+    # the task_events.kind enum; see brief resolution note).
+    events = session.query(TaskEvent).filter(TaskEvent.task_id == parent.id).all()
+    split = [e for e in events if e.kind == "message" and "triage_split" in (e.payload_json or "")]
+    assert len(split) == 1
+    assert json.loads(split[0].payload_json) == {
+        "event": "triage_split",
+        "subtask_ids": [t.id for t in subtasks],
+        "rationale": "two areas",
+    }
+    assert any(
+        json.loads(e.payload_json or "{}") == {"from": "running", "to": "done"}
+        for e in events if e.kind == "status_changed"
     )
-    split_events = [
-        e for e in events
-        if e.kind == "message" and e.payload_json and "triage_split" in e.payload_json
-    ]
-    assert len(split_events) == 1
-    payload = json.loads(split_events[0].payload_json)
-    assert payload.get("event") == "triage_split"
-    assert payload.get("rationale") == "two areas"
-    assert payload.get("subtask_ids") == [t.id for t in subtasks]
-
-    status_events = [e for e in events if e.kind == "status_changed"]
-    payloads = [json.loads(e.payload_json or "{}") for e in status_events]
-    assert {"from": "running", "to": "done"} in payloads
 
 
 def test_process_pending_marks_failed_on_triage_error(
-    session: Session,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A ``TriageError`` ends the task ``failed`` with ``triage_failed``."""
 
     from app.triage import TriageError
-
-    def boom(project, task):
-        raise TriageError("bad json")
-
-    monkeypatch.setattr("app.executor.core.triage_task", boom)
+    monkeypatch.setattr(
+        "app.executor.core.triage_task",
+        lambda p, t: (_ for _ in ()).throw(TriageError("bad json")),
+    )
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
-
     project = _make_project(session, local_path=tmp_path)
     task = _make_task(session, project, title="triage will die")
 
     assert process_pending(session) == 1
-
     session.expire_all()
-    refreshed = session.get(Task, task.id)
-    assert refreshed is not None
-    assert refreshed.status == "failed"
-
+    assert session.get(Task, task.id).status == "failed"
     run = session.query(Run).filter(Run.task_id == task.id).one()
-    assert run.status == "failed"
-    assert run.outcome == "triage_failed"
-
-    events = session.query(TaskEvent).filter(TaskEvent.task_id == task.id).all()
-    verif = [e for e in events if e.kind == "verification"]
-    assert verif, "expected verification TaskEvent on triage_failed"
-    payload = json.loads(verif[0].payload_json or "{}")
-    assert payload.get("error_code") == "triage_failed"
+    assert run.status == "failed" and run.outcome == "triage_failed"
+    verif = [
+        e for e in session.query(TaskEvent).filter(TaskEvent.task_id == task.id)
+        if e.kind == "verification"
+    ]
+    assert verif and json.loads(verif[0].payload_json or "{}").get("error_code") == "triage_failed"

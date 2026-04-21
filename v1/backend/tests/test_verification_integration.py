@@ -39,12 +39,6 @@ def _prime(tmp_path: Path, mp: pytest.MonkeyPatch, *, lines: list[dict], touch: 
     mp.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI))
     mp.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     mp.setenv("FAKE_CLAUDE_EXIT", "0")
-    # PR-V1-12: triage must short-circuit to ``execute`` so these tests
-    # exercise the adapter + verifier path they were written for.
-    mp.setenv(
-        "FAKE_CLAUDE_TRIAGE_JSON",
-        '{"decision":"execute","subtasks":[],"rationale":"default"}',
-    )
     if touch is not None:
         mp.setenv("FAKE_CLAUDE_TOUCH", str(touch))
 
