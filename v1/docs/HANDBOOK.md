@@ -1163,8 +1163,113 @@ class FinalizeResult:
   escribe `task.pr_url`; verifica que el executor sólo lo invoca
   tras verify passes.
 
+## Bootstrap (PR-V1-14)
+
+`v1/bootstrap.sh` deja la máquina lista para correr Niwa v1 en un
+tirón, sin wizard interactivo. SPEC §6 lo declara como canal único
+de instalación.
+
+### Flow (en orden)
+
+1. **Preconditions fail-fast.** Al arrancar se loggea
+   `checking preconditions: python3 (>=3.11), npm, git` y se
+   verifica cada tool con `command -v`. `python3` se chequea además
+   con `python3 -c 'import sys; sys.exit(0 if sys.version_info >=
+   (3, 11) else 1)'`. Si cualquiera falta el script `exit 1` con
+   mensaje legible prefijado `[niwa-bootstrap] ERROR:`.
+2. **Layout.** `mkdir -p ${HOME}/.niwa/{logs,data}` (idempotente).
+3. **Venv.** `${HOME}/.niwa/venv` creado solo si no existe su
+   `bin/python`; `pip install --upgrade pip` siempre.
+4. **Backend editable.** `pip install -e v1/backend[dev]` desde el
+   venv. Re-run reconcilia deps sin borrar.
+5. **Frontend.** `cd v1/frontend && npm install --silent`, saltable
+   con `NIWA_BOOTSTRAP_SKIP_NPM=1` (tests usan este skip para no
+   gastar CI en npm).
+6. **Migrations.** `alembic -x db_url=sqlite:///<HOME>/.niwa/data/niwa-v1.sqlite3 upgrade head`
+   desde `v1/backend`. `env.py` (PR-V1-02) consume el `-x db_url`.
+7. **Config (preserva).** Si `${HOME}/.niwa/config.toml` existe, se
+   deja intacto. Si no, se renderiza desde
+   `v1/templates/config.toml.tmpl` sustituyendo `{{CLAUDE_CLI_PATH}}`
+   (`command -v claude || echo claude`) y `{{HOME}}` con `sed`.
+8. **Service file (write-only).** Según `uname -s`:
+   - `Darwin` → `${HOME}/Library/LaunchAgents/com.niwa.executor.plist`
+     desde `v1/templates/com.niwa.executor.plist.tmpl`.
+   - `Linux` → `${HOME}/.config/systemd/user/niwa-executor.service`
+     desde `v1/templates/niwa-executor.service.tmpl`.
+   - Otros → `exit 1`.
+   Se renderiza con `sed` sustituyendo `{{CLAUDE_CLI_PATH}}`,
+   `{{HOME}}`, `{{REPO_DIR}}`, `{{VENV_PYTHON}}`. El fichero se
+   sobrescribe en cada run (template siempre fresco). **El script
+   NO carga ni arranca el servicio** — `launchctl load` /
+   `systemctl --user enable` son trabajo de PR-V1-15 (launcher CLI).
+9. **Resumen final** en stdout con paths de `config`, `db`, `venv`,
+   `service`, y el comando sugerido para el launcher.
+
+### Templates
+
+Los tres templates viven en `v1/templates/` para evitar heredocs
+gigantes en bash:
+
+- `config.toml.tmpl` — defaults de SPEC §2/§6 (claude.cli,
+  claude.timeout=1800, db.path, executor.poll_interval_seconds=5).
+- `com.niwa.executor.plist.tmpl` — launchd plist con `KeepAlive` y
+  `RunAtLoad`, `NIWA_CLAUDE_CLI` + `NIWA_CONFIG_PATH` en
+  `EnvironmentVariables`.
+- `niwa-executor.service.tmpl` — systemd user unit, `Type=simple`,
+  `Restart=on-failure`, `WantedBy=default.target`.
+
+Sustitución con `sed -e "s|PLACEHOLDER|value|g"`: usamos `|` como
+delimitador para que los paths con `/` no necesiten escaping.
+
+### Env vars
+
+- `NIWA_BOOTSTRAP_SKIP_NPM=1` — salta `npm install`. Se usa en
+  `tests/test_bootstrap.py` para no tirar `npm` en subprocess.
+- `HOME` — base de todo lo que escribe el script. Los tests crean
+  un `HOME` aislado vía `tmp_path`.
+
+### Tests
+
+`tests/test_bootstrap.py` (5 casos) invoca `bash bootstrap.sh` con
+`subprocess.run(..., timeout=300)`:
+
+1. `test_bootstrap_script_is_executable` — sanity: existe y tiene
+   bit `+x`.
+2. `test_fresh_install_creates_layout_and_config` — HOME vacío →
+   venv/python, logs, DB migrada, config sin literales `{{...}}`,
+   service file en la ruta de la plataforma (`Darwin` vs `Linux`).
+3. `test_rerun_is_idempotent` — dos runs seguidos; el sentinel
+   escrito a `config.toml` entre runs sobrevive al segundo; DB
+   intacta.
+4. `test_missing_python_fails_fast` — `PATH` restringido al dir de
+   `bash` → exit code ≠ 0 y la palabra `python` aparece en la
+   salida (gracias al log de preconditions).
+5. `test_config_substitution_replaces_placeholders` — ni
+   `{{CLAUDE_CLI_PATH}}` ni `{{HOME}}` quedan como literal en el
+   `config.toml` post-bootstrap.
+
+### Idempotencia
+
+- `venv/`: se crea solo si falta el `bin/python`; `pip install -e`
+  reconcilia cada run.
+- `config.toml`: jamás se toca si existe (user-editable source of
+  truth; SPEC §2 "no config vía UI").
+- Service file: se reescribe siempre — template fresco con los
+  paths actuales es lo correcto si el repo se ha movido.
+- `alembic upgrade head`: no-op si ya estamos en `head`.
+
+### No cargar el servicio
+
+La separación entre "escribir el unit" (PR-V1-14) y "cargarlo +
+helper CLI" (PR-V1-15) evita que el bootstrap deje un daemon
+corriendo sin que el usuario haya visto primero la UI. PR-V1-15
+añadirá `niwa-executor [start|stop|status]` que abstraerá
+`launchctl`/`systemctl --user`.
+
 ## Próximos PRs (SPEC §9)
 
+- PR-V1-15: launcher CLI `niwa-executor` que carga/arranca el
+  service file que escribió el bootstrap.
 - PR-V1-14+: modo `dangerous` (auto-merge del PR tras verify OK) y
   deploy condicional a `localhost:PORT` cuando
   `project.kind=web-deployable`. Semana 4 del SPEC.
