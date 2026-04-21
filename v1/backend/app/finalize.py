@@ -90,8 +90,12 @@ def finalize_task(
 
     # PR-V1-16: auto-merge when the project opted into dangerous mode.
     # Safe mode is a silent no-op (human merges by hand). We only attempt
-    # the merge if we actually have a PR URL *and* `gh` is on PATH — if
-    # `gh` went missing between pr_create and here it's already logged.
+    # the merge if we actually have a PR URL *and* `gh` is on PATH. In
+    # practice ``pr_url`` being set implies ``gh`` was available a moment
+    # ago at ``_pr_create`` time, so the "dangerous + pr_url + no gh"
+    # branch is effectively unreachable; if `gh` disappears mid-flow the
+    # ``shutil.which`` check below short-circuits silently rather than
+    # logging a manual command — the brief accepts this as out of scope.
     pr_merged = False
     if (
         pr_url
