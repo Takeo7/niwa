@@ -75,6 +75,20 @@ def test_no_test_script_detected_skips(tmp_path: Path) -> None:
     assert choice is None
 
 
+def test_makefile_variable_named_test_is_not_detected(tmp_path: Path) -> None:
+    # Regression: ``test := foo`` is a Make variable assignment, not a
+    # rule. The old regex matched it and we would try to run ``make test
+    # -s`` on a Makefile with no such target, producing a spurious
+    # tests_failed run. Negative lookahead must reject it.
+    (tmp_path / "Makefile").write_text(
+        "test := something\n"
+        "all:\n"
+        "\t@echo hi\n"
+    )
+    choice = detect_test_runner(tmp_path, _Project(kind="library"))
+    assert choice is None
+
+
 def test_runner_missing_binary_returns_failure(tmp_path: Path) -> None:
     # Regression: if the runner binary is absent (e.g. ``npm`` not
     # installed on a minimal host), ``subprocess.run`` raises
