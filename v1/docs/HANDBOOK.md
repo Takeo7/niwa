@@ -1078,14 +1078,95 @@ fails_fast`): estos reciben la fixture compartida
 neutro, evitando que el fallo fictício ocurra ya en la fase de
 triage.
 
+## Safe mode finalize (PR-V1-13)
+
+Tras `verify_run` aprobar (outcome `verified`), el executor invoca
+`finalize_task(session, run, task, project)` (módulo
+`v1/backend/app/finalize.py`) **antes** de `_finalize(...,
+outcome="verified")`. La función es **best-effort**: nunca lanza; cada
+paso fallido queda en `FinalizeResult.commands_skipped` y se loggea a
+nivel `warning`/`info`. Si lanza una excepción catastrófica no-
+subprocess, el executor la loggea con `logger.exception` y continúa
+igualmente con `_finalize` — la task nunca se queda atascada en
+`running` por culpa del finalize.
+
+### Pipeline (en orden, cortocircuita en cada paso)
+
+1. **Commit.** `git status --porcelain`; si vacío →
+   `commands_skipped=["nothing_to_commit"]`, siguientes pasos saltados.
+   Si hay cambios: `git add -A` + `git commit -m "<subject>" -m
+   "<body>"`. Los flags **inline** `-c user.email="niwa@localhost" -c
+   user.name="Niwa"` evitan depender de config global — una máquina
+   fresca produce commit válido sin `git config --global`. Subject
+   truncado a 60 chars (`niwa: <title[:60]>`); body = descripción +
+   `"\n\nNiwa task #<id>"`.
+2. **Push** (solo si commit OK). Skip con `"no_remote"` si
+   `project.git_remote is None` o con `"no_branch"` si
+   `task.branch_name` está vacío. Si no: `git push -u origin
+   <branch_name>` (asume el remote `origin` seteado por el usuario al
+   clonar — no se auto-detecta el nombre del remote). Fallo →
+   `"push_failed: ... rc=... stderr=..."`.
+3. **PR** (solo si push OK). Skip con
+   `"gh_missing: run 'gh pr create --head <branch>' ..."` si
+   `shutil.which("gh")` devuelve None. Si no: `gh pr create --title
+   <title[:70]> --body <body> --head <branch>` con `cwd=local_path`.
+   `gh` no se comprueba autenticado previamente — si `gh auth login`
+   falta, el comando falla con rc≠0 y caemos al log manual. El base
+   branch del PR lo resuelve `gh` automáticamente del remote default.
+4. **Captura URL.** `gh pr create` imprime la URL en stdout. Escaneamos
+   cada línea y la primera que matchee `^https?://` (case-insensitive)
+   se persiste en `task.pr_url` con un `session.commit()` extra. Si
+   stdout salió 0 pero no contiene URL → `"gh_pr_create_no_url: ..."`
+   en `commands_skipped` y `pr_url=None` (no renderizamos links
+   basura).
+
+### `FinalizeResult`
+
+```python
+@dataclass(frozen=True)
+class FinalizeResult:
+    committed: bool
+    pushed: bool
+    pr_url: str | None
+    commands_skipped: list[str]        # reasons acumulativas
+```
+
+### Comportamiento sin `remote` / sin `gh`
+
+- **Sin remote.** Task termina `done`, commit local en la rama
+  `niwa/task-<id>-<slug>`, `pr_url=None`. Usuario puede abrir el
+  remote a mano y reintentar push.
+- **Sin `gh` (pero con remote).** Task termina `done`, push realizado,
+  `pr_url=None`, `commands_skipped` trae el comando manual
+  (`gh pr create --head ...`) que el usuario puede copiar.
+- **`gh pr create` falla** (no autenticado, base mismatch, etc.).
+  Task termina `done`, push realizado, `pr_url=None`, stderr
+  capturado + comando manual en `commands_skipped`.
+
+### Fuera de scope (PR-V1-13)
+
+- **Autonomy `dangerous` / auto-merge:** llega en Semana 4.
+- **UI del `pr_url`:** el detalle de task ya tiene la columna; el
+  render del link es follow-up.
+- **No hay force-push**, ni amend, ni retries. Carrera con push
+  manual del usuario a la misma rama queda no protegida (asumimos
+  uso monousuario — MVP).
+
+### Tests
+
+- `tests/test_finalize.py` — 5 casos unit que mockean
+  `subprocess.run` vía `monkeypatch`. El helper `_mock_cmd` dispatcha
+  por el primer argv token (``git``/``gh``), saltando los ``-c
+  key=val`` inline para matchear el subcomando real.
+- `tests/test_executor.py::test_process_pending_finalizes_verified_run_with_gh_stub`
+  — integration E2E: `finalize_task` monkeypatcheado a un spy que
+  escribe `task.pr_url`; verifica que el executor sólo lo invoca
+  tras verify passes.
+
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-08: ejecución aislada en rama git por task. Crear/chequear
-  `niwa/<task_id>-<slug>`, sandboxear el CLI en ella, post-run con
-  diff + commit + push + PR. El adapter actual queda intacto.
-- PR-V1-11+: verificación post-run (exit code + artefactos + tests del
-  proyecto), triaje planner, modo safe con PR manual (Semana 3 del
-  SPEC). El feedback de aprobación humana en UI y el clarification
-  round-trip llegan en Semana 5.
+- PR-V1-14+: modo `dangerous` (auto-merge del PR tras verify OK) y
+  deploy condicional a `localhost:PORT` cuando
+  `project.kind=web-deployable`. Semana 4 del SPEC.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
