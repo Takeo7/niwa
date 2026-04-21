@@ -36,7 +36,6 @@ def test_all_checks_ok(client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert d["git"]["version"].startswith("git version")
     assert d["gh"]["found"] is True
     assert d["db"]["reachable"] is True
-    assert d["db"]["path"]
 
 
 def test_claude_cli_missing(client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,14 +73,17 @@ def test_db_unreachable_returns_false(client, monkeypatch: pytest.MonkeyPatch) -
     _stub_which(monkeypatch, {"claude": "/usr/local/bin/claude", "gh": "/usr/local/bin/gh"})
     _stub_git_version(monkeypatch)
 
-    # Patch the helper itself so the endpoint composition path is exercised.
+    # Patch the helper so the endpoint composition path is exercised without
+    # having to wire a broken session through the DI override.
     from app.services import readiness_checks as svc
 
     monkeypatch.setattr(
-        svc, "check_db",
-        lambda p: (False, {"path": str(p), "reachable": False, "error": "synthetic failure"}),
+        svc,
+        "check_db_via_session",
+        lambda _session: (False, {"reachable": False, "error": "synthetic failure"}),
     )
     body = client.get("/api/readiness").json()
     assert body["db_ok"] is False
     assert body["details"]["db"]["reachable"] is False
     assert "synthetic failure" in body["details"]["db"]["error"]
+

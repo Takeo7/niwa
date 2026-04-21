@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session
 
 from ..config import load_settings
 from ..services import readiness_checks as svc
+from .deps import get_session
 
 
 class ReadinessDetails(BaseModel):
@@ -38,9 +40,9 @@ router = APIRouter(prefix="/readiness", tags=["readiness"])
 
 
 @router.get("", response_model=ReadinessResponse)
-def get_readiness() -> ReadinessResponse:
+def get_readiness(session: Session = Depends(get_session)) -> ReadinessResponse:
     settings = load_settings()
-    db_ok, db_details = svc.check_db(settings.db_path)
+    db_ok, db_details = svc.check_db_via_session(session)
     cli_ok, cli_details = svc.check_claude_cli(settings.claude_cli)
     git_ok, git_details = svc.check_git()
     gh_ok, gh_details = svc.check_gh()
