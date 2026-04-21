@@ -37,12 +37,9 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class FinalizeResult:
-    """Outcome of :func:`finalize_task`.
-
-    ``commands_skipped`` accumulates human-readable reasons (``"no_remote"``,
-    ``"gh_missing: ..."``, ``"commit_failed: ..."``) — safe to render
-    verbatim in logs or ``verification_json``.
-    """
+    """Outcome of :func:`finalize_task`. ``commands_skipped`` holds
+    human-readable reasons (``"no_remote"``, ``"gh_missing: ..."``,
+    ``"commit_failed: ..."``) safe to render in logs."""
 
     committed: bool
     pushed: bool
@@ -101,21 +98,15 @@ def finalize_task(
 
 
 def _run_cmd(args: Sequence[str], cwd: str) -> tuple[int, str, str]:
-    """Run ``args`` in ``cwd`` with capture + 30 s timeout.
-
-    Returns ``(rc, stdout, stderr)``. OS/subprocess errors come back as
-    ``(-1, "", str(exc))`` so the caller has one shape to handle.
-    """
+    """Run ``args`` in ``cwd`` with capture + 30 s timeout. Returns
+    ``(rc, stdout, stderr)``; OS/subprocess errors surface as
+    ``(-1, "", str(exc))`` so callers have one shape to handle."""
 
     logger.info("cmd cwd=%s argv=%s", cwd, list(args))
     try:
         proc = subprocess.run(
-            list(args),
-            cwd=cwd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=_CMD_TIMEOUT_S,
+            list(args), cwd=cwd, check=False, capture_output=True,
+            text=True, timeout=_CMD_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return -1, "", str(exc)
@@ -125,24 +116,15 @@ def _run_cmd(args: Sequence[str], cwd: str) -> tuple[int, str, str]:
 def _commit(task: Task, cwd: str) -> tuple[bool, list[str]]:
     """Stage + commit; skip cleanly when the working tree is clean."""
 
-    skipped: list[str] = []
-
     rc, stdout, stderr = _run_cmd(["git", "status", "--porcelain"], cwd)
     if rc != 0:
-        reason = f"commit_failed: git status rc={rc} stderr={stderr.strip()[:200]}"
-        skipped.append(reason)
-        logger.warning(reason)
-        return False, skipped
+        return False, [_fail("commit_failed: git status", rc, stderr)]
     if not stdout.strip():
-        skipped.append("nothing_to_commit")
-        return False, skipped
+        return False, ["nothing_to_commit"]
 
     rc, _, stderr = _run_cmd(["git", "add", "-A"], cwd)
     if rc != 0:
-        reason = f"commit_failed: git add rc={rc} stderr={stderr.strip()[:200]}"
-        skipped.append(reason)
-        logger.warning(reason)
-        return False, skipped
+        return False, [_fail("commit_failed: git add", rc, stderr)]
 
     subject = f"niwa: {(task.title or '')[:60]}"
     body = (task.description or "") + f"\n\nNiwa task #{task.id}"
@@ -156,11 +138,8 @@ def _commit(task: Task, cwd: str) -> tuple[bool, list[str]]:
         cwd,
     )
     if rc != 0:
-        reason = f"commit_failed: git commit rc={rc} stderr={stderr.strip()[:200]}"
-        skipped.append(reason)
-        logger.warning(reason)
-        return False, skipped
-    return True, skipped
+        return False, [_fail("commit_failed: git commit", rc, stderr)]
+    return True, []
 
 
 def _push(branch: str, cwd: str) -> tuple[bool, list[str]]:
@@ -168,12 +147,7 @@ def _push(branch: str, cwd: str) -> tuple[bool, list[str]]:
 
     rc, _, stderr = _run_cmd(["git", "push", "-u", "origin", branch], cwd)
     if rc != 0:
-        reason = (
-            f"push_failed: git push -u origin {branch} rc={rc} "
-            f"stderr={stderr.strip()[:200]}"
-        )
-        logger.warning(reason)
-        return False, [reason]
+        return False, [_fail(f"push_failed: git push -u origin {branch}", rc, stderr)]
     return True, []
 
 
@@ -201,11 +175,19 @@ def _pr_create(task: Task, branch: str, cwd: str) -> tuple[str | None, list[str]
         if _URL_RE.match(candidate):
             return candidate, []
 
-    # ``gh`` returned 0 but emitted nothing URL-shaped — drop the url so
+    # ``gh`` returned 0 but emitted nothing URL-shaped — drop pr_url so
     # the UI never renders a bogus link.
     reason = f"gh_pr_create_no_url: stdout={stdout.strip()[:200]}"
     logger.warning(reason)
     return None, [reason]
+
+
+def _fail(prefix: str, rc: int, stderr: str) -> str:
+    """Format + log a one-line failure reason."""
+
+    msg = f"{prefix} rc={rc} stderr={stderr.strip()[:200]}"
+    logger.warning(msg)
+    return msg
 
 
 __all__ = ["FinalizeResult", "finalize_task"]
