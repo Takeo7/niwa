@@ -32,7 +32,12 @@ FAKE_CLI_PATH = (
 
 @pytest.fixture(autouse=True)
 def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Wire every test in this module to the fake CLI by default."""
+    """Wire every test in this module to the fake CLI by default.
+
+    PR-V1-11b: the default fake also touches a pid-scoped file (relative
+    to the adapter cwd, so it lands inside ``git_project``) so E3 sees
+    an artifact and the run can reach the ``verified`` outcome.
+    """
 
     st = os.stat(FAKE_CLI_PATH)
     os.chmod(FAKE_CLI_PATH, st.st_mode | 0o111)
@@ -43,6 +48,7 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "touch-{pid}.txt")
 
 
 @pytest.fixture()
