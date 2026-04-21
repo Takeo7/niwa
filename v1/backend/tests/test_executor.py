@@ -523,39 +523,26 @@ def test_process_pending_splits_when_triage_says_split(
     assert payload.get("rationale") == "two areas"
 
 
-# ---------------------------------------------------------------------------
-# Safe mode finalize integration (PR-V1-13)
-# ---------------------------------------------------------------------------
+# Safe mode finalize integration (PR-V1-13) — spy in for ``finalize_task``
+# that also writes ``task.pr_url`` so we can assert the executor invokes
+# it on the verified branch and the pipeline still closes the task
+# ``done``.
 
 
 def test_process_pending_finalizes_verified_run_with_gh_stub(
-    session: Session,
-    git_project: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    session: Session, git_project: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verified run → ``finalize_task`` populates ``task.pr_url``.
-
-    We monkeypatch ``finalize_task`` in the executor namespace with a spy
-    that returns a canned ``FinalizeResult`` and writes ``task.pr_url``
-    itself — the executor only has to invoke it on the ``verified`` branch
-    and let ``_finalize`` flip the task to ``done``.
-    """
-
     import app.executor.core as executor_core
     from app.finalize import FinalizeResult
 
     calls: list[int] = []
+    url = "https://github.com/owner/repo/pull/99"
 
-    def fake_finalize(session, run, task, project) -> FinalizeResult:
+    def fake_finalize(session, run, task, project):
         calls.append(task.id)
-        task.pr_url = "https://github.com/owner/repo/pull/99"
+        task.pr_url = url
         session.commit()
-        return FinalizeResult(
-            committed=True,
-            pushed=True,
-            pr_url="https://github.com/owner/repo/pull/99",
-            commands_skipped=[],
-        )
+        return FinalizeResult(True, True, url, [])
 
     monkeypatch.setattr(executor_core, "finalize_task", fake_finalize)
     monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
@@ -569,7 +556,7 @@ def test_process_pending_finalizes_verified_run_with_gh_stub(
     refreshed = session.get(Task, task.id)
     assert refreshed is not None
     assert refreshed.status == "done"
-    assert refreshed.pr_url == "https://github.com/owner/repo/pull/99"
+    assert refreshed.pr_url == url
 
     run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.outcome == "verified"

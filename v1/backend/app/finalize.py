@@ -1,18 +1,13 @@
 """Safe mode finalize (PR-V1-13).
 
 After ``verify_run`` approves a run the executor calls ``finalize_task``
-which, best-effort:
+which, best-effort, runs: ``git add -A`` + ``git commit`` → ``git push
+-u origin <branch>`` (if ``project.git_remote``) → ``gh pr create`` (if
+``gh`` is on PATH). Each step that fails is recorded in
+:attr:`FinalizeResult.commands_skipped`; the function never raises.
 
-1. ``git add -A`` + ``git commit`` (skipped if working tree clean).
-2. ``git push -u origin <branch>`` (skipped if no ``project.git_remote``
-   or commit failed).
-3. ``gh pr create`` (skipped if ``gh`` missing or push failed). Captures
-   the URL ``gh`` prints on stdout and persists it into ``task.pr_url``.
-
-Commit flags use ``-c user.email`` / ``-c user.name`` inline so a fresh
-machine with no global git config still produces a valid commit. Nothing
-here raises: every failing step is recorded in
-:attr:`FinalizeResult.commands_skipped` and logged.
+Commit flags use inline ``-c user.email`` / ``-c user.name`` so a fresh
+machine with no global git config still produces a valid commit.
 """
 
 from __future__ import annotations
@@ -52,7 +47,7 @@ def finalize_task(
 ) -> FinalizeResult:
     """Run the safe-mode finalize pipeline for ``task``. Never raises."""
 
-    _ = run  # reserved for future use (e.g. attach finalize notes to run)
+    del run  # reserved for future use (e.g. attach finalize notes to run)
     cwd = project.local_path
     branch = task.branch_name or ""
     skipped: list[str] = []
@@ -64,10 +59,8 @@ def finalize_task(
     if committed:
         if not project.git_remote:
             skipped.append("no_remote")
-            logger.info("skip push task_id=%s: no git_remote", task.id)
         elif not branch:
             skipped.append("no_branch")
-            logger.info("skip push task_id=%s: empty branch_name", task.id)
         else:
             pushed, push_skip = _push(branch, cwd)
             skipped.extend(push_skip)
@@ -78,7 +71,6 @@ def finalize_task(
             skipped.append(
                 f"gh_missing: run 'gh pr create --head {branch}' to open the PR manually"
             )
-            logger.info("skip gh pr create task_id=%s: gh not on PATH", task.id)
         else:
             pr_url, pr_skip = _pr_create(task, branch, cwd)
             skipped.extend(pr_skip)
@@ -92,15 +84,9 @@ def finalize_task(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helpers (private).
-# ---------------------------------------------------------------------------
-
-
 def _run_cmd(args: Sequence[str], cwd: str) -> tuple[int, str, str]:
-    """Run ``args`` in ``cwd`` with capture + 30 s timeout. Returns
-    ``(rc, stdout, stderr)``; OS/subprocess errors surface as
-    ``(-1, "", str(exc))`` so callers have one shape to handle."""
+    """Run ``args`` in ``cwd`` with 30 s timeout. Returns ``(rc, stdout,
+    stderr)``; OS/subprocess errors surface as ``(-1, "", str(exc))``."""
 
     logger.info("cmd cwd=%s argv=%s", cwd, list(args))
     try:
@@ -121,20 +107,14 @@ def _commit(task: Task, cwd: str) -> tuple[bool, list[str]]:
         return False, [_fail("commit_failed: git status", rc, stderr)]
     if not stdout.strip():
         return False, ["nothing_to_commit"]
-
     rc, _, stderr = _run_cmd(["git", "add", "-A"], cwd)
     if rc != 0:
         return False, [_fail("commit_failed: git add", rc, stderr)]
-
     subject = f"niwa: {(task.title or '')[:60]}"
     body = (task.description or "") + f"\n\nNiwa task #{task.id}"
     rc, _, stderr = _run_cmd(
-        [
-            "git",
-            "-c", "user.email=niwa@localhost",
-            "-c", "user.name=Niwa",
-            "commit", "-m", subject, "-m", body,
-        ],
+        ["git", "-c", "user.email=niwa@localhost", "-c", "user.name=Niwa",
+         "commit", "-m", subject, "-m", body],
         cwd,
     )
     if rc != 0:
@@ -163,23 +143,19 @@ def _pr_create(task: Task, branch: str, cwd: str) -> tuple[str | None, list[str]
         cwd,
     )
     if rc != 0:
-        reason = (
-            f"gh_pr_create_failed: rc={rc} stderr={stderr.strip()[:500]} "
-            f"manual='gh pr create --head {branch}'"
-        )
-        logger.warning(reason)
-        return None, [reason]
-
+        return None, [_fail(
+            f"gh_pr_create_failed: manual='gh pr create --head {branch}'",
+            rc, stderr,
+        )]
     for line in stdout.splitlines():
         candidate = line.strip()
         if _URL_RE.match(candidate):
             return candidate, []
-
     # ``gh`` returned 0 but emitted nothing URL-shaped — drop pr_url so
     # the UI never renders a bogus link.
-    reason = f"gh_pr_create_no_url: stdout={stdout.strip()[:200]}"
-    logger.warning(reason)
-    return None, [reason]
+    msg = f"gh_pr_create_no_url: stdout={stdout.strip()[:200]}"
+    logger.warning(msg)
+    return None, [msg]
 
 
 def _fail(prefix: str, rc: int, stderr: str) -> str:

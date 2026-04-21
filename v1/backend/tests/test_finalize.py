@@ -1,10 +1,10 @@
 """Unit tests for ``app.finalize`` (PR-V1-13, safe mode).
 
-Every case mocks ``subprocess.run`` via ``monkeypatch`` so no real git or
-``gh`` ever executes. The ``_mock_cmd`` dispatcher routes each invocation
-by the first argv token (``git`` or ``gh``) and — for git — by the first
-non-``-c`` token so the four pipeline steps (``status``, ``add``,
-``commit``, ``push``) can be scripted independently per test.
+Every case mocks ``subprocess.run`` via ``monkeypatch`` so no real git
+or ``gh`` ever executes. ``_mock_cmd`` routes each call by the first
+argv token (``git``/``gh``) and — for git — by the first non-``-c``
+token so the four pipeline steps (status/add/commit/push) can be
+scripted independently per test.
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ from app.finalize import FinalizeResult, finalize_task
 from app.models import Base, Project, Run, Task
 
 
+PR_URL = "https://github.com/owner/repo/pull/42"
+DIRTY = (0, " M file.py\n", "")
+OK = (0, "", "")
+COMMIT_SEQ = {"git status": DIRTY, "git add": OK, "git commit": OK}
+PUSH_OK = {**COMMIT_SEQ, "git push": OK}
+
+
 @pytest.fixture()
 def session(tmp_path: Path) -> Iterator[Session]:
     engine = create_engine(f"sqlite:///{tmp_path / 'finalize.sqlite3'}", future=True)
@@ -32,9 +39,7 @@ def session(tmp_path: Path) -> Iterator[Session]:
 
 
 def _seed(
-    session: Session,
-    *,
-    git_remote: str | None = "git@github.com:owner/repo.git",
+    session: Session, *, git_remote: str | None = "git@github.com:owner/repo.git",
 ) -> tuple[Project, Task, Run]:
     project = Project(
         slug="demo", name="Demo", kind="library",
@@ -61,19 +66,12 @@ def _seed(
 def _mock_cmd(
     monkeypatch: pytest.MonkeyPatch,
     responses: dict[str, tuple[int, str, str]],
-) -> list[list[str]]:
-    """Stub ``subprocess.run`` to return canned ``(rc, stdout, stderr)`` per key.
-
-    Key format: ``"git status"``, ``"git add"``, ``"git commit"``,
-    ``"git push"``, or ``"gh"``. ``git`` flags (``-c key=val``) are
-    skipped when computing the subcommand. Unknown keys fail loudly so
-    tests cannot pass by accident when the dispatcher drifts.
-    """
-
-    seen: list[list[str]] = []
+) -> None:
+    """Stub ``subprocess.run`` to return ``(rc, stdout, stderr)`` per key
+    (``"git status"``, ``"git add"``, ``"git commit"``, ``"git push"``,
+    ``"gh"``). Unknown keys raise so drift fails loud."""
 
     def fake_run(args, *a, **kw):
-        seen.append(list(args))
         key = args[0]
         if key == "git":
             idx = 1
@@ -86,41 +84,35 @@ def _mock_cmd(
         return subprocess.CompletedProcess(args, rc, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    return seen
+
+
+def _gh_installed(monkeypatch: pytest.MonkeyPatch, installed: bool = True) -> None:
+    path = "/usr/bin/gh" if installed else None
+    monkeypatch.setattr("shutil.which", lambda name: path if name == "gh" else None)
 
 
 def test_commit_push_and_pr_happy_path(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, task, run = _seed(session)
-
-    monkeypatch.setattr(
-        "shutil.which", lambda name: "/usr/bin/gh" if name == "gh" else None
-    )
-    _mock_cmd(monkeypatch, {
-        "git status": (0, " M file.py\n", ""),
-        "git add": (0, "", ""),
-        "git commit": (0, "", ""),
-        "git push": (0, "", ""),
-        "gh": (0, "https://github.com/owner/repo/pull/42\n", ""),
-    })
+    _gh_installed(monkeypatch)
+    _mock_cmd(monkeypatch, {**PUSH_OK, "gh": (0, PR_URL + "\n", "")})
 
     result = finalize_task(session, run, task, project)
 
     assert isinstance(result, FinalizeResult)
     assert result.committed and result.pushed
-    assert result.pr_url == "https://github.com/owner/repo/pull/42"
+    assert result.pr_url == PR_URL
     assert result.commands_skipped == []
-
     session.refresh(task)
-    assert task.pr_url == "https://github.com/owner/repo/pull/42"
+    assert task.pr_url == PR_URL
 
 
 def test_nothing_to_commit_skipped(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, task, run = _seed(session)
-    _mock_cmd(monkeypatch, {"git status": (0, "", "")})
+    _mock_cmd(monkeypatch, {"git status": OK})
 
     result = finalize_task(session, run, task, project)
 
@@ -135,11 +127,7 @@ def test_no_git_remote_skips_push_and_pr(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, task, run = _seed(session, git_remote=None)
-    _mock_cmd(monkeypatch, {
-        "git status": (0, " M file.py\n", ""),
-        "git add": (0, "", ""),
-        "git commit": (0, "", ""),
-    })
+    _mock_cmd(monkeypatch, dict(COMMIT_SEQ))
 
     result = finalize_task(session, run, task, project)
 
@@ -154,13 +142,8 @@ def test_gh_missing_skips_pr(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, task, run = _seed(session)
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    _mock_cmd(monkeypatch, {
-        "git status": (0, " M file.py\n", ""),
-        "git add": (0, "", ""),
-        "git commit": (0, "", ""),
-        "git push": (0, "", ""),
-    })
+    _gh_installed(monkeypatch, installed=False)
+    _mock_cmd(monkeypatch, dict(PUSH_OK))
 
     result = finalize_task(session, run, task, project)
 
@@ -175,16 +158,8 @@ def test_gh_pr_create_failure_logs_command(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, task, run = _seed(session)
-    monkeypatch.setattr(
-        "shutil.which", lambda name: "/usr/bin/gh" if name == "gh" else None
-    )
-    _mock_cmd(monkeypatch, {
-        "git status": (0, " M file.py\n", ""),
-        "git add": (0, "", ""),
-        "git commit": (0, "", ""),
-        "git push": (0, "", ""),
-        "gh": (1, "", "gh: not authenticated\n"),
-    })
+    _gh_installed(monkeypatch)
+    _mock_cmd(monkeypatch, {**PUSH_OK, "gh": (1, "", "gh: not authenticated\n")})
 
     result = finalize_task(session, run, task, project)
 
