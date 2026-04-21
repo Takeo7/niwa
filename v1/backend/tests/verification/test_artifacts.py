@@ -101,6 +101,23 @@ def test_non_git_cwd_skips_e3_gracefully(tmp_path: Path) -> None:
     assert evidence.get("git_available") is False
 
 
+def test_missing_cwd_fails_hard(tmp_path: Path) -> None:
+    """A cwd that doesn't exist is an executor/operator bug, not a skip.
+
+    Before the fix-up, ``subprocess.run`` raised ``FileNotFoundError``
+    for both "``git`` not installed" and "``cwd`` missing", and the
+    skip branch silently turned a broken cwd into a pass. Now a missing
+    directory fails hard with ``error_code="cwd_missing"``.
+    """
+
+    missing = tmp_path / "does-not-exist"
+    evidence: dict = {}
+    assert check_artifacts_in_cwd(missing, evidence) is False
+    assert evidence.get("cwd_exists") is False
+    assert evidence.get("error_code") == "cwd_missing"
+    assert evidence.get("git_available") is False
+
+
 def test_embedded_tool_use_outside_cwd_fails(
     session: Session, git_project: Path
 ) -> None:
