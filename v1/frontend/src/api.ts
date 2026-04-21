@@ -165,3 +165,18 @@ export function hasInFlightTask(tasks: Task[] | undefined): boolean {
   if (!tasks) return false;
   return tasks.some((t) => IN_FLIGHT_STATUSES.includes(t.status));
 }
+
+// ---- Readiness wire types (mirror backend app/api/readiness.py) --------
+
+export interface ReadinessResponse {
+  db_ok: boolean;
+  claude_cli_ok: boolean;
+  git_ok: boolean;
+  gh_ok: boolean;
+  details: {
+    db: { path: string; reachable: boolean; error?: string };
+    claude_cli: { path: string | null; found: boolean; error?: string };
+    git: { version?: string; error?: string };
+    gh: { found: boolean; hint?: string; error?: string };
+  };
+}
