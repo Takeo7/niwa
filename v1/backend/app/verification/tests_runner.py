@@ -29,7 +29,12 @@ _OUTPUT_TAIL_BYTES = 4096
 # ``^test:`` at column 0 is Make's rule-definition marker. We grep the
 # raw file rather than invoking ``make -n`` because that would execute
 # arbitrary recipes during detection — opposite of the brief.
-_MAKE_TEST_RULE = re.compile(r"^test\s*:", re.MULTILINE)
+#
+# The negative lookahead ``(?!=)`` rejects Make variable assignments
+# (``test := foo`` or ``test ::= foo``) which would otherwise match
+# ``^test\s*:`` and trick us into running ``make test`` on a Makefile
+# that has no such target, producing spurious tests_failed runs.
+_MAKE_TEST_RULE = re.compile(r"^test\s*:(?!=)", re.MULTILINE)
 
 
 @dataclass
