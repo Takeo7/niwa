@@ -1662,10 +1662,118 @@ verde; `gh_ok=false` con hint rinde "Missing" + el texto del hint.
 Mock `fetch` via `vi.stubGlobal` siguiendo el patrón de
 `ProjectList.test.tsx`.
 
+## Clarification round-trip (PR-V1-19)
+
+SPEC §1 / §3 / §9 Semana 5. Cierra el ciclo cuando Claude acaba el
+stream con una pregunta sin respuesta: la task deja de caer en
+`failed` + `error_code=question_unanswered`; en su lugar va a
+`waiting_input`, el usuario responde desde la UI y la task vuelve a
+`queued` para que el executor la reclame.
+
+### Flujo
+
+1. **Verifier.** `stream.py::check_stream_termination` (E2) devuelve
+   ahora `(error_code, pending_question)`. Si el último mensaje
+   `assistant` semántico termina en `?`, `error_code="needs_input"` y
+   `pending_question=<texto completo concatenado>`. Si no, el contrato
+   anterior se mantiene (`"tool_use_incomplete"`, `"empty_stream"`,
+   `None`).
+2. **`verify_run`.** Propaga `needs_input` como outcome distinto de
+   `verification_failed`. `VerificationResult` gana
+   `pending_question: str | None = None` (default preserva todos los
+   call-sites antiguos). `evidence["outcome"] = "needs_input"` para
+   que el snapshot persistido en `verification_json` sea
+   autodescriptivo.
+3. **Executor `_finalize`.** Tres ramas terminales:
+   - `outcome == "verified"` → run `completed`, task `done`.
+   - `outcome == "needs_input"` → run `failed` (el adapter no produjo
+     output completo), task `waiting_input`,
+     `task.pending_question = <text>`. `TaskEvent(kind="status_changed",
+     payload={"from":"running","to":"waiting_input"})`.
+   - otro → run `failed`, task `failed` (como antes).
+4. **Endpoint `POST /api/tasks/{id}/respond`.** Body
+   `TaskRespondPayload(response: str)` (`min_length=1, max_length=10_000,
+   extra="forbid"`). Handler en `app/api/tasks.py`; lógica en
+   `services/tasks.py::respond_to_task`:
+   - 404 si la task no existe; 409 si `status != "waiting_input"`;
+     422 si el body es inválido (pydantic).
+   - Escribe `TaskEvent(kind="message",
+     payload={"event":"user_response","text":<response>})` para audit.
+   - `task.pending_question = None`, `task.status = "queued"`,
+     `TaskEvent(kind="status_changed",
+     payload={"from":"waiting_input","to":"queued"})`.
+   - Retorna el `TaskRead` actualizado.
+5. **Frontend.** `TaskDetail.tsx` renderiza un `<Alert color="yellow"
+   title="Niwa necesita tu respuesta">` cuando `task.status ===
+   "waiting_input" && task.pending_question`, con el texto de la
+   pregunta, un `<Textarea>` controlado por `useState`, y un botón
+   "Responder" que dispara `useRespondTask(taskId).mutate(...)`. El
+   hook invalida `["task", taskId]` al éxito; la página refresca a
+   `queued` sin banner. El botón se deshabilita mientras el textarea
+   está vacío o la mutación está pendiente.
+
+### Contrato del endpoint
+
+```
+POST /api/tasks/{task_id}/respond
+Content-Type: application/json
+
+{ "response": "yes please" }
+
+200 → TaskRead (status=queued, pending_question=null)
+404 → { "detail": "task not found" }
+409 → { "detail": "Task is not waiting for input" }
+422 → pydantic validation error (body vacío / campos extra / >10k)
+```
+
+### Known limitation — no composite prompt
+
+El siguiente run del adapter **no** recibe el historial. `_build_prompt`
+sigue componiendo el prompt solo con `task.title` + `task.description`;
+la respuesta del usuario queda en `task_events` como audit pero el CLI
+no la lee. El follow-up real combinará prompt original + pregunta
+previa + respuesta del usuario en un `composite prompt`, o llamará a
+`claude --resume <session_id>` usando `run.session_handle` (otro
+follow-up). Para el MVP esto basta: Claude es consistente entre
+corridas si la descripción de la task es clara; si sigue preguntando,
+se itera.
+
+### Otros no cubiertos (follow-up)
+
+- No hay resume del CLI (`claude --resume`), así que cada respond
+  crea un run nuevo desde cero.
+- No hay UI para cancelar el `waiting_input` (p. ej. "convert to
+  failed"). Se borra manualmente con `DELETE /api/tasks/:id` si
+  hace falta.
+- No se soporta multi-turn explícito; cada vez que el adapter acabe
+  en `?`, la task vuelve a `waiting_input`. Implícito.
+- El adapter sigue marcando `run.status="failed"` en la rama
+  `needs_input`. Las métricas de runs felices/fallidos en SPEC §5
+  no distinguen todavía entre "task parked" y "task genuinely
+  failed"; follow-up si hace falta un dashboard.
+
+### Tests
+
+- `tests/test_tasks_api.py` (+4 casos): respond 200, 409, 404, 422
+  (empty body).
+- `tests/test_verification_integration.py`: el antiguo
+  `test_sad_path_question_unanswered` queda reemplazado por
+  `test_stream_ending_in_question_puts_task_in_waiting_input` — las
+  aserciones ahora verifican `run.outcome == "needs_input"`,
+  `task.status == "waiting_input"`,
+  `task.pending_question == <text>` y el `status_changed
+  running→waiting_input`.
+- `tests/verification/test_stream.py`: los cuatro casos actualizan al
+  tuple `(error_code, pending_question)`; el caso de pregunta
+  verifica el texto completo propagado.
+- `frontend/tests/TaskDetail.test.tsx` (+2 casos): render del banner
+  + botón deshabilitado en vacío, y submit con POST capturado.
+
 ## Próximos PRs (SPEC §9)
 
-- Semana 5 (restante): clarification round-trip en UI, instalación
-  en la máquina de la pareja.
-- Semana 6: bugfix + jubilar v0.2.
+- Semana 5 (restante): instalación en la máquina de la pareja.
+- Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-19:
+  composite prompt / `claude --resume` para que el siguiente run
+  reciba la respuesta del usuario.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
