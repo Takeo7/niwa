@@ -1,9 +1,8 @@
-"""Verification orchestrator (PR-V1-11a, PR-V1-11b).
+"""Verification orchestrator (PR-V1-11a → PR-V1-11c).
 
 Runs SPEC §5 evidence checks in order, short-circuiting on the first
-failure. **Current scope:** E1 (exit code) + E2 (stream) + E3 (artifact
-presence in cwd) + E4 (no writes outside cwd) are real. E5 (project
-tests) is still a vacuous stub — 11c wires it.
+failure. E1 (exit code) + E2 (stream) + E3 (artifact presence in cwd) +
+E4 (no writes outside cwd) + E5 (project tests) are all real now.
 """
 
 from __future__ import annotations
@@ -18,6 +17,12 @@ from ..models import Project, Run, RunEvent, Task
 from .artifacts import check_artifacts_in_cwd, check_no_artifacts_outside_cwd
 from .models import VerificationResult
 from .stream import check_stream_termination
+from .tests_runner import detect_test_runner, run_project_tests
+
+
+# Hard-coded for MVP; ``NIWA_VERIFY_TESTS_TIMEOUT`` env override is a
+# follow-up per the 11c brief.
+_TESTS_TIMEOUT_S = 300
 
 
 _LIFECYCLE = {"started", "completed", "failed", "error"}
@@ -101,8 +106,36 @@ def verify_run(
         code = evidence.get("error_code", "artifacts_outside_cwd")
         return VerificationResult(False, "verification_failed", code, evidence)
 
-    # E5 — project tests: still a vacuous stub until 11c.
-    _ = project, task
+    # E5 — project tests. Detection returns None either because the
+    # project is ad-hoc ``kind=script`` (skip by design) or no runner
+    # matched in cwd. Both are legitimate passes; the reason-code lets
+    # the operator tell them apart in ``verification_json``.
+    _ = task
+    choice = detect_test_runner(cwd_path, project)
+    if choice is None:
+        evidence["tests_ran"] = False
+        project_kind = getattr(project, "kind", None)
+        evidence["test_reason"] = (
+            "kind_script" if project_kind == "script" else "no_test_script_detected"
+        )
+        return VerificationResult(True, "verified", None, evidence)
+
+    result = run_project_tests(choice, timeout=_TESTS_TIMEOUT_S)
+    evidence["tests_ran"] = True
+    evidence["test_tool"] = choice.tool
+    evidence["test_exit_code"] = result.exit_code
+    evidence["test_duration_s"] = result.duration_s
+    evidence["test_output_tail"] = result.output_tail
+    if result.timed_out:
+        evidence["error_code"] = "tests_timeout"
+        return VerificationResult(
+            False, "verification_failed", "tests_timeout", evidence
+        )
+    if not result.passed:
+        evidence["error_code"] = "tests_failed"
+        return VerificationResult(
+            False, "verification_failed", "tests_failed", evidence
+        )
     return VerificationResult(True, "verified", None, evidence)
 
 
