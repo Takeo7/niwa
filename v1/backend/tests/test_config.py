@@ -108,24 +108,14 @@ def test_db_section_replaces_database_section(
 
     expected = tmp_path / "real.sqlite3"
     decoy = tmp_path / "ignored.sqlite3"
-
     path = tmp_path / "config.toml"
     path.write_text(
-        f"""
-[db]
-path = "{expected}"
-
-[database]
-path = "{decoy}"
-"""
+        f'[db]\npath = "{expected}"\n[database]\npath = "{decoy}"\n'
     )
     monkeypatch.delenv("NIWA_CONFIG", raising=False)
     monkeypatch.setenv("NIWA_CONFIG_PATH", str(path))
 
-    settings = load_settings()
-
-    assert settings.db_path == expected
-    assert settings.db_path != decoy
+    assert load_settings().db_path == expected
 
 
 def test_executor_section_is_read(
