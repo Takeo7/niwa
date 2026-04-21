@@ -1,16 +1,21 @@
-"""E2 — stream termination analyzer (PR-V1-11a).
+"""E2 — stream termination analyzer (PR-V1-11a, extended PR-V1-19).
 
 Inspects the ordered stream payload dicts (same shape as
-``AdapterEvent`` payloads on ``run_events``); returns ``None`` if Claude
-terminated cleanly, or an ``error_code`` string otherwise.
+``AdapterEvent`` payloads on ``run_events``); returns a
+``(error_code, pending_question)`` tuple so the verifier can tell the
+non-fatal "Claude asked a clarification" case apart from real failures.
 
 Last-event rules (SPEC §5, evidence 2), ignoring lifecycle frames
 (``started``/``completed``/``failed``/``error``):
 
-* ``result`` → OK (MVP trusts any ``subtype``).
-* ``assistant`` with text ending in ``?`` → ``question_unanswered``.
-* ``tool_use`` → ``tool_use_incomplete``.
-* anything else (including no semantic events) → ``empty_stream``.
+* ``result`` → ``(None, None)``, clean completion.
+* ``assistant`` with text ending in ``?`` → ``("needs_input", text)``.
+  PR-V1-19 replaces the old ``question_unanswered`` error code: the
+  executor now parks the task in ``waiting_input`` so the user can
+  answer without the task being marked failed.
+* ``assistant`` not ending in ``?`` → ``(None, None)``.
+* ``tool_use`` → ``("tool_use_incomplete", None)``.
+* anything else (including no semantic events) → ``("empty_stream", None)``.
 """
 
 from __future__ import annotations
@@ -36,21 +41,26 @@ def _assistant_text(payload: dict[str, Any]) -> str:
     )
 
 
-def check_stream_termination(events: list[dict[str, Any]]) -> str | None:
-    """Return ``None`` on success, otherwise an ``error_code`` string."""
+def check_stream_termination(
+    events: list[dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    """Return ``(error_code, pending_question)`` describing the terminator."""
 
     semantic = [e for e in events if e.get("type") not in _LIFECYCLE]
     if not semantic:
-        return "empty_stream"
+        return ("empty_stream", None)
     last = semantic[-1]
     kind = last.get("type")
     if kind == "result":
-        return None
+        return (None, None)
     if kind == "tool_use":
-        return "tool_use_incomplete"
+        return ("tool_use_incomplete", None)
     if kind == "assistant":
-        return "question_unanswered" if _assistant_text(last).rstrip().endswith("?") else None
-    return "empty_stream"
+        text = _assistant_text(last)
+        if text.rstrip().endswith("?"):
+            return ("needs_input", text)
+        return (None, None)
+    return ("empty_stream", None)
 
 
 __all__ = ["check_stream_termination"]
