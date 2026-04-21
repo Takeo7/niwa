@@ -73,3 +73,22 @@ def test_pytest_failure(tmp_path: Path) -> None:
 def test_no_test_script_detected_skips(tmp_path: Path) -> None:
     choice = detect_test_runner(tmp_path, _Project(kind="library"))
     assert choice is None
+
+
+def test_runner_missing_binary_returns_failure(tmp_path: Path) -> None:
+    # Regression: if the runner binary is absent (e.g. ``npm`` not
+    # installed on a minimal host), ``subprocess.run`` raises
+    # ``FileNotFoundError``. Before the fix this escaped ``verify_run``
+    # and left the run wedged in ``running``; now we surface a plain
+    # failed ``TestRunResult`` with ``exit_code=None`` and a descriptive
+    # ``output_tail``.
+    choice = TestRunnerChoice(
+        cmd=["/nonexistent/niwa-test-binary", "--version"],
+        tool="make",
+        cwd=tmp_path,
+    )
+    result = run_project_tests(choice, timeout=5)
+    assert result.passed is False
+    assert result.exit_code is None
+    assert result.timed_out is False
+    assert "FileNotFoundError" in result.output_tail
