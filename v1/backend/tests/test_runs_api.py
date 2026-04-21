@@ -110,7 +110,9 @@ def test_list_runs_for_task_after_echo(client, app, project_payload) -> None:
     assert run["status"] == "completed"
     assert run["model"] == "claude-code"
     assert run["exit_code"] == 0
-    assert run["outcome"] == "cli_ok"
+    # PR-V1-11a: adapter's ``cli_ok`` now flows through the verifier and
+    # the run-level outcome is ``verified``.
+    assert run["outcome"] == "verified"
     assert run["artifact_root"] == project_payload["local_path"]
     assert run["finished_at"] is not None
 

@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-08)
+## Layout actual (tras PR-V1-11a)
 
 ```
 v1/
@@ -21,6 +21,7 @@ v1/
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
 │   │   ├── executor/           # daemon (polling, pipeline, git workspace,
 │   │   │                       # CLI entrypoint)
+│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -476,6 +477,130 @@ monousuario).
 `test_executor.py::test_runs_fail_on_git_setup_error` para el outcome
 end-to-end. `test_adapter.py` y `test_runs_api.py` migrados a
 `git_project`.
+
+## Verification core (PR-V1-11a)
+
+Implementación inicial del contrato **evidence-based** del SPEC §5. Un
+run ya no se marca `done` solo porque el CLI devolvió `exit 0`: pasa
+por un verifier que corre los chequeos E1..E5 en orden y deja la
+evidencia serializada en `run.verification_json`.
+
+**11a cubre E1 + E2 reales + esqueleto para E3/E4/E5 (stubs).** 11b
+añade E3 (artefactos en cwd) + E4 (tool_use paths fuera de cwd); 11c
+añade E5 (tests del proyecto).
+
+### Módulo `app/verification/`
+
+- `models.py` — `@dataclass(frozen=True) VerificationResult(passed,
+  outcome, error_code, evidence)`. Evidence es JSON-serializable; la
+  owning invariant vive en el orquestador.
+- `stream.py` — E2. `check_stream_termination(events) -> error_code |
+  None`. Ignora lifecycle (`started`/`completed`/`failed`/`error`).
+  Reglas último evento: `result` → OK (MVP trust), `assistant` text
+  que acaba en `?` → `question_unanswered`, `tool_use` sin
+  `tool_result` tras → `tool_use_incomplete`, otra cosa o vacío →
+  `empty_stream`.
+- `core.py` — orquestador `verify_run(session, run, task, project,
+  cwd, *, adapter_outcome, exit_code)`. Popula `evidence` con los
+  slots E3/E4/E5 (`tests_ran`, `git_available`, `artifact_count`,
+  `tool_use_paths_outside`) como placeholders, corre E1→E2, y
+  cortocircuita al primer fallo.
+- `__init__.py` — re-exports `verify_run` + `VerificationResult`.
+
+### E1 — exit code
+
+- `adapter_outcome == "cli_ok"` + `exit_code == 0` → OK.
+- `adapter_outcome == "cli_nonzero_exit"` → `error_code="exit_nonzero"`.
+- `cli_not_found`/`timeout`/`adapter_exception` → bypass del verifier
+  (ver siguiente sección).
+
+### Integración en el executor
+
+`executor/core.py::run_adapter` llama `verify_run` **entre**
+`adapter.wait()` y `_finalize` **solo cuando** el adapter reportó
+`cli_ok`. Fallos previos (`cli_nonzero_exit`, `cli_not_found`,
+`timeout`, `adapter_exception`, `git_setup_failed`) propagan su
+outcome sin tocar el verifier — la evidencia sería
+contradictoria ("verificó algo que no se ejecutó").
+
+`_finalize` acepta ahora `error_code: str | None` (kwarg). Cuando
+no-None, escribe un `TaskEvent(kind="verification",
+payload_json={"error_code": ..., "outcome": ...})` en la misma
+transacción que el `status_changed`.
+
+### Outcomes y mapeo a `run.status`
+
+| adapter_outcome        | verifier                   | run.outcome            | run.status  | task.status |
+|------------------------|----------------------------|------------------------|-------------|-------------|
+| `cli_ok` + E1..E2 OK   | pass                       | `verified`             | `completed` | `done`      |
+| `cli_ok` + E1 fail     | E1                         | `verification_failed`  | `failed`    | `failed`    |
+| `cli_ok` + E2 fail     | E2                         | `verification_failed`  | `failed`    | `failed`    |
+| `cli_nonzero_exit`     | bypass                     | `cli_nonzero_exit`     | `failed`    | `failed`    |
+| `cli_not_found`        | bypass                     | `cli_not_found`        | `failed`    | `failed`    |
+| `timeout`              | bypass                     | `timeout`              | `failed`    | `failed`    |
+| `adapter_exception`    | bypass                     | `adapter_exception`    | `failed`    | `failed`    |
+| (pre-adapter)          | bypass                     | `git_setup_failed`     | `failed`    | `failed`    |
+
+Éxito es **solo** `outcome == "verified"`. Cualquier otro valor falla
+el run y la task.
+
+### error_codes (vocabulario actual)
+
+- E1: `exit_nonzero`, `adapter_failure` (stub — 11a reserva el código;
+  el bypass del verifier hace que hoy no se emita).
+- E2: `empty_stream`, `tool_use_incomplete`, `question_unanswered`.
+- E3/E4/E5: vendrán en 11b/11c.
+
+### Evidence shape (estable)
+
+```json
+{
+  "adapter_outcome": "cli_ok",
+  "exit_code": 0,
+  "exit_ok": true,
+  "significant_event_count": 3,
+  "stream_terminated_cleanly": true,
+  "tests_ran": false,        // stub — 11c
+  "git_available": null,     // stub — 11b
+  "artifact_count": null,    // stub — 11b
+  "tool_use_paths_outside": []  // stub — 11b
+}
+```
+
+Ante fallo incluye también `error_code`. La forma no varía entre
+11a/11b/11c — solo se rellenan slots.
+
+### Tests
+
+- `tests/verification/test_stream.py` — 4 casos unitarios del E2
+  analyzer (result/success, question trailing, tool_use trailing,
+  empty stream).
+- `tests/test_verification_integration.py` — 2 casos E2E (happy con
+  `FAKE_CLAUDE_TOUCH` + stream `result/success` → `verified`; sad con
+  assistant trailing `?` → `verification_failed` +
+  `TaskEvent(kind='verification')`).
+- Legacy migrado: `test_adapter.py`, `test_executor.py`,
+  `test_runs_api.py` — asserts que miraban el outcome final del Run
+  pasan de `cli_ok` a `verified`. Los que inspeccionan
+  `adapter.outcome` (interna) **no** cambian: siguen siendo `cli_ok`
+  porque el adapter lo escribe antes del verify.
+- Fake CLI extendido: nueva env `FAKE_CLAUDE_TOUCH` (lista separada
+  por `:`, substituye `{pid}`) para que el fake escriba artefactos
+  durante la ejecución — necesario para 11b (E3 requiere tree dirty)
+  pero ya disponible aquí para no tocar el fake dos veces.
+
+### Evolución esperada (11b/11c)
+
+- **11b** añade lógica a los slots `git_available`, `artifact_count`,
+  `tool_use_paths_outside` usando `git status --porcelain` + scan del
+  stream por tool_use con paths absolutos fuera del cwd.
+- **11c** añade `tests_ran` / `tests_passed` corriendo el runner del
+  proyecto (`pyproject.toml` pytest, `package.json` test, Makefile
+  test) cuando `project.kind ∈ (library, web-deployable)`.
+
+Ambos reemplazan los placeholders con valores reales y añaden nuevos
+`error_code` sin modificar la forma de `VerificationResult` ni la
+integración en el executor.
 
 ## Frontend
 
