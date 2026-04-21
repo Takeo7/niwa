@@ -396,3 +396,146 @@ def test_runs_fail_on_git_setup_error(
     assert error_events, "expected an error event on git_setup_failed"
     payload = json.loads(error_events[0].payload_json or "{}")
     assert "git_setup_failed" in payload.get("reason", "")
+
+
+# ---------------------------------------------------------------------------
+# Triage integration (PR-V1-12)
+# ---------------------------------------------------------------------------
+
+
+def test_process_pending_executes_when_triage_says_execute(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With triage emitting ``execute``, the normal run pipeline proceeds."""
+
+    from app.triage import TriageDecision
+
+    # Keep the normal fake CLI path for the real adapter run.
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+
+    def fake_triage(project, task):
+        return TriageDecision(
+            kind="execute", subtasks=[], rationale="direct", raw_output=""
+        )
+
+    monkeypatch.setattr("app.executor.core.triage_task", fake_triage)
+
+    project = _make_project(session, local_path=git_project)
+    task = _make_task(session, project, title="execute me")
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    runs = session.query(Run).filter(Run.task_id == task.id).all()
+    assert len(runs) == 1
+    assert runs[0].status == "completed"
+
+
+def test_process_pending_splits_when_triage_says_split(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Triage ``split`` closes the parent without a Run and queues subtasks."""
+
+    from app.triage import TriageDecision
+
+    def fake_triage(project, task):
+        return TriageDecision(
+            kind="split",
+            subtasks=["alpha", "beta"],
+            rationale="two areas",
+            raw_output="",
+        )
+
+    monkeypatch.setattr("app.executor.core.triage_task", fake_triage)
+    # Make sure the CLI is never spawned: point at a missing binary.
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
+
+    project = _make_project(session, local_path=tmp_path)
+    parent = _make_task(session, project, title="parent")
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    refreshed = session.get(Task, parent.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    assert refreshed.completed_at is not None
+
+    # No Run recorded — the adapter was bypassed entirely.
+    assert session.query(Run).filter(Run.task_id == parent.id).count() == 0
+
+    subtasks = (
+        session.query(Task)
+        .filter(Task.parent_task_id == parent.id)
+        .order_by(Task.id.asc())
+        .all()
+    )
+    assert [t.title for t in subtasks] == ["alpha", "beta"]
+    assert all(t.status == "queued" for t in subtasks)
+    assert all(t.project_id == project.id for t in subtasks)
+
+    # The split marker is a ``message`` kind with ``event=triage_split``
+    # in the JSON payload (SPEC §3 fixes the enum; the marker lives in
+    # the payload). A status_changed event also flips running→done.
+    events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id)
+        .order_by(TaskEvent.id.asc())
+        .all()
+    )
+    split_events = [
+        e for e in events
+        if e.kind == "message" and e.payload_json and "triage_split" in e.payload_json
+    ]
+    assert len(split_events) == 1
+    payload = json.loads(split_events[0].payload_json)
+    assert payload.get("event") == "triage_split"
+    assert payload.get("rationale") == "two areas"
+    assert payload.get("subtask_ids") == [t.id for t in subtasks]
+
+    status_events = [e for e in events if e.kind == "status_changed"]
+    payloads = [json.loads(e.payload_json or "{}") for e in status_events]
+    assert {"from": "running", "to": "done"} in payloads
+
+
+def test_process_pending_marks_failed_on_triage_error(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``TriageError`` ends the task ``failed`` with ``triage_failed``."""
+
+    from app.triage import TriageError
+
+    def boom(project, task):
+        raise TriageError("bad json")
+
+    monkeypatch.setattr("app.executor.core.triage_task", boom)
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", str(tmp_path / "does-not-exist"))
+
+    project = _make_project(session, local_path=tmp_path)
+    task = _make_task(session, project, title="triage will die")
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+
+    run = session.query(Run).filter(Run.task_id == task.id).one()
+    assert run.status == "failed"
+    assert run.outcome == "triage_failed"
+
+    events = session.query(TaskEvent).filter(TaskEvent.task_id == task.id).all()
+    verif = [e for e in events if e.kind == "verification"]
+    assert verif, "expected verification TaskEvent on triage_failed"
+    payload = json.loads(verif[0].payload_json or "{}")
+    assert payload.get("error_code") == "triage_failed"
