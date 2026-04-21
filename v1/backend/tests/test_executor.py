@@ -364,7 +364,10 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
 
 
 def test_runs_fail_on_git_setup_error(
-    session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_triage_execute: None,
 ) -> None:
     """A non-git ``local_path`` must fail the task before the adapter spawns."""
 
@@ -396,3 +399,125 @@ def test_runs_fail_on_git_setup_error(
     assert error_events, "expected an error event on git_setup_failed"
     payload = json.loads(error_events[0].payload_json or "{}")
     assert "git_setup_failed" in payload.get("reason", "")
+
+
+# ---------------------------------------------------------------------------
+# Triage integration (PR-V1-12b)
+# ---------------------------------------------------------------------------
+
+
+def test_process_pending_executes_when_triage_says_execute(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Triage "execute" → normal adapter pipeline runs to verified.
+
+    Spies ``triage_task`` to pin that the executor actually routes through
+    it before spawning the adapter; without that hop the test would still
+    pass via the default fake CLI script, which is a false green.
+    """
+
+    import app.executor.core as executor_core
+
+    real_triage = executor_core.triage_task
+    calls: list[tuple[object, object]] = []
+
+    def spy(project, task):
+        calls.append((project, task))
+        return real_triage(project, task)
+
+    monkeypatch.setattr(executor_core, "triage_task", spy)
+
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_TRIAGE_JSON",
+        json.dumps({"decision": "execute", "subtasks": [], "rationale": "ok"}),
+    )
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    project = _make_project(session, local_path=git_project)
+    task = _make_task(session, project, title="single change")
+
+    assert process_pending(session) == 1
+    assert len(calls) == 1, "triage_task must be invoked exactly once"
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    assert refreshed.branch_name == build_branch_name(task)
+
+    run = session.query(Run).filter(Run.task_id == task.id).one()
+    assert run.status == "completed"
+    assert run.outcome == "verified"
+
+
+def test_process_pending_splits_when_triage_says_split(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Triage "split" → parent ``done`` with no run, N subtasks created.
+
+    Scope note: the brief asks to assert ``status=="queued"`` on the
+    subtasks, which only holds for the instant between ``_apply_split``
+    and the next iteration of ``process_pending``. The real executor
+    keeps draining, re-triages each subtask (fake falls back to
+    ``execute`` once the marker is burned), and runs the adapter on
+    them. We assert the structural invariants (parent done, no parent
+    run, subtasks exist with the right parent/project/titles) that
+    survive that continuation, plus the ``TaskEvent.message`` split
+    marker that is the Opción B resolution for SPEC §3's enum.
+    """
+
+    monkeypatch.setenv(
+        "FAKE_CLAUDE_TRIAGE_JSON",
+        json.dumps(
+            {"decision": "split", "subtasks": ["one", "two"], "rationale": "two areas"}
+        ),
+    )
+    # Consume the split verdict only once; without this marker every
+    # subtask we create below would be re-triaged with the same JSON
+    # and recurse forever inside ``process_pending``.
+    marker = git_project / ".triage-once"
+    monkeypatch.setenv("FAKE_CLAUDE_TRIAGE_MARKER", str(marker))
+    # Subtasks drain through the normal adapter path once triage degrades
+    # to ``execute``; land artifacts inside the repo so verify passes.
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    project = _make_project(session, local_path=git_project)
+    parent = _make_task(session, project, title="big change")
+
+    # The parent pass + two subtasks = 3 iterations of process_pending.
+    assert process_pending(session) == 3
+
+    session.expire_all()
+    refreshed_parent = session.get(Task, parent.id)
+    assert refreshed_parent is not None
+    assert refreshed_parent.status == "done"
+    assert refreshed_parent.completed_at is not None
+
+    # No run was created on the parent — split short-circuits the adapter.
+    assert session.query(Run).filter(Run.task_id == parent.id).count() == 0
+
+    # Two subtasks attached to the parent with the right project.
+    subtasks = (
+        session.query(Task)
+        .filter(Task.parent_task_id == parent.id)
+        .order_by(Task.id.asc())
+        .all()
+    )
+    assert [t.title for t in subtasks] == ["one", "two"]
+    assert all(t.project_id == parent.project_id for t in subtasks)
+
+    # TaskEvent(kind="message") carries the triage_split marker (SPEC §3
+    # does not allow ``triage_split`` in the enum, so the marker lives in
+    # the payload — Opción B).
+    message_events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id, TaskEvent.kind == "message")
+        .all()
+    )
+    assert len(message_events) == 1
+    payload = json.loads(message_events[0].payload_json or "{}")
+    assert payload.get("event") == "triage_split"
+    assert payload.get("subtask_ids") == [t.id for t in subtasks]
+    assert payload.get("rationale") == "two areas"

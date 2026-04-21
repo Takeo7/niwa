@@ -242,6 +242,7 @@ def test_adapter_binary_missing_fails_fast(
     tmp_path: Path,
     git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stub_triage_execute: None,
 ) -> None:
     project = _make_project(session, str(git_project))
     task = _make_task(session, project, title="ghost")

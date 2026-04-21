@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..models import Project, Run, RunEvent, Task, TaskEvent
+from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
 
@@ -192,19 +193,160 @@ def run_adapter(session: Session, task: Task) -> Run:
 
 
 def process_pending(session: Session) -> int:
-    """Drain every ``queued`` task currently visible to this session."""
+    """Drain every ``queued`` task currently visible to this session.
+
+    PR-V1-12b: every claimed task goes through ``triage_task`` before the
+    adapter. The verdict branches the pipeline three ways:
+
+    * ``execute`` → fall through to the existing ``run_adapter`` path.
+    * ``split``   → materialize the subtasks, close the parent ``done``
+      without ever spawning the adapter.
+    * ``TriageError`` → synthesize a failed run with
+      ``outcome="triage_failed"`` so the UI has something to render.
+    """
 
     processed = 0
     while True:
         task = claim_next_task(session)
         if task is None:
             break
+
+        project = session.get(Project, task.project_id)
+        try:
+            decision = triage_task(project, task)
+        except TriageError as exc:
+            logger.warning("triage failed for task_id=%s: %s", task.id, exc)
+            _finalize_triage_failure(session, task, project, reason=str(exc))
+            processed += 1
+            continue
+
+        if decision.kind == "split":
+            logger.info(
+                "triage split task_id=%s into %d subtasks",
+                task.id,
+                len(decision.subtasks),
+            )
+            _apply_split(session, task, decision)
+            processed += 1
+            continue
+
         # ``run_adapter`` swallows adapter exceptions internally (see its
         # try/except/finally), so nothing we handle here would ever fire.
         run_adapter(session, task)
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
     return processed
+
+
+def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None:
+    """Materialize subtasks, mark parent ``done``, and log the split event.
+
+    SPEC §3 does not allow ``triage_split`` in the ``task_events.kind``
+    enum, so the marker rides inside a ``kind="message"`` payload —
+    this is the Opción B resolution agreed for 12b.
+    """
+
+    now = datetime.now(timezone.utc)
+    subtasks: list[Task] = []
+    for title in decision.subtasks:
+        sub = Task(
+            project_id=task.project_id,
+            parent_task_id=task.id,
+            title=title,
+            description="",
+            status="queued",
+        )
+        session.add(sub)
+        subtasks.append(sub)
+    session.flush()  # populate sub.id for the payload below
+
+    from_status = task.status
+    task.status = "done"
+    task.completed_at = now
+
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps(
+                {
+                    "event": "triage_split",
+                    "subtask_ids": [s.id for s in subtasks],
+                    "rationale": decision.rationale,
+                }
+            ),
+        )
+    )
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "done"}),
+        )
+    )
+    session.commit()
+
+
+def _finalize_triage_failure(
+    session: Session,
+    task: Task,
+    project: Project | None,
+    *,
+    reason: str,
+) -> None:
+    """Record a synthetic failed run for a task whose triage could not decide.
+
+    The run never spawned the adapter, so ``exit_code`` stays ``None`` and
+    no stream events are written. ``artifact_root`` falls back to empty
+    when the project could not be loaded — the schema forbids ``NULL``.
+    """
+
+    now = datetime.now(timezone.utc)
+    run = Run(
+        task_id=task.id,
+        status="failed",
+        model=ADAPTER_MODEL,
+        started_at=now,
+        finished_at=now,
+        outcome="triage_failed",
+        artifact_root=project.local_path if project is not None else "",
+        exit_code=None,
+    )
+    session.add(run)
+    session.flush()
+
+    session.add(
+        RunEvent(
+            run_id=run.id,
+            event_type="error",
+            payload_json=json.dumps({"reason": reason[:500]}),
+        )
+    )
+    session.add(RunEvent(run_id=run.id, event_type="failed", payload_json=None))
+
+    from_status = task.status
+    task.status = "failed"
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="verification",
+            message=None,
+            payload_json=json.dumps(
+                {"error_code": "triage_failed", "outcome": "triage_failed"}
+            ),
+        )
+    )
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "failed"}),
+        )
+    )
+    session.commit()
 
 
 def _build_prompt(task: Task) -> str:
