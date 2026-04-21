@@ -1,0 +1,16 @@
+# Niwa v1 — config edited manually (SPEC §2 / §6).
+# Regenerated only if this file is missing when bootstrap.sh runs.
+
+[claude]
+# Auto-detected at bootstrap time via `which claude`; override freely.
+cli = "{{CLAUDE_CLI_PATH}}"
+# Global timeout for adapter + triage (seconds).
+timeout = 1800
+
+[db]
+# Absolute path — bootstrap resolves $HOME at write time.
+path = "{{HOME}}/.niwa/data/niwa-v1.sqlite3"
+
+[executor]
+# Polling interval for claim_next_task.
+poll_interval_seconds = 5
