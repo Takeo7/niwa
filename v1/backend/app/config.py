@@ -4,7 +4,9 @@ Reads ``~/.niwa/config.toml`` if present. The file is optional in dev; when
 absent we fall back to sensible defaults so the backend can boot.
 
 Section naming matches the contract emitted by
-``v1/templates/config.toml.tmpl`` (``[claude]``, ``[db]``, ``[executor]``).
+``v1/templates/config.toml.tmpl`` (``[claude]``, ``[db]``, ``[executor]``)
+and the env var name matches what the service templates export
+(``com.niwa.executor.plist.tmpl`` / ``niwa-executor.service.tmpl``).
 """
 
 from __future__ import annotations
@@ -41,10 +43,27 @@ def _load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
+def _resolve_config_path(config_path: Path | None) -> Path:
+    """Pick the config file, preferring ``NIWA_CONFIG_PATH`` over ``NIWA_CONFIG``.
+
+    ``NIWA_CONFIG_PATH`` is what the service templates
+    (``com.niwa.executor.plist.tmpl`` / ``niwa-executor.service.tmpl``) export
+    and the canonical name going forward. ``NIWA_CONFIG`` stays accepted as a
+    deprecated alias so callers that still set it (e.g. legacy test fixtures)
+    keep working. When both are defined they are expected to point at the same
+    path in practice; if they diverge ``NIWA_CONFIG_PATH`` wins.
+    """
+
+    if config_path is not None:
+        return config_path
+    env = os.environ.get("NIWA_CONFIG_PATH") or os.environ.get("NIWA_CONFIG")
+    return Path(env) if env else DEFAULT_CONFIG_PATH
+
+
 def load_settings(config_path: Path | None = None) -> Settings:
     """Load settings, preferring the given path then the default location."""
 
-    candidate = config_path or Path(os.environ.get("NIWA_CONFIG", DEFAULT_CONFIG_PATH))
+    candidate = _resolve_config_path(config_path)
     data = _load_toml(candidate)
 
     claude = data.get("claude", {}) if isinstance(data, dict) else {}
