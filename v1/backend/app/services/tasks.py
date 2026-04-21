@@ -31,6 +31,10 @@ class TaskNotDeletable(Exception):
     """Raised when a task cannot be deleted because it is still active."""
 
 
+class TaskNotWaitingInput(Exception):
+    """Raised when ``respond`` targets a task whose status is not ``waiting_input``."""
+
+
 def list_tasks_for_project(session: Session, slug: str) -> list[Task]:
     """Return every task for ``slug`` ordered by creation time.
 
@@ -119,13 +123,55 @@ def delete_task(session: Session, task_id: int) -> None:
     session.commit()
 
 
+def respond_to_task(session: Session, task_id: int, response: str) -> Task:
+    """Deliver a user response to a task parked in ``waiting_input`` (PR-V1-19).
+
+    Writes two ``task_events`` rows in the same commit — a ``message``
+    event carrying the user text for audit, followed by a
+    ``status_changed`` transition back to ``queued`` — clears
+    ``pending_question`` and hands the task back to the executor queue.
+    """
+
+    task = get_task(session, task_id)
+    if task.status != "waiting_input":
+        raise TaskNotWaitingInput(task.status)
+
+    from_status = task.status
+    task.status = "queued"
+    task.pending_question = None
+
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps(
+                {"event": "user_response", "text": response}
+            ),
+        )
+    )
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "queued"}),
+        )
+    )
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 __all__ = [
     "ACTIVE_STATUSES",
     "ProjectNotFound",
     "TaskNotDeletable",
     "TaskNotFound",
+    "TaskNotWaitingInput",
     "create_task",
     "delete_task",
     "get_task",
     "list_tasks_for_project",
+    "respond_to_task",
 ]

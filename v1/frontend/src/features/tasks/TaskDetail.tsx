@@ -1,11 +1,13 @@
+import { useState } from "react";
 import {
-  Alert, Anchor, Badge, Code, Divider, Group, Loader, Stack, Text, Title,
+  Alert, Anchor, Badge, Button, Code, Divider, Group, Loader, Stack, Text,
+  Textarea, Title,
 } from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
 
 import { ApiError, type TaskStatus } from "../../api";
 import { TaskEventStream } from "./TaskEventStream";
-import { useLatestRun, useTask } from "./api";
+import { useLatestRun, useRespondTask, useTask } from "./api";
 
 interface Props { taskId: number }
 
@@ -22,6 +24,8 @@ function formatDate(iso: string): string {
 export function TaskDetail({ taskId }: Props) {
   const taskQuery = useTask(taskId);
   const runQuery = useLatestRun(taskId);
+  const respondMutation = useRespondTask(taskId);
+  const [response, setResponse] = useState("");
 
   if (taskQuery.isLoading) {
     return <Group justify="center" py="xl"><Loader /></Group>;
@@ -41,6 +45,7 @@ export function TaskDetail({ taskId }: Props) {
 
   const task = taskQuery.data!;
   const cancelled = task.status === "cancelled";
+  const waitingInput = task.status === "waiting_input" && task.pending_question;
 
   return (
     <Stack gap="md">
@@ -71,6 +76,33 @@ export function TaskDetail({ taskId }: Props) {
 
       {task.description ? (
         <Text style={{ whiteSpace: "pre-wrap" }}>{task.description}</Text>
+      ) : null}
+
+      {waitingInput ? (
+        <Alert color="yellow" title="Niwa necesita tu respuesta">
+          <Text mb="sm" style={{ whiteSpace: "pre-wrap" }}>
+            {task.pending_question}
+          </Text>
+          <Textarea
+            value={response}
+            onChange={(e) => setResponse(e.currentTarget.value)}
+            minRows={3}
+            placeholder="Escribe tu respuesta…"
+          />
+          <Button
+            mt="sm"
+            onClick={() => {
+              respondMutation.mutate(
+                { response },
+                { onSuccess: () => setResponse("") },
+              );
+            }}
+            disabled={!response.trim() || respondMutation.isPending}
+            loading={respondMutation.isPending}
+          >
+            Responder
+          </Button>
+        </Alert>
       ) : null}
 
       <Divider my="xs" />

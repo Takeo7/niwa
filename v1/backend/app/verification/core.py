@@ -91,8 +91,16 @@ def verify_run(
     evidence["significant_event_count"] = sum(
         1 for e in stream_events if e.get("type") not in _LIFECYCLE
     )
-    e2 = check_stream_termination(stream_events)
+    e2, pending_question = check_stream_termination(stream_events)
     evidence["stream_terminated_cleanly"] = e2 is None
+    if e2 == "needs_input":
+        # PR-V1-19: clarification round-trip — the assistant asked a
+        # question, so the task is not failed, just parked. The executor
+        # reads ``pending_question`` off the result to write the column.
+        evidence["outcome"] = "needs_input"
+        return VerificationResult(
+            False, "needs_input", None, evidence, pending_question=pending_question
+        )
     if e2 is not None:
         evidence["error_code"] = e2
         return VerificationResult(False, "verification_failed", e2, evidence)

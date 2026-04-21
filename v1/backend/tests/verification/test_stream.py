@@ -25,12 +25,15 @@ def test_stream_terminated_with_result_success_passes() -> None:
         _assistant("doing work"),
         {"type": "result", "subtype": "success"},
     ]
-    assert check_stream_termination(events) is None
+    assert check_stream_termination(events) == (None, None)
 
 
-def test_assistant_ending_in_question_fails_question_unanswered() -> None:
-    events = [_assistant("should I also add tests?")]
-    assert check_stream_termination(events) == "question_unanswered"
+def test_assistant_ending_in_question_signals_needs_input() -> None:
+    """PR-V1-19: questions are not failures; propagate the text as pending_question."""
+
+    question = "should I also add tests?"
+    events = [_assistant(question)]
+    assert check_stream_termination(events) == ("needs_input", question)
 
 
 def test_tool_use_last_fails_incomplete() -> None:
@@ -38,7 +41,7 @@ def test_tool_use_last_fails_incomplete() -> None:
         _assistant("let me edit"),
         {"type": "tool_use", "name": "Edit", "id": "tu_1"},
     ]
-    assert check_stream_termination(events) == "tool_use_incomplete"
+    assert check_stream_termination(events) == ("tool_use_incomplete", None)
 
 
 def test_empty_stream_fails_empty_stream() -> None:
@@ -46,4 +49,4 @@ def test_empty_stream_fails_empty_stream() -> None:
         {"type": "started"},
         {"type": "completed"},
     ]
-    assert check_stream_termination(events) == "empty_stream"
+    assert check_stream_termination(events) == ("empty_stream", None)

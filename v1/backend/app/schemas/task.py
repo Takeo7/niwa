@@ -46,6 +46,20 @@ class TaskCreate(BaseModel):
     description: str | None = Field(default=None, max_length=10_000)
 
 
+class TaskRespondPayload(BaseModel):
+    """Body for ``POST /api/tasks/{id}/respond`` (PR-V1-19).
+
+    The response is free-form text that the user types to unblock a
+    task parked in ``waiting_input``. Length bounds are cosmetic: 1
+    guards against empty strings leaking past the form button and
+    10_000 matches the task description ceiling.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    response: str = Field(min_length=1, max_length=10_000)
+
+
 class TaskRead(BaseModel):
     """Response shape — mirrors the ORM columns for the tasks table."""
 

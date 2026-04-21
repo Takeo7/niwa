@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .project import ProjectCreate, ProjectPatch, ProjectRead
 from .run import RunRead
-from .task import TaskCreate, TaskRead
+from .task import TaskCreate, TaskRead, TaskRespondPayload
 
 __all__ = [
     "ProjectCreate",
@@ -17,4 +17,5 @@ __all__ = [
     "RunRead",
     "TaskCreate",
     "TaskRead",
+    "TaskRespondPayload",
 ]

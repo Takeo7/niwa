@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from ..schemas import RunRead, TaskCreate, TaskRead
+from ..schemas import RunRead, TaskCreate, TaskRead, TaskRespondPayload
 from ..services import runs as runs_service
 from ..services import tasks as service
 from .deps import get_session
@@ -120,3 +120,33 @@ def delete_task(
             detail="task is active; cancel first",
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@tasks_router.post("/{task_id}/respond", response_model=TaskRead)
+def respond_to_task(
+    task_id: int,
+    payload: TaskRespondPayload,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Deliver a user response to a task parked in ``waiting_input``.
+
+    PR-V1-19 closes the clarification round-trip: the endpoint moves the
+    task back to ``queued`` and logs the user text as a ``message``
+    event. Known limitation: the next adapter run does **not** receive
+    this response — composite prompt is deferred to a follow-up, the
+    event is stored for audit only.
+    """
+
+    try:
+        task = service.respond_to_task(session, task_id, payload.response)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    except service.TaskNotWaitingInput:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task is not waiting for input",
+        )
+    return TaskRead.model_validate(task)
