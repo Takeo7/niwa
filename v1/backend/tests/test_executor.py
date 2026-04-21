@@ -521,3 +521,56 @@ def test_process_pending_splits_when_triage_says_split(
     assert payload.get("event") == "triage_split"
     assert payload.get("subtask_ids") == [t.id for t in subtasks]
     assert payload.get("rationale") == "two areas"
+
+
+# ---------------------------------------------------------------------------
+# Safe mode finalize integration (PR-V1-13)
+# ---------------------------------------------------------------------------
+
+
+def test_process_pending_finalizes_verified_run_with_gh_stub(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verified run → ``finalize_task`` populates ``task.pr_url``.
+
+    We monkeypatch ``finalize_task`` in the executor namespace with a spy
+    that returns a canned ``FinalizeResult`` and writes ``task.pr_url``
+    itself — the executor only has to invoke it on the ``verified`` branch
+    and let ``_finalize`` flip the task to ``done``.
+    """
+
+    import app.executor.core as executor_core
+    from app.finalize import FinalizeResult
+
+    calls: list[int] = []
+
+    def fake_finalize(session, run, task, project) -> FinalizeResult:
+        calls.append(task.id)
+        task.pr_url = "https://github.com/owner/repo/pull/99"
+        session.commit()
+        return FinalizeResult(
+            committed=True,
+            pushed=True,
+            pr_url="https://github.com/owner/repo/pull/99",
+            commands_skipped=[],
+        )
+
+    monkeypatch.setattr(executor_core, "finalize_task", fake_finalize)
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    project = _make_project(session, local_path=git_project)
+    task = _make_task(session, project, title="finalize me")
+
+    assert process_pending(session) == 1
+    assert calls == [task.id]
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    assert refreshed.pr_url == "https://github.com/owner/repo/pull/99"
+
+    run = session.query(Run).filter(Run.task_id == task.id).one()
+    assert run.outcome == "verified"
+    assert run.status == "completed"
