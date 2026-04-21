@@ -11,6 +11,10 @@ Environment variables:
   literal stdout line. Missing / empty → no output, just exit.
 * ``FAKE_CLAUDE_EXIT`` — integer exit code (default ``0``).
 * ``FAKE_CLAUDE_DELAY_MS`` — per-line delay in milliseconds (default ``0``).
+* ``FAKE_CLAUDE_TOUCH`` — ``:``-separated paths to create before exit.
+  Simulates the adapter touching the tree so future verifier evidence
+  (E3 in 11b) has something to inspect. ``{pid}`` is replaced with this
+  process's pid so multi-run tests land on distinct files.
 
 The fake is a plain Python script with a ``#!/usr/bin/env python3`` shebang.
 Tests mark it executable at import time and pass its absolute path to the
@@ -45,6 +49,15 @@ def main() -> int:
                 sys.stdout.flush()
                 if delay_ms:
                     time.sleep(delay_ms / 1000.0)
+
+    touch = os.environ.get("FAKE_CLAUDE_TOUCH")
+    if touch:
+        for raw in touch.split(":"):
+            path = raw.replace("{pid}", str(os.getpid())).strip()
+            if not path:
+                continue
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("artifact\n")
 
     return exit_code
 
