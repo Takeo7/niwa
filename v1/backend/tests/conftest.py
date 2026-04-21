@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_session
 from app.db import Base
 from app.main import app as fastapi_app
+from app.triage import TriageDecision
 
 
 @pytest.fixture()
@@ -99,3 +100,22 @@ def git_project(tmp_path: Path) -> Path:
     _run(["add", "README.md"])
     _run(["commit", "-m", "init"])
     return d
+
+
+@pytest.fixture()
+def stub_triage_execute(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Short-circuit triage to ``execute`` so legacy tests stay on the adapter path.
+
+    PR-V1-12b wires ``triage_task`` in front of the adapter; tests that pre-date
+    that wiring and exercise failure modes further down the pipeline (e.g.
+    ``git_setup_failed``, ``cli_not_found``) would now fail inside triage
+    because their CLI path is intentionally broken. The stub keeps those tests
+    focused on the failure they actually target.
+    """
+
+    monkeypatch.setattr(
+        "app.executor.core.triage_task",
+        lambda project, task: TriageDecision(
+            kind="execute", subtasks=[], rationale="stub", raw_output=""
+        ),
+    )
