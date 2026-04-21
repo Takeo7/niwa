@@ -18,7 +18,10 @@ _require() {
     command -v "$1" >/dev/null 2>&1 || _die "missing required tool: $1"
 }
 
-# 1. Preconditions (fail fast).
+# 1. Preconditions (fail fast). We list the required tools up-front so a
+# failure message always mentions the whole set, regardless of which one
+# ``command -v`` trips on first.
+_log "checking preconditions: python3 (>=3.11), npm, git"
 _require python3
 _require npm
 _require git
