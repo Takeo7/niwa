@@ -1580,11 +1580,88 @@ bajo `dist/assets/`, 404 por slug desconocido, 404 por
 Fixture shared `client` + `tmp_path` para montar el árbol
 `dist/` por test.
 
+## Readiness (PR-V1-18)
+
+Salud del stack local expuesta en un endpoint read-only y una página
+UI. Se invoca manualmente — sin polling — para que el usuario sepa
+si falta `gh`, si `claude` no está en PATH, o si la DB no responde
+antes de lanzar un task.
+
+### Endpoint
+
+`GET /api/readiness` → `app/api/readiness.py`. Síncrono (FastAPI
+lo corre en el threadpool), compone 4 helpers puros de
+`app/services/readiness_checks.py`:
+
+- `check_db(db_path)` — `SELECT 1` contra un engine propio (no
+  comparte pool con la app) sobre `Settings.db_path`.
+- `check_claude_cli(cli)` — `shutil.which(cli or "claude")`. Solo
+  presencia. **No** corre `claude whoami` ni subcomandos (brief
+  explícito: hit de red, lento).
+- `check_git()` — `subprocess.run(["git", "--version"])` con
+  `timeout=5`. Captura `stdout` en `details.version`.
+- `check_gh()` — `shutil.which("gh")`. No `gh auth status`
+  (también red); si falta, devuelve `details.hint` con el install
+  hint para que el frontend no tenga que hardcodear copy.
+
+Cada helper devuelve `(ok: bool, details: dict)` y es best-effort:
+si el probe crashea, `ok=False` y `details["error"]` carga el
+mensaje. Response Pydantic `ReadinessResponse(db_ok, claude_cli_ok,
+git_ok, gh_ok, details)` con `details` anidado.
+
+### Qué no cubre (explícito)
+
+- **No systemd/launchd check.** Lo cubre `niwa-executor status`
+  desde PR-V1-15; duplicarlo en readiness complica el check sin
+  valor nuevo.
+- **No disk free.** Cosmético, follow-up.
+- **No auth check** del backend — binding local (SPEC §2).
+- **No auth de `gh`/`claude`.** `status` de `gh` requiere red y
+  puede tardar; `claude whoami` lo mismo. Readiness queda en
+  "hay binario y DB responde".
+- **No check del proyecto deployado** `/api/deploy/<slug>/`.
+- **No endpoint "reparar".** Read-only estricto.
+
+### Frontend `/system`
+
+`src/routes/SystemRoute.tsx` + hook `useReadiness()`. `useQuery`
+**sin** `refetchInterval` — el brief fencea el polling automático
+para que la página sea explícita: flicker cero, `git --version` no
+se llama en background. Botón "Refresh" invalida la key
+`["readiness"]` y dispara refetch.
+
+Tabla Mantine con 4 filas (Database / Claude CLI / git / gh),
+badge verde `OK` o rojo `Missing`, y una columna "Details" con
+texto derivado del payload: path cuando OK, `hint`/`error`/mensaje
+por defecto cuando falla. Ruta `/system` registrada en `App.tsx`.
+
+### Known limitations
+
+- `claude_cli_ok=True` solo prueba presencia del binario, no que
+  esté autenticado. Un follow-up podría añadir un modo `deep`.
+- `gh` hint es hardcode inglés; i18n queda fuera.
+- El botón Refresh se bloquea con `loading={isFetching}` pero no
+  impide clicks repetidos si React Query entra en background
+  refetch — aceptable para MVP.
+
+### Tests
+
+`tests/test_readiness_api.py` (5 casos): all-ok, `claude` missing,
+`gh` missing + hint, `git` excepción capturada, `db` unreachable.
+Todos mockean `shutil.which` y `subprocess.run` via `monkeypatch`;
+ningún subprocess real se spawnea. El caso db patchea
+`svc.check_db` para ejercitar la ruta de composición sin montar
+un engine corrupto.
+
+`tests/SystemRoute.test.tsx` (2 casos): all-OK rinde 4 badges
+verde; `gh_ok=false` con hint rinde "Missing" + el texto del hint.
+Mock `fetch` via `vi.stubGlobal` siguiendo el patrón de
+`ProjectList.test.tsx`.
+
 ## Próximos PRs (SPEC §9)
 
-- Semana 5 (restante): página `/system` de readiness,
-  clarification round-trip en UI, instalación en la máquina
-  de la pareja.
+- Semana 5 (restante): clarification round-trip en UI, instalación
+  en la máquina de la pareja.
 - Semana 6: bugfix + jubilar v0.2.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.
