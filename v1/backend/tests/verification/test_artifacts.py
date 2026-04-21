@@ -99,3 +99,44 @@ def test_non_git_cwd_skips_e3_gracefully(tmp_path: Path) -> None:
     evidence: dict = {}
     assert check_artifacts_in_cwd(plain, evidence) is True
     assert evidence.get("git_available") is False
+
+
+def test_embedded_tool_use_outside_cwd_fails(
+    session: Session, git_project: Path
+) -> None:
+    """E4 must inspect ``tool_use`` blocks embedded in ``assistant``
+    messages — the canonical shape the real Claude CLI emits per v0.2
+    ``FIX-20260420``. Before the fix-up, E4 only scanned top-level
+    ``event_type="tool_use"`` rows, so real streams passed vacuously.
+    """
+
+    run = _seed_run(session, git_project)
+    session.add(
+        RunEvent(
+            run_id=run.id,
+            event_type="assistant",
+            payload_json=json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "OK"},
+                            {
+                                "type": "tool_use",
+                                "name": "Write",
+                                "input": {"file_path": "/tmp/leak.txt"},
+                            },
+                        ]
+                    },
+                }
+            ),
+        )
+    )
+    session.commit()
+
+    evidence: dict = {}
+    assert check_no_artifacts_outside_cwd(session, run, git_project, evidence) is False
+    assert evidence["artifacts_outside_cwd"] is True
+    assert evidence["offending_paths"] == ["/tmp/leak.txt"]
+    assert evidence["tool_use_writes_scanned"] == 1
+    assert evidence["tool_use_writes_absolute"] == 1
