@@ -1006,6 +1006,78 @@ scripteados. Cubre execute-en-fence, split-en-fence, JSON pelado sin
 fence (rama fallback), y error informativo cuando el CLI responde sin
 JSON.
 
+## Triage executor integration (PR-V1-12b)
+
+`executor/core.py → process_pending` ahora llama a `triage_task` para
+cada task reclamada, antes de tocar el adapter o el git workspace.
+El pipeline por iteración es:
+
+```
+claim_next_task → triage_task → {split | execute | triage_failed}
+```
+
+**Rama `execute`** — `decision.kind == "execute"`: la task sigue el
+flujo existente (`run_adapter`, que contiene `prepare_task_branch` +
+spawn del CLI + `verify_run`). Ningún cambio de estado extra.
+
+**Rama `split`** — `decision.kind == "split"`: `_apply_split(session,
+task, decision)` crea una `Task` por cada `decision.subtasks[i]`
+(`parent_task_id=parent.id`, `status="queued"`, `project_id=
+parent.project_id`, `description=""`), hace `session.flush()` para
+materializar `id`s, marca el parent `done` con `completed_at=now`, y
+escribe dos `task_events`:
+
+- `kind="message"` con `payload = {"event":"triage_split",
+  "subtask_ids":[...],"rationale":...}`. **Esto es la resolución Opción B**:
+  SPEC §3 no incluye `triage_split` en el enum `task_events.kind`, así
+  que el marker vive dentro del payload del `message` en lugar de
+  requerir migración de schema.
+- `kind="status_changed"` con `{"from":"running","to":"done"}`.
+
+No se crea `Run` para el parent — split corta el pipeline antes de
+`run_adapter`. Las subtasks quedan `queued` y se drenan en la(s)
+siguiente(s) iteración(es) del loop de `process_pending`.
+
+**Rama `triage_failed`** — `triage_task` lanza `TriageError`:
+`_finalize_triage_failure` sintetiza un `Run(status="failed",
+model="claude-code", outcome="triage_failed", exit_code=None,
+started_at=finished_at=now, artifact_root=project.local_path)` y
+escribe dos `run_events` (`error` con `{"reason": str(exc)[:500]}`
+y `failed` para el lifecycle terminal). La task pasa a `failed` sin
+`completed_at`, y se escriben dos `task_events`:
+`kind="verification"` (`{"error_code":"triage_failed",
+"outcome":"triage_failed"}`) y `kind="status_changed"` (`running`
+→ `failed`).
+
+**Riesgo de recursión** — las subtasks entran al queue y pasan por
+triage otra vez. Si el LLM vuelve a splitear, se genera un árbol.
+Asumido como riesgo conocido del MVP (SPEC §4 no añade contador de
+profundidad). En tests, el fake CLI emite el JSON de split solo una
+vez por proceso (ver siguiente sección) para poder cerrar el drain.
+
+**Fake CLI keyword-dispatch** — `tests/fixtures/fake_claude_cli.py`
+lee el prompt del stdin. Si contiene el literal `"triage agent for
+Niwa"`:
+
+- Con `FAKE_CLAUDE_TRIAGE_JSON` seteado y `FAKE_CLAUDE_TRIAGE_MARKER`
+  apuntando a un path, la primera llamada emite el JSON scripteado
+  envuelto en una fence `` ```json `` y crea el marker. Las siguientes
+  emiten el payload neutro (`execute` con subtasks vacío). Esto
+  acota la recursión split en el test integration.
+- Sin marker, emite `FAKE_CLAUDE_TRIAGE_JSON` (o el default execute)
+  en cada llamada.
+
+Cuando el prompt NO contiene el keyword, el fake cae a la ruta
+existente (`FAKE_CLAUDE_SCRIPT` + `FAKE_CLAUDE_EXIT` + touches), así
+que los tests legacy siguen funcionando sin cambios — salvo los que
+rompen el CLI antes de llegar al adapter principal (ej.
+`test_runs_fail_on_git_setup_error`, `test_adapter_binary_missing_
+fails_fast`): estos reciben la fixture compartida
+`stub_triage_execute` de `conftest.py` que patchea
+`app.executor.core.triage_task` para devolver un `TriageDecision`
+neutro, evitando que el fallo fictício ocurra ya en la fase de
+triage.
+
 ## Próximos PRs (SPEC §9)
 
 - PR-V1-08: ejecución aislada en rama git por task. Crear/chequear
