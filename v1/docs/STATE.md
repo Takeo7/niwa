@@ -5,16 +5,97 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-10
-date: 2026-04-20
-week: 3
-next_pr: PR-V1-11
-week_status: week-2-complete-awaiting-approval-for-week-3
+pr_merged: PR-V1-13
+date: 2026-04-21
+week: 4
+next_pr: PR-V1-14
+week_status: week-3-complete-awaiting-approval-for-week-4
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-21** — PR-V1-13 (Safe mode: commit + push + open PR)
+  mergeado en `v1` vía squash (#120). Backend `pytest -q` → **89
+  passed** (+6 nuevos: 5 finalize unit + 1 integration). **400
+  LOC netas exactos en el cap**. Cierra Semana 3 del SPEC §9:
+  tras `verify_run` pasar, `finalize_task(session, run, task,
+  project)` intenta commit → push → `gh pr create` como
+  best-effort (nunca lanza al caller). Commit con flags `-c
+  user.email`/`-c user.name` inline (sin config global), push si
+  `project.git_remote`, PR si `shutil.which("gh")`. URL
+  persistida en `task.pr_url`. `autonomy_mode=dangerous`
+  (auto-merge) queda para Semana 4. Codex: LGTM sin hallazgos.
+  Cero cambios a adapter/triage/verification/frontend/schema,
+  cero deps nuevas.
+- **2026-04-21** — PR-V1-12b (Triage executor integration)
+  mergeado en `v1` vía squash (#119). Backend 83 passed (+2
+  integration). **299 LOC netas** bajo cap. Wiring del triage en
+  `process_pending`: `claim → triage → dispatch`; `_apply_split`
+  crea N subtasks con `parent_task_id` y escribe
+  `TaskEvent(kind="message", payload.event="triage_split")`
+  (resolución Opción B: SPEC §3 fija el enum a 5 valores;
+  `triage_split` va como marker en payload); `_finalize_triage_failure`
+  emite Run sintético + TaskEvent verification. Fake CLI con
+  keyword-dispatch `"triage agent for Niwa"` + marker consume-once
+  para acotar recursión en tests. Codex: LGTM.
+- **2026-04-21** — PR-V1-12a (Triage module puro + unit tests)
+  mergeado en `v1` vía squash (#118). Backend 81 passed (+4
+  nuevos, incluido caso extra de JSON sin fence). **392 LOC netas**
+  bajo cap. `triage.py` con `TriageDecision` frozen dataclass,
+  `TriageError`, `triage_task(project, task)`; parser fence +
+  fallback balanced-match + validación estricta de shape.
+  Módulo dead code hasta 12b (confirmed: no importado desde
+  executor). Tests mockean adapter vía monkeypatch. Codex: LGTM.
+- **2026-04-21** — PR-V1-12 original (Triage planner combinado)
+  marcado **superseded** por 12a+12b al cerrar en 494 LOC netas
+  (94 sobre cap estricto Semana 3). Split A acordado: módulo
+  puro + integración. PR #117 cerrado sin merge.
+- **2026-04-21** — PR-V1-11c (Verification E5 project tests
+  runner) mergeado en `v1` vía squash (#116). Backend 77 passed
+  (+2 nuevos unit + 2 regression fix-up). **380 LOC netas** tras
+  fix-up. Cierra §5 del SPEC: `detect_test_runner` con orden
+  Makefile → npm → pytest (stdlib `tomllib` 3.11+);
+  `run_project_tests` con timeout 300 s, output_tail 4 KB.
+  Codex primera pasada: 1 blocker (FileNotFoundError del runner
+  escapa → task wedge) + 2 minors (regex Makefile falso positivo
+  `test :=`, `python` literal falla en Debian moderno). Los 3
+  cerrados con fix-ups + regression tests. Nuevo error_code
+  `tests_runner_missing`. Cero deps, cero cambios fuera de
+  verification.
+- **2026-04-21** — PR-V1-11b (Verification E3+E4 artifact scanning)
+  mergeado en `v1` vía squash (#115). Backend 72 passed (+4 unit +
+  1 integration + 2 regression fix-up). **499 LOC netas** tras
+  fix-up (384 inicial + 115 por blocker codex real + minor
+  cwd_missing). E3 `git status --porcelain` + skip graceful si no
+  repo git; E4 `_iter_tool_use_payloads` escanea top-level Y
+  embebido en `assistant.message.content[]` (blocker v0.2
+  FIX-20260420). Codex cerró 1 major (tratado como blocker: E4
+  ciego a tool_use embebido, falso negativo sistemático) + 2
+  minors (FileNotFoundError ambigüo cwd vs git, test legacy
+  duplicado). Multi-task git_project por task (finding #3).
+- **2026-04-21** — PR-V1-11a (Verification E1+E2 + skeleton +
+  executor integration) mergeado en `v1` vía squash (#114).
+  Backend 65 passed (+4 stream unit + 2 integration). **387 LOC
+  netas** bajo cap. Skeleton `verification/` con
+  `VerificationResult` dataclass + stubs E3/E4/E5 con evidence
+  shape estable. E1 mapping `cli_ok→verified`,
+  `cli_nonzero_exit→exit_nonzero`, `{cli_not_found,timeout,adapter_exception}→adapter_failure`;
+  E2 filtra lifecycle sintéticos, extrae texto multi-bloque
+  `content[].text`, 4 rutas: ok / `question_unanswered` /
+  `tool_use_incomplete` / `empty_stream`. Bypass del verifier
+  cuando adapter falla (preserva outcomes). `_finalize` firma
+  extendida con `error_code` opcional. Fake CLI
+  `FAKE_CLAUDE_TOUCH` para mid-run artifacts. Outcome rename
+  `cli_ok → verified` en asserts de `run.outcome` final. Codex:
+  LGTM.
+- **2026-04-21** — PR-V1-11 original (Verification contract
+  combinado) marcado **superseded** por 11a+11b+11c al cerrar en
+  917 LOC netas (2.3× cap 400 estricto Semana 3). Split A
+  acordado: E1+E2+skeleton / E3+E4 / E5. PR-V1-11 brief
+  internamente inconsistente (test_runs_api brief mismatch,
+  adapter target ≤200 irreal). Disciplina estricta aplicada sin
+  "opción A".
 - **2026-04-20** — PR-V1-10 (UI task detail con stream en vivo)
   mergeado en `v1` vía squash (#113). Frontend `npm test -- --run`
   → **6 passed** (+2 `TaskEventStream.test.tsx`). Backend 59 sin
@@ -67,63 +148,30 @@ blockers: []
   args stream-json, zombies en excepción); ambos resueltos con
   fix commits + regression tests en la misma rama antes del
   merge. 2 minors: docstring sobre stdin bloqueante y dead code
-  en `process_pending` limpiados. **Fuera de scope (siguió en
-  08/09/10):** rama git `niwa/<slug>`, SSE endpoint, UI de stream.
+  en `process_pending` limpiados.
 - **2026-04-20** — PR-V1-06b (UI tasks list + create + delete +
   polling) mergeado en `v1` vía squash (#109). Frontend `npm test
   -- --run` → 4 passed (+2 nuevos sobre 06a). 571 LOC sin lockfile,
   bajo hard-cap 600. Completa la segunda mitad del PR-V1-06
   original: `TaskList` embebido en `ProjectDetail`,
   `TaskCreateModal`, delete con `409` toast, `refetchInterval`
-  gated por `hasInFlightTask`. Codex: LGTM sin hallazgos. Cero
-  backend tocado, cero deps nuevas.
+  gated por `hasInFlightTask`. Codex: LGTM sin hallazgos.
 - **2026-04-20** — PR-V1-06a (UI shell + routing + projects CRUD)
   mergeado en `v1` vía squash (#108). Frontend `npm test -- --run`
   → 2 passed (+2 nuevos desde 0). 524 LOC sin lockfile, bajo
-  hard-cap 600. Primera mitad del PR-V1-06 original tras split:
-  Mantine shell, React Router, React Query, Notifications, 3 deps
-  pre-aprobadas (`@mantine/form`, `@mantine/notifications`,
-  `@tabler/icons-react`), Vite proxy `/api → :8000`, rutas `/` y
-  `/projects/:slug`. Codex: LGTM sin hallazgos.
+  hard-cap 600. Primera mitad del PR-V1-06 original tras split.
+  Codex: LGTM sin hallazgos.
 - **2026-04-20** — PR-V1-06 original (UI mínima combinada) marcado
-  **superseded** por 06a+06b al exceder el hard-cap 600 LOC (scope
-  combinado ≈1000 LOC). Split acordado con el humano.
+  **superseded** por 06a+06b al exceder el hard-cap 600 LOC.
 - **2026-04-20** — PR-V1-05 (Executor echo daemon) mergeado en `v1`
-  vía squash (#107). Backend `pytest -q` → 44 passed (+10 nuevos: 7
-  executor + 3 runs API). Cierra Semana 1 del SPEC: pipeline E2E
-  observable `POST /tasks → queued → executor echo → done + Run
-  completed`. `claim_next_task` atómico vía `BEGIN IMMEDIATE` +
-  `UPDATE ... WHERE status='queued'`, race test con threads ≤1
-  winner. `GET /api/tasks/{id}/runs` expuesto. Codex: 2 minors
-  (assert tautológico sobre tzinfo, `winners <= 1` permisivo).
-  No-blocker, aceptados.
-- **2026-04-20** — PR-V1-04 (Tasks CRUD API) mergeado en `v1` vía
-  squash (#106). Backend `pytest -q` → 34 passed (+12 nuevos). 4
-  endpoints REST (`GET/POST /api/projects/{slug}/tasks`,
-  `GET/DELETE /api/tasks/{id}`); `POST` crea con `status=queued` y
-  escribe 2 `task_events` (`created`, `status_changed null→queued`)
-  en la misma transacción; `DELETE` bloquea estados activos con
-  `409` y cascadea `task_events`. Codex: sin blockers/majors; nota
-  menor sobre nullability de `description` (DB es NOT NULL, schema
-  acepta None → se normaliza a `""`). Aceptado.
-- **2026-04-20** — PR-V1-03 (Projects CRUD API) mergeado en `v1` vía
-  squash (#105). Backend `pytest -q` → 22 passed (+11 nuevos). 5
-  endpoints REST bajo `/api/projects`, schemas Pydantic v2 con
-  validación de `slug`/`deploy_port`, service layer thin, `409` en
-  slug duplicado, fixture con engine in-memory aislado por test.
-  Codex: 1 `minor` (resolución de `updated_at` en `test_patch_project`,
-  1 s de granularidad hace el assert `>=` trivial); no-blocker,
-  follow-up si regresa.
+  vía squash (#107). Backend `pytest -q` → 44 passed. Cierra
+  Semana 1. `claim_next_task` atómico vía `BEGIN IMMEDIATE`.
+- **2026-04-20** — PR-V1-04 (Tasks CRUD API) mergeado (#106).
+  Backend 34 passed. 4 endpoints REST.
+- **2026-04-20** — PR-V1-03 (Projects CRUD API) mergeado (#105).
+  Backend 22 passed. 5 endpoints REST.
 - **2026-04-20** — PR-V1-02 (Data models + initial Alembic migration)
-  mergeado en `v1` vía squash (#104). Backend `pytest -q` → 11 passed
-  (1 health + 10 modelos). Codex-reviewer marcó 3 `major` + 1 `minor`
-  en primera pasada: test de migración con false-green, mutación de
-  la dev DB, e índices de FK faltantes. Fix-up sobre la misma rama
-  resolvió los 4 hallazgos antes del merge (env.py lee `-x db_url`,
-  tests usan `tmp_path`, 5 índices `ix_*` añadidos con reversibilidad
-  y test de presencia).
+  mergeado (#104). Backend 11 passed. Codex 3 majors + 1 minor
+  resueltos en fix-up antes del merge.
 - **2026-04-20** — PR-V1-01 (Skeleton FastAPI + React + SQLite)
-  mergeado en `v1` vía squash (#103). Backend `pytest -q` → 1 passed.
-  Frontend `vitest --run` → 0 tests collected. 585 LOC (sin lockfile)
-  sobre el soft-limit de 400 LOC; aceptado por ser scaffolding puro
-  declarativo explícitamente marcado S en el brief.
+  mergeado (#103). Backend 1 passed. 585 LOC scaffolding aceptado.
