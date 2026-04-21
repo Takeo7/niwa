@@ -21,7 +21,11 @@ Environment variables:
   ``assistant`` event wrapping this JSON in a ```json fence``` and
   exits 0, bypassing ``FAKE_CLAUDE_SCRIPT``/``FAKE_CLAUDE_EXIT``. If
   the env var is unset in triage mode, a neutral ``execute`` decision
-  with empty subtasks is emitted so legacy tests keep working.
+  with empty subtasks is emitted so legacy tests keep working. The
+  JSON is consumed **once** — subsequent triage invocations within
+  the same pytest process fall back to the neutral execute payload.
+  This bounds recursion when a ``split`` decision produces subtasks
+  that would otherwise be re-triaged with the same verdict forever.
 
 The fake is a plain Python script with a ``#!/usr/bin/env python3`` shebang.
 Tests mark it executable at import time and pass its absolute path to the
@@ -81,9 +85,21 @@ def main() -> int:
     # regular script path would do.
     prompt = _read_stdin_prompt()
     if _TRIAGE_KEYWORD in prompt:
-        _emit_triage_response(
-            os.environ.get("FAKE_CLAUDE_TRIAGE_JSON") or _DEFAULT_TRIAGE_JSON
-        )
+        payload = os.environ.get("FAKE_CLAUDE_TRIAGE_JSON")
+        marker = os.environ.get("FAKE_CLAUDE_TRIAGE_MARKER")
+        if payload and marker:
+            # Consume the scripted decision once: first call honours the
+            # payload and drops the marker; every subsequent call in the
+            # same test falls back to the neutral ``execute`` default.
+            # Bounds the split recursion a repeated ``split`` verdict
+            # would otherwise cause.
+            if os.path.exists(marker):
+                _emit_triage_response(_DEFAULT_TRIAGE_JSON)
+            else:
+                open(marker, "w").close()
+                _emit_triage_response(payload)
+        else:
+            _emit_triage_response(payload or _DEFAULT_TRIAGE_JSON)
         return 0
 
     if script_path and os.path.exists(script_path):
