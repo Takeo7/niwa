@@ -290,3 +290,24 @@ def test_respond_404_on_missing_task(client) -> None:
         json={"response": "hello"},
     )
     assert response.status_code == 404
+
+
+def test_respond_empty_response_rejected(client, app) -> None:
+    """Minimum validation: empty response → 422 (pydantic min_length=1)."""
+
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "blank answer"},
+    ).json()
+    _force_waiting_input(app, created["id"], "ok?")
+
+    response = client.post(
+        f"/api/tasks/{created['id']}/respond",
+        json={"response": ""},
+    )
+    assert response.status_code == 422
+    # Task state untouched on validation failure.
+    refreshed = client.get(f"/api/tasks/{created['id']}").json()
+    assert refreshed["status"] == "waiting_input"
+    assert refreshed["pending_question"] == "ok?"
