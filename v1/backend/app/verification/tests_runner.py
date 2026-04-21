@@ -161,6 +161,13 @@ def run_project_tests(
     ``subprocess.run`` handles the kill on timeout and re-raises
     ``TimeoutExpired`` with whatever partial output it captured; we
     record that same tail so the operator sees where it got stuck.
+
+    If the runner binary itself is missing on this host (e.g. ``npm``
+    not installed in a minimal container), ``subprocess.run`` raises
+    ``FileNotFoundError``/``PermissionError`` before the process ever
+    starts. We swallow those and surface a plain failed ``TestRunResult``
+    so ``verify_run`` can finish normally — otherwise the exception would
+    escape the orchestrator and wedge the run/task in ``running``.
     """
 
     start = time.monotonic()
@@ -180,6 +187,16 @@ def run_project_tests(
             timed_out=True,
             duration_s=duration,
             output_tail=_tail(exc.stdout, exc.stderr),
+        )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        duration = time.monotonic() - start
+        message = f"{type(exc).__name__}: {exc}"
+        return TestRunResult(
+            passed=False,
+            exit_code=None,
+            timed_out=False,
+            duration_s=duration,
+            output_tail=message[-_OUTPUT_TAIL_BYTES:],
         )
 
     duration = time.monotonic() - start

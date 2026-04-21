@@ -131,6 +131,15 @@ def verify_run(
         return VerificationResult(
             False, "verification_failed", "tests_timeout", evidence
         )
+    # ``exit_code is None`` with ``timed_out=False`` means the runner
+    # binary itself was missing/unlaunchable (FileNotFoundError et al.
+    # swallowed by ``run_project_tests``). Report it distinctly so the
+    # operator knows to install the toolchain, not to fix the tests.
+    if result.exit_code is None and not result.timed_out:
+        evidence["error_code"] = "tests_runner_missing"
+        return VerificationResult(
+            False, "verification_failed", "tests_runner_missing", evidence
+        )
     if not result.passed:
         evidence["error_code"] = "tests_failed"
         return VerificationResult(
