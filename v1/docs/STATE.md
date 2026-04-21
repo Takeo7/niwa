@@ -5,16 +5,33 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-16
+pr_merged: FIX-20260421
 date: 2026-04-21
 week: 5
 next_pr: PR-V1-17
-week_status: week-4-complete-awaiting-approval-for-week-5
+week_status: week-4-complete-plus-fix-awaiting-approval-for-week-5
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-21** — FIX-20260421 (Config alignment: templates ↔
+  config.py) mergeado en `v1` vía squash (#124). Backend **113
+  passed** (+6 nuevos en `test_config.py`). **192 LOC netas**
+  código+tests bajo cap S (200). Cierra un mismatch de boot
+  detectado post-Semana 4: `config.py` leía `[server]`/`[database]`
+  y `NIWA_CONFIG`, pero los templates de PR-V1-14 emiten
+  `[claude]`/`[db]`/`[executor]` y exportan `NIWA_CONFIG_PATH`.
+  Resultado pre-fix: bootstrap migraba DB a
+  `~/.niwa/data/niwa-v1.sqlite3` pero backend leía
+  `DEFAULT_DB_PATH` (DB vacía, migrada huérfana). Fix alinea
+  `config.py` a los templates como fuente de verdad: lee
+  `[claude]/[db]/[executor]`, acepta `NIWA_CONFIG_PATH` preferido
+  con `NIWA_CONFIG` como alias deprecado, `Settings` extendido
+  con `claude_cli`, `claude_timeout_s`,
+  `executor_poll_interval_s`. `[server]` se mantiene leyéndose
+  opcional para forward-compat. Cero cambios a templates,
+  adapter, executor, finalize, niwa_cli, frontend. Codex: LGTM.
 - **2026-04-21** — PR-V1-16 (Dangerous mode: auto-merge + UI
   banner) mergeado en `v1` vía squash (#123). Backend 107 passed
   (+3 finalize). Frontend **8 passed** (+2 ProjectDetail).
