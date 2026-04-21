@@ -213,3 +213,80 @@ def test_delete_task_cascades_events(client, app) -> None:
 
     assert client.delete(f"/api/tasks/{created['id']}").status_code == 204
     assert _fetch_task_events(app, created["id"]) == []
+
+
+def _force_waiting_input(app, task_id: int, question: str) -> None:
+    """Mark a seeded task as ``waiting_input`` with a pending question."""
+
+    override = app.dependency_overrides[get_session]
+    generator = override()
+    session = next(generator)
+    try:
+        session.execute(
+            text(
+                "UPDATE tasks SET status = :s, pending_question = :q "
+                "WHERE id = :tid"
+            ),
+            {"s": "waiting_input", "q": question, "tid": task_id},
+        )
+        session.commit()
+    finally:
+        generator.close()
+
+
+def test_respond_transitions_waiting_input_to_queued(client, app) -> None:
+    """Happy path: POST /respond clears pending_question and requeues."""
+
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "need answer"},
+    ).json()
+    _force_waiting_input(app, created["id"], "ok?")
+
+    response = client.post(
+        f"/api/tasks/{created['id']}/respond",
+        json={"response": "yes"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["pending_question"] is None
+
+    events = _fetch_task_events(app, created["id"])
+    kinds = [e["kind"] for e in events]
+    # created + status_changed (null→queued) are the first two from creation.
+    assert kinds[-2:] == ["message", "status_changed"]
+    message_payload = json.loads(events[-2]["payload_json"])
+    assert message_payload == {"event": "user_response", "text": "yes"}
+    last_transition = json.loads(events[-1]["payload_json"])
+    assert last_transition == {"from": "waiting_input", "to": "queued"}
+
+
+def test_respond_returns_409_if_not_waiting_input(client, app) -> None:
+    """A task not in ``waiting_input`` rejects the response with 409."""
+
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "already done"},
+    ).json()
+    _force_status(app, created["id"], "done")
+
+    response = client.post(
+        f"/api/tasks/{created['id']}/respond",
+        json={"response": "too late"},
+    )
+    assert response.status_code == 409
+    assert "waiting" in response.json()["detail"].lower()
+    # State untouched: still done, no new events appended.
+    events_after = _fetch_task_events(app, created["id"])
+    assert [e["kind"] for e in events_after] == ["created", "status_changed"]
+
+
+def test_respond_404_on_missing_task(client) -> None:
+    response = client.post(
+        "/api/tasks/9999/respond",
+        json={"response": "hello"},
+    )
+    assert response.status_code == 404

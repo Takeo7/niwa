@@ -79,28 +79,30 @@ def test_happy_path_run_verified(
     assert evidence.get("stream_terminated_cleanly") is True
 
 
-def test_sad_path_question_unanswered(
+def test_stream_ending_in_question_puts_task_in_waiting_input(
     session: Session, git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """PR-V1-19: assistant last turn ending in ``?`` parks the task, not fails it."""
+
     task = _seed(session, git_project)
-    _prime(tmp_path, monkeypatch, lines=[_assistant("should I continue?")])
+    question = "what should I do?"
+    _prime(tmp_path, monkeypatch, lines=[_assistant(question)])
 
     assert process_pending(session) == 1
 
     session.expire_all()
     run = session.query(Run).one()
-    assert run.status == "failed" and run.outcome == "verification_failed"
-    evidence = json.loads(run.verification_json or "{}")
-    assert evidence.get("error_code") == "question_unanswered"
-    assert session.get(Task, task.id).status == "failed"
+    assert run.status == "failed" and run.outcome == "needs_input"
+    refreshed = session.get(Task, task.id)
+    assert refreshed.status == "waiting_input"
+    assert refreshed.pending_question == question
     events = (
         session.query(TaskEvent)
-        .filter(TaskEvent.task_id == task.id, TaskEvent.kind == "verification")
+        .filter(TaskEvent.task_id == task.id, TaskEvent.kind == "status_changed")
         .all()
     )
-    assert len(events) == 1
-    payload = json.loads(events[0].payload_json or "{}")
-    assert payload == {"error_code": "question_unanswered", "outcome": "verification_failed"}
+    transitions = [json.loads(e.payload_json or "{}") for e in events]
+    assert {"from": "running", "to": "waiting_input"} in transitions
 
 
 def _tool_use_write(file_path: str) -> dict:
