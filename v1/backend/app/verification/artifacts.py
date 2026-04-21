@@ -5,7 +5,10 @@
   artifact. Zero lines → ``no_artifacts``. A cwd that is not a git
   repository degrades gracefully (``git_available = False``) so runs on
   ``project.kind = script`` with a non-git workspace still pass E3 —
-  11c will gate further checks on ``git_available``.
+  11c will gate further checks on ``git_available``. If the cwd path
+  does not exist at all we fail hard with ``error_code="cwd_missing"``
+  since that points to an executor/operator bug rather than a legit
+  non-git workspace.
 * **E4** catches writes the adapter made *outside* the task cwd. We
   replay ``run_events`` inspecting **both** tool_use shapes Claude
   emits: top-level ``event_type="tool_use"`` frames (legacy / fake CLI)
@@ -42,10 +45,21 @@ def check_artifacts_in_cwd(cwd: Path | str, evidence: dict[str, Any]) -> bool:
 
     Returns ``True`` on pass (including the graceful "not a git repo"
     skip) and ``False`` on fail (populating ``error_code="no_artifacts"``
-    in ``evidence``).
+    or ``error_code="cwd_missing"`` in ``evidence``).
     """
 
     cwd_path = Path(cwd)
+    # Pre-check the cwd: a missing directory is an executor/operator
+    # bug, not a legit non-git workspace. Treating it as ``FileNotFoundError``
+    # from ``subprocess.run`` would be indistinguishable from "git not
+    # installed" and silently skip the check. Fail hard instead.
+    if not cwd_path.is_dir():
+        evidence["cwd_exists"] = False
+        evidence["git_available"] = False
+        evidence["artifacts_count"] = None
+        evidence["error_code"] = "cwd_missing"
+        return False
+    evidence["cwd_exists"] = True
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
