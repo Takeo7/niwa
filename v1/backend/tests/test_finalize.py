@@ -39,11 +39,15 @@ def session(tmp_path: Path) -> Iterator[Session]:
 
 
 def _seed(
-    session: Session, *, git_remote: str | None = "git@github.com:owner/repo.git",
+    session: Session,
+    *,
+    git_remote: str | None = "git@github.com:owner/repo.git",
+    autonomy_mode: str = "safe",
 ) -> tuple[Project, Task, Run]:
     project = Project(
         slug="demo", name="Demo", kind="library",
         local_path="/tmp/demo", git_remote=git_remote,
+        autonomy_mode=autonomy_mode,
     )
     session.add(project)
     session.commit()
@@ -66,24 +70,37 @@ def _seed(
 def _mock_cmd(
     monkeypatch: pytest.MonkeyPatch,
     responses: dict[str, tuple[int, str, str]],
-) -> None:
+) -> list[list[str]]:
     """Stub ``subprocess.run`` to return ``(rc, stdout, stderr)`` per key
     (``"git status"``, ``"git add"``, ``"git commit"``, ``"git push"``,
-    ``"gh"``). Unknown keys raise so drift fails loud."""
+    ``"gh"``, ``"gh pr create"``, ``"gh pr merge"``). Returns a list that
+    records every invocation so tests can assert which commands fired.
+    Unknown keys raise so drift fails loud."""
+
+    calls: list[list[str]] = []
 
     def fake_run(args, *a, **kw):
+        calls.append(list(args))
         key = args[0]
         if key == "git":
             idx = 1
             while idx < len(args) and args[idx] == "-c":
                 idx += 2
             key = f"git {args[idx] if idx < len(args) else ''}"
+        elif key == "gh" and len(args) >= 3:
+            # Route `gh pr create` vs `gh pr merge` so dangerous mode tests
+            # can script them independently. Fall back to "gh" for legacy
+            # specs that only set a single gh response.
+            sub = f"gh {args[1]} {args[2]}"
+            if sub in responses:
+                key = sub
         if key not in responses:
             raise AssertionError(f"unmocked subprocess call: {args}")
         rc, stdout, stderr = responses[key]
         return subprocess.CompletedProcess(args, rc, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
 
 
 def _gh_installed(monkeypatch: pytest.MonkeyPatch, installed: bool = True) -> None:
@@ -168,3 +185,66 @@ def test_gh_pr_create_failure_logs_command(
     assert any("gh_pr_create_failed" in s for s in result.commands_skipped)
     session.refresh(task)
     assert task.pr_url is None
+
+
+# ---- PR-V1-16: dangerous mode auto-merge --------------------------------
+
+def test_dangerous_mode_runs_gh_pr_merge(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, task, run = _seed(session, autonomy_mode="dangerous")
+    _gh_installed(monkeypatch)
+    calls = _mock_cmd(monkeypatch, {
+        **PUSH_OK,
+        "gh pr create": (0, PR_URL + "\n", ""),
+        "gh pr merge": (0, "", ""),
+    })
+
+    result = finalize_task(session, run, task, project)
+
+    assert result.committed and result.pushed
+    assert result.pr_url == PR_URL
+    assert result.pr_merged is True
+    assert not any("gh_pr_merge_failed" in s for s in result.commands_skipped)
+    # gh pr merge must fire with the exact squash/delete-branch flags.
+    merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+    assert len(merge_calls) == 1
+    assert merge_calls[0] == [
+        "gh", "pr", "merge", PR_URL, "--squash", "--delete-branch",
+    ]
+
+
+def test_safe_mode_skips_auto_merge(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, task, run = _seed(session, autonomy_mode="safe")
+    _gh_installed(monkeypatch)
+    calls = _mock_cmd(monkeypatch, {**PUSH_OK, "gh pr create": (0, PR_URL + "\n", "")})
+
+    result = finalize_task(session, run, task, project)
+
+    assert result.pr_url == PR_URL
+    assert result.pr_merged is False
+    # Safe mode never invokes `gh pr merge`.
+    assert not any(c[:3] == ["gh", "pr", "merge"] for c in calls)
+
+
+def test_dangerous_mode_merge_failure_logs_manual_command(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, task, run = _seed(session, autonomy_mode="dangerous")
+    _gh_installed(monkeypatch)
+    _mock_cmd(monkeypatch, {
+        **PUSH_OK,
+        "gh pr create": (0, PR_URL + "\n", ""),
+        "gh pr merge": (1, "", "merge conflict with base branch\n"),
+    })
+
+    result = finalize_task(session, run, task, project)
+
+    assert result.pr_url == PR_URL
+    assert result.pr_merged is False
+    manual = [s for s in result.commands_skipped if "gh_pr_merge_failed" in s]
+    assert manual, result.commands_skipped
+    assert "--squash --delete-branch" in manual[0]
+    assert "merge conflict" in manual[0]

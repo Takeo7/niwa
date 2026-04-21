@@ -10,7 +10,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { IconAlertCircle, IconPlus } from "@tabler/icons-react";
+import { IconAlertCircle, IconAlertTriangle, IconPlus } from "@tabler/icons-react";
 
 import { TaskCreateModal } from "../tasks/TaskCreateModal";
 import { TaskList } from "../tasks/TaskList";
@@ -42,6 +42,19 @@ export function ProjectDetail({ slug }: Props) {
   const p = query.data;
   return (
     <Stack gap="md">
+      {p.autonomy_mode === "dangerous" && (
+        // Loud red banner: PR-V1-16 auto-merges PRs without review when
+        // this flag is on, so the user must see it at a glance — the
+        // small badge below is not enough on its own.
+        <Alert
+          color="red"
+          variant="filled"
+          title="Dangerous mode"
+          icon={<IconAlertTriangle size={18} />}
+        >
+          Runs auto-merge PRs without review. Review carefully before enabling.
+        </Alert>
+      )}
       <Title order={2}>{p.name}</Title>
       <Group gap="xs">
         <Badge variant="light">{p.kind}</Badge>

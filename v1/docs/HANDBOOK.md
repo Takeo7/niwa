@@ -1128,6 +1128,8 @@ class FinalizeResult:
     committed: bool
     pushed: bool
     pr_url: str | None
+    pr_merged: bool = False            # PR-V1-16: True sólo si dangerous
+                                       # mode corrió gh pr merge con rc=0
     commands_skipped: list[str]        # reasons acumulativas
 ```
 
@@ -1145,7 +1147,8 @@ class FinalizeResult:
 
 ### Fuera de scope (PR-V1-13)
 
-- **Autonomy `dangerous` / auto-merge:** llega en Semana 4.
+- **Autonomy `dangerous` / auto-merge:** añadido en PR-V1-16
+  (sección siguiente).
 - **UI del `pr_url`:** el detalle de task ya tiene la columna; el
   render del link es follow-up.
 - **No hay force-push**, ni amend, ni retries. Carrera con push
@@ -1162,6 +1165,114 @@ class FinalizeResult:
   — integration E2E: `finalize_task` monkeypatcheado a un spy que
   escribe `task.pr_url`; verifica que el executor sólo lo invoca
   tras verify passes.
+
+## Dangerous mode (PR-V1-16)
+
+Cierra Semana 4 del SPEC §9: activa el brazo
+`autonomy_mode="dangerous"` del SPEC §1/§4 añadiendo un paso 5
+opcional a `finalize_task` y un banner rojo en
+`/projects/:slug`.
+
+### Flow (paso 5, tras PR creado)
+
+Si y sólo si los tres checks se cumplen tras el paso 4 del safe
+mode:
+
+1. `pr_url` no-None (hubo `gh pr create` exitoso con URL válida).
+2. `project.autonomy_mode == "dangerous"` (default es `"safe"`;
+   `getattr` con fallback por si la columna falta en tests de
+   fixture viejos).
+3. `shutil.which("gh") is not None`.
+
+Entonces `finalize_task` dispara:
+
+```
+gh pr merge <pr_url> --squash --delete-branch
+```
+
+con `cwd=project.local_path` y timeout 30 s (el mismo helper
+`_run_cmd` que el resto del pipeline).
+
+- `rc == 0` → `FinalizeResult.pr_merged = True`, log
+  `"auto-merged PR for task_id=..."` a `niwa.finalize`. El PR queda
+  merged y la rama remota borrada.
+- `rc != 0` → `pr_merged = False`, entry en `commands_skipped`:
+  `"gh_pr_merge_failed: <stderr[:500]> (manual: gh pr merge
+  <pr_url> --squash --delete-branch)"`. Task sigue `done`: el
+  trabajo está committeado, pusheado y PR creado; sólo el merge
+  automático falló.
+
+Si `autonomy_mode == "safe"` → **no-op** sin log; `pr_merged`
+queda `False` por default. No se intenta el merge ni se añade
+entry a `commands_skipped`. Comportamiento idéntico al previo a
+este PR.
+
+### `FinalizeResult.pr_merged`
+
+Campo booleano nuevo con default `False`. Vive sólo en memoria y
+logs — **no hay columna DB** para `pr_merged` ni `pr_merged_at`
+en `tasks`. El hecho de que el PR esté cerrado se recupera a
+posteriori consultando `task.pr_url` contra la API de GitHub; MVP
+asume que no lo necesitamos persistido.
+
+### Banner UI
+
+`ProjectDetail.tsx` renderiza encima del título un `Alert` rojo
+con `color="red"`, `variant="filled"`, título `"Dangerous mode"`
+e icono `IconAlertTriangle`:
+
+> Runs auto-merge PRs without review. Review carefully before
+> enabling.
+
+Sólo aparece cuando `project.autonomy_mode === "dangerous"`. El
+badge rojo "dangerous" junto al slug sigue visible en cualquier
+modo — el banner es la señal *loud*, el badge es recordatorio
+silencioso. Ambos coexisten por diseño.
+
+**No hay toggle UI** para cambiar `autonomy_mode` desde el detalle
+— se edita vía `PATCH /api/projects/{slug}` o DB directa. Añadir
+un toggle exigiría confirm modal + mutation y queda como
+follow-up.
+
+### Seguridad — decisiones clave
+
+- **`--squash` hardcoded.** El SPEC no especifica estrategia y MVP
+  no expone preferencia por proyecto. Follow-up si el usuario
+  pide `--rebase`/`--merge` sería una columna
+  `autonomy_merge_strategy`.
+- **`--delete-branch` hardcoded.** Cada task usa su propia rama
+  `niwa/task-<id>-<slug>`; dejar la rama viva post-merge no tiene
+  utilidad y acumula ruido.
+- **No hay undo.** Un merge exitoso es irreversible desde Niwa.
+  Si verify pasó pero el merge rompe el target branch (conflicto
+  con otro PR mergeado entre verify y merge, por ejemplo), la
+  responsabilidad es del humano. MVP no comprueba protected
+  branches ni status checks.
+- **Race con humano.** Si el usuario mergea/cierra el PR a mano
+  antes de que llegue finalize, `gh pr merge` devuelve rc≠0 con
+  stderr del estilo "pull request already merged"; caemos al
+  log sin drama.
+- **`gh` missing tras pr_create.** Improbable (lo acabamos de
+  invocar) pero defensivo: el check de `shutil.which("gh")` se
+  repite por si el binario desapareció.
+
+### Tests
+
+- `tests/test_finalize.py::test_dangerous_mode_runs_gh_pr_merge`
+  — dangerous + `gh pr create` OK + `gh pr merge` rc=0 →
+  `pr_merged=True`, sin entry de fail, y el argv exacto
+  `["gh","pr","merge",<url>,"--squash","--delete-branch"]` se
+  verifica contra la lista de calls del mock.
+- `tests/test_finalize.py::test_safe_mode_skips_auto_merge` —
+  safe + PR creado → `pr_merged=False` y cero calls con prefijo
+  `gh pr merge`.
+- `tests/test_finalize.py::test_dangerous_mode_merge_failure_logs_manual_command`
+  — dangerous + merge rc=1 con stderr → `pr_merged=False`,
+  entry `"gh_pr_merge_failed: ..."` que incluye el stderr y la
+  flagline `--squash --delete-branch`.
+- `frontend/tests/ProjectDetail.test.tsx` — dos casos:
+  dangerous muestra el banner ("Dangerous mode" + texto del body),
+  safe no lo renderiza. `fetch` se stubbea con `vi.stubGlobal`.
 
 ## Bootstrap (PR-V1-14)
 
@@ -1400,8 +1511,7 @@ mockeados, never spawning.
 
 ## Próximos PRs (SPEC §9)
 
-- PR-V1-16+: modo `dangerous` (auto-merge del PR tras verify OK) y
-  deploy condicional a `localhost:PORT` cuando
-  `project.kind=web-deployable`. Semana 4 del SPEC.
+- PR-V1-17+: deploy condicional a `localhost:PORT` cuando
+  `project.kind=web-deployable`. Semana 5 del SPEC.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.

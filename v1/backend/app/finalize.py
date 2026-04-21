@@ -1,10 +1,15 @@
-"""Safe mode finalize (PR-V1-13).
+"""Safe mode finalize (PR-V1-13) + dangerous auto-merge (PR-V1-16).
 
 After ``verify_run`` approves a run the executor calls ``finalize_task``
 which, best-effort, runs: ``git add -A`` + ``git commit`` → ``git push
 -u origin <branch>`` (if ``project.git_remote``) → ``gh pr create`` (if
 ``gh`` is on PATH). Each step that fails is recorded in
 :attr:`FinalizeResult.commands_skipped`; the function never raises.
+
+When ``project.autonomy_mode == "dangerous"`` and a PR URL was produced,
+one extra step runs: ``gh pr merge <url> --squash --delete-branch``.
+Success flips ``FinalizeResult.pr_merged`` to ``True``; any failure is
+logged with the manual command the user can replay.
 
 Commit flags use inline ``-c user.email`` / ``-c user.name`` so a fresh
 machine with no global git config still produces a valid commit.
@@ -34,11 +39,15 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 class FinalizeResult:
     """Outcome of :func:`finalize_task`. ``commands_skipped`` holds
     human-readable reasons (``"no_remote"``, ``"gh_missing: ..."``,
-    ``"commit_failed: ..."``) safe to render in logs."""
+    ``"commit_failed: ..."``, ``"gh_pr_merge_failed: ..."``) safe to
+    render in logs. ``pr_merged`` is only ``True`` when dangerous mode
+    ran ``gh pr merge`` with exit 0; safe mode and failed merges leave
+    it ``False``."""
 
     committed: bool
     pushed: bool
     pr_url: str | None
+    pr_merged: bool = False
     commands_skipped: list[str] = field(default_factory=list)
 
 
@@ -79,8 +88,31 @@ def finalize_task(
         task.pr_url = pr_url
         session.commit()
 
+    # PR-V1-16: auto-merge when the project opted into dangerous mode.
+    # Safe mode is a silent no-op (human merges by hand). We only attempt
+    # the merge if we actually have a PR URL *and* `gh` is on PATH. In
+    # practice ``pr_url`` being set implies ``gh`` was available a moment
+    # ago at ``_pr_create`` time, so the "dangerous + pr_url + no gh"
+    # branch is effectively unreachable; if `gh` disappears mid-flow the
+    # ``shutil.which`` check below short-circuits silently rather than
+    # logging a manual command — the brief accepts this as out of scope.
+    pr_merged = False
+    if (
+        pr_url
+        and getattr(project, "autonomy_mode", "safe") == "dangerous"
+        and shutil.which("gh") is not None
+    ):
+        pr_merged, merge_skip = _pr_merge(pr_url, cwd)
+        skipped.extend(merge_skip)
+        if pr_merged:
+            logger.info("auto-merged PR for task_id=%s url=%s", task.id, pr_url)
+
     return FinalizeResult(
-        committed=committed, pushed=pushed, pr_url=pr_url, commands_skipped=skipped
+        committed=committed,
+        pushed=pushed,
+        pr_url=pr_url,
+        pr_merged=pr_merged,
+        commands_skipped=skipped,
     )
 
 
@@ -156,6 +188,23 @@ def _pr_create(task: Task, branch: str, cwd: str) -> tuple[str | None, list[str]
     msg = f"gh_pr_create_no_url: stdout={stdout.strip()[:200]}"
     logger.warning(msg)
     return None, [msg]
+
+
+def _pr_merge(pr_url: str, cwd: str) -> tuple[bool, list[str]]:
+    """Run ``gh pr merge <url> --squash --delete-branch``. On failure the
+    returned reason embeds the stderr (truncated) and the manual command
+    so the user can replay it verbatim."""
+
+    argv = ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"]
+    rc, _, stderr = _run_cmd(argv, cwd)
+    if rc == 0:
+        return True, []
+    manual = f"gh pr merge {pr_url} --squash --delete-branch"
+    reason = (
+        f"gh_pr_merge_failed: {stderr.strip()[:500]} (manual: {manual})"
+    )
+    logger.warning(reason)
+    return False, [reason]
 
 
 def _fail(prefix: str, rc: int, stderr: str) -> str:

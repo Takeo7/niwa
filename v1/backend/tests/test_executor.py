@@ -542,7 +542,13 @@ def test_process_pending_finalizes_verified_run_with_gh_stub(
         calls.append(task.id)
         task.pr_url = url
         session.commit()
-        return FinalizeResult(True, True, url, [])
+        return FinalizeResult(
+            committed=True,
+            pushed=True,
+            pr_url=url,
+            pr_merged=False,
+            commands_skipped=[],
+        )
 
     monkeypatch.setattr(executor_core, "finalize_task", fake_finalize)
     monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
