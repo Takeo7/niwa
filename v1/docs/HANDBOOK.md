@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-11b)
+## Layout actual (tras PR-V1-11c)
 
 ```
 v1/
@@ -21,7 +21,7 @@ v1/
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
 │   │   ├── executor/           # daemon (polling, pipeline, git workspace,
 │   │   │                       # CLI entrypoint)
-│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a/11b)
+│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a/11b/11c)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -478,17 +478,20 @@ monousuario).
 end-to-end. `test_adapter.py` y `test_runs_api.py` migrados a
 `git_project`.
 
-## Verification core (PR-V1-11a / extendido en 11b)
+## Verification core (PR-V1-11a / extendido en 11b / completado en 11c)
 
-Implementación inicial del contrato **evidence-based** del SPEC §5. Un
-run ya no se marca `done` solo porque el CLI devolvió `exit 0`: pasa
-por un verifier que corre los chequeos E1..E5 en orden y deja la
-evidencia serializada en `run.verification_json`.
+Implementación del contrato **evidence-based** del SPEC §5. Un run ya
+no se marca `done` solo porque el CLI devolvió `exit 0`: pasa por un
+verifier que corre los chequeos E1..E5 en orden y deja la evidencia
+serializada en `run.verification_json`.
 
-**Estado actual tras 11b:** E1 + E2 + E3 + E4 son reales; E5 sigue
-stub. 11c reemplazará E5 con el runner de tests del proyecto. La
-forma del `VerificationResult` y la integración en el executor no
-cambiaron entre 11a y 11b — sólo se rellenan slots del `evidence`.
+**Estado actual tras 11c:** E1 + E2 + E3 + E4 + E5 son reales. El
+contrato §5 del SPEC queda cerrado: si un run llega a `verified` es
+que el adapter salió limpio, el stream terminó bien, hay artefactos
+en cwd, nada se escribió fuera, y los tests del proyecto (si existen)
+pasaron. La forma del `VerificationResult` y la integración en el
+executor no cambiaron entre 11a → 11c — sólo se rellenan slots del
+`evidence`.
 
 ### Módulo `app/verification/`
 
@@ -514,9 +517,13 @@ cambiaron entre 11a y 11b — sólo se rellenan slots del `evidence`.
   MultiEdit, NotebookEdit}` y chequea que todo `file_path` absoluto
   sea subpath del `cwd.resolve()`.
 - `core.py` — orquestador `verify_run(session, run, task, project,
-  cwd, *, adapter_outcome, exit_code)`. Corre E1 → E2 → E3 → E4 →
-  (E5 stub) y cortocircuita al primer fallo. El campo `tests_ran`
-  sigue en `False` porque E5 no se implementa hasta 11c.
+  cwd, *, adapter_outcome, exit_code)`. Corre E1 → E2 → E3 → E4 → E5
+  y cortocircuita al primer fallo. El timeout de E5 está hardcoded en
+  `_TESTS_TIMEOUT_S = 300` (follow-up: env var
+  `NIWA_VERIFY_TESTS_TIMEOUT`).
+- `tests_runner.py` — E5 (PR-V1-11c). `detect_test_runner(cwd,
+  project) -> TestRunnerChoice | None` + `run_project_tests(choice,
+  *, timeout=300) -> TestRunResult`.
 - `__init__.py` — re-exports `verify_run` + `VerificationResult`.
 
 ### E1 — exit code
@@ -544,11 +551,12 @@ transacción que el `status_changed`.
 
 | adapter_outcome        | verifier                   | run.outcome            | run.status  | task.status |
 |------------------------|----------------------------|------------------------|-------------|-------------|
-| `cli_ok` + E1..E4 OK   | pass                       | `verified`             | `completed` | `done`      |
+| `cli_ok` + E1..E5 OK   | pass                       | `verified`             | `completed` | `done`      |
 | `cli_ok` + E1 fail     | E1                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_ok` + E2 fail     | E2                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_ok` + E3 fail     | E3                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_ok` + E4 fail     | E4                         | `verification_failed`  | `failed`    | `failed`    |
+| `cli_ok` + E5 fail     | E5                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_nonzero_exit`     | bypass                     | `cli_nonzero_exit`     | `failed`    | `failed`    |
 | `cli_not_found`        | bypass                     | `cli_not_found`        | `failed`    | `failed`    |
 | `timeout`              | bypass                     | `timeout`              | `failed`    | `failed`    |
@@ -566,7 +574,12 @@ el run y la task.
 - E3: `no_artifacts`, `cwd_missing` (la cwd del run no existe —
   normalmente bug del executor/operator, no se skipea).
 - E4: `artifacts_outside_cwd`.
-- E5: vendrá en 11c.
+- E5: `tests_failed` (exit ≠ 0), `tests_timeout` (>300 s sin devolver
+  control), `tests_runner_missing` (el binario resuelto — `make`,
+  `npm`, `sys.executable` — no existe/no es ejecutable en el host).
+  Skip vacío (no hay runner detectado) pasa E5 con
+  `evidence.test_reason` = `"no_test_script_detected"` |
+  `"kind_script"`.
 
 ### Evidence shape (estable)
 
@@ -582,14 +595,20 @@ el run y la task.
   "artifacts_outside_cwd": false,
   "tool_use_writes_scanned": 1,
   "tool_use_writes_absolute": 0,
-  "tests_ran": false          // stub — 11c
+  "tests_ran": true,
+  "test_tool": "pytest",
+  "test_exit_code": 0,
+  "test_duration_s": 3.21,
+  "test_output_tail": "... tail of stdout+stderr, ≤4 KB ..."
 }
 ```
 
-Ante fallo incluye también `error_code`. E4 añade
-`offending_paths: ["/tmp/leak.txt"]` con el primer offender cuando
-falla; E3 deja `artifacts_count: 0`. La forma se amplía en 11c con los
-campos de E5 sin quitar los actuales.
+Si E5 se skipea (no runner detectado o `kind=script`): `tests_ran:
+false` + `test_reason: "no_test_script_detected" | "kind_script"` en
+lugar de los campos `test_*`. Ante fallo incluye también `error_code`:
+E4 añade `offending_paths: ["/tmp/leak.txt"]` con el primer offender;
+E3 deja `artifacts_count: 0`; E5 mantiene `test_tool` /
+`test_exit_code` / `test_output_tail` para diagnóstico.
 
 ### Tests
 
@@ -623,13 +642,13 @@ campos de E5 sin quitar los actuales.
   substituye `{pid}`) para que el fake escriba artefactos durante la
   ejecución.
 
-### Evolución esperada (11c)
+### Tests del módulo (tras 11c)
 
-**11c** añade `tests_ran` / `tests_passed` corriendo el runner del
-proyecto (`pyproject.toml` pytest, `package.json` test, Makefile
-test) cuando `project.kind ∈ (library, web-deployable)`. La forma
-de `VerificationResult` y los outcomes del run no cambian; sólo se
-añaden slots al `evidence`.
+- `tests/verification/test_tests_runner.py` — 3 casos: `npm test`
+  passes (con skip graceful si `npm` no está en el sandbox),
+  pytest failure (detect+run sobre `pyproject.toml` + `test_dummy.py`
+  assert False), no test script detected (`tmp_path` vacío +
+  `kind="library"` → `detect_test_runner` devuelve `None`).
 
 ## Verification artifacts (PR-V1-11b)
 
@@ -714,6 +733,95 @@ candidatos de ambos orígenes combinados), `tool_use_writes_absolute`
 Ambos reemplazan los placeholders con valores reales y añaden nuevos
 `error_code` sin modificar la forma de `VerificationResult` ni la
 integración en el executor.
+
+## Verification tests runner (PR-V1-11c)
+
+E5 cierra el capítulo §5 del SPEC: **si el proyecto tiene tests, se
+corren y deben pasar antes de marcar el run como `verified`**. Vive
+en `app/verification/tests_runner.py` y lo invoca `verify_run` sólo
+después de que E1..E4 hayan pasado.
+
+### Detectores — orden y razones de skip
+
+`detect_test_runner(cwd, project) -> TestRunnerChoice | None`
+resuelve en este orden:
+
+1. `project.kind == "script"` → `None` (skip por diseño; ad-hoc
+   scripts no llevan suite). El orquestador setea
+   `evidence.test_reason = "kind_script"`.
+2. `cwd/Makefile` con regla `^test\s*:(?!=)` (regex sobre el fichero,
+   sin invocar `make`; la lookahead descarta variable-assignments tipo
+   `test := foo`) → `TestRunnerChoice(cmd=["make","test","-s"],
+   tool="make", cwd=...)`.
+3. `cwd/package.json` con `scripts.test` no vacío (parse JSON) →
+   `cmd=["npm","test","--silent"], tool="npm"`.
+4. `cwd/pyproject.toml` (parse con `tomllib`, stdlib 3.11+) con
+   `[tool.pytest*]` o `pytest` dentro de
+   `[project.optional-dependencies].test` →
+   `cmd=[sys.executable,"-m","pytest","-q"], tool="pytest"`
+   (usamos `sys.executable` y no la cadena `"python"`: hosts minimal /
+   Debian modernos sólo traen `python3`).
+5. Ninguno → `None`; orquestador setea
+   `evidence.test_reason = "no_test_script_detected"`.
+
+Prioridad Makefile > npm > pytest: si un repo lleva los tres (poco
+común pero posible), Makefile gana porque suele ser el entrypoint
+consolidado del proyecto.
+
+### Ejecución y timeout
+
+`run_project_tests(choice, *, timeout=300) -> TestRunResult` envuelve
+`subprocess.run(..., capture_output=True, text=True, timeout=300)`:
+
+- Éxito (`exit_code == 0`) → `passed=True`; E5 pasa.
+- Exit no cero → `passed=False`, orquestador devuelve
+  `error_code="tests_failed"`.
+- `TimeoutExpired` → `timed_out=True`, `exit_code=None`; orquestador
+  devuelve `error_code="tests_timeout"`. `subprocess.run` ya mata el
+  proceso. Capturamos el stdout/stderr parcial de la excepción para
+  el tail.
+- `FileNotFoundError` / `PermissionError` / `OSError` al lanzar el
+  proceso (binario del runner ausente) → `passed=False`,
+  `exit_code=None`, `timed_out=False`, `output_tail` con
+  `"<ExceptionType>: <msg>"`. El orquestador lo mapea a
+  `error_code="tests_runner_missing"` — distinto de `tests_failed`
+  para que el operador sepa que el problema es la toolchain, no los
+  tests. Sin esta captura la excepción escapaba `verify_run` y dejaba
+  el run wedged en `running`.
+
+Timeout **hardcoded** a 300 s por ahora. Follow-up:
+`NIWA_VERIFY_TESTS_TIMEOUT` env var — documentado como riesgo del
+brief 11c.
+
+### `output_tail`
+
+Los últimos 4 KB de `stdout + stderr` concatenados se guardan en
+`evidence.test_output_tail`. Suficiente para reconocer qué test falló
+(pytest imprime el summary al final; jest/vitest idem) sin inflar la
+DB. No parseamos salida para extraer "test X failed" — el brief lo
+descarta como over-engineering para el MVP.
+
+### Known limitations (aceptadas)
+
+- **`npm install` / `pip install` previos**: E5 no instala
+  dependencias. Si el proyecto las necesita y faltan, el subprocess
+  falla y el run queda `tests_failed` con el ImportError/stacktrace
+  en `test_output_tail`. El usuario debe tener el proyecto listo
+  antes de encolar tasks — regla operativa, no bug.
+- **Suite grande**: 300 s es arbitrario. Un proyecto con suite lenta
+  hoy falla con `tests_timeout`. Env var `NIWA_VERIFY_TESTS_TIMEOUT`
+  queda como follow-up explícito.
+- **Sólo Makefile / npm / pytest**: Ruby, Go, Rust, etc. son
+  follow-up. `detect_test_runner` devuelve `None` y E5 pasa vacuo.
+  Más detectores se añaden sin tocar el orquestador — sólo el orden
+  de reglas en `detect_test_runner`.
+- **Una sola ejecución por run**: todos los tests o nada. Subset
+  filtering (`-k`, `--only-affected`) queda fuera del MVP.
+- **Sin streaming a la UI**: el stdout del subprocess se captura
+  entero antes de devolver. Tests largos no muestran progreso en
+  vivo. Aceptable dado el cap de 300 s.
+- **`npm test --silent`**: el flag reduce ruido de npm pero no del
+  test runner que invoque (p. ej. vitest). El tail de 4 KB basta.
 
 ## Frontend
 
