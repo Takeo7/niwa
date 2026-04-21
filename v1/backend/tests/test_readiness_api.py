@@ -87,3 +87,20 @@ def test_db_unreachable_returns_false(client, monkeypatch: pytest.MonkeyPatch) -
     assert body["details"]["db"]["reachable"] is False
     assert "synthetic failure" in body["details"]["db"]["error"]
 
+
+def test_check_db_via_session_catches_exception() -> None:
+    """Unit test: exercise the real ``except`` branch of ``check_db_via_session``."""
+
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.readiness_checks import check_db_via_session
+
+    class _BoomSession:
+        def execute(self, *_a: Any, **_k: Any):  # type: ignore[no-untyped-def]
+            raise OperationalError("SELECT 1", {}, Exception("boom"))
+
+    ok, details = check_db_via_session(_BoomSession())  # type: ignore[arg-type]
+    assert ok is False
+    assert details["reachable"] is False
+    assert "error" in details
+    assert "boom" in details["error"]
