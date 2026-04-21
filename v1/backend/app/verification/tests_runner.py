@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import time
 import tomllib
 from dataclasses import dataclass
@@ -145,8 +146,14 @@ def detect_test_runner(cwd: Path, project: Any) -> TestRunnerChoice | None:
             cmd=["npm", "test", "--silent"], tool="npm", cwd=cwd_path
         )
     if _pyproject_declares_pytest(cwd_path):
+        # Use sys.executable rather than a literal "python": on modern
+        # Debian/Ubuntu and minimal containers only "python3" exists, so
+        # "python" would trigger FileNotFoundError here and fall into the
+        # tests_runner_missing path instead of actually running pytest.
         return TestRunnerChoice(
-            cmd=["python", "-m", "pytest", "-q"], tool="pytest", cwd=cwd_path
+            cmd=[sys.executable, "-m", "pytest", "-q"],
+            tool="pytest",
+            cwd=cwd_path,
         )
     return None
 
