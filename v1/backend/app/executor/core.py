@@ -208,6 +208,7 @@ def run_adapter(session: Session, task: Task) -> Run:
         outcome="verified" if result.passed else result.outcome,
         exit_code=exit_code,
         error_code=None if result.passed else result.error_code,
+        pending_question=result.pending_question,
     )
     session.refresh(run)
     return run
@@ -400,10 +401,17 @@ def _finalize(
     outcome: str,
     exit_code: int | None,
     error_code: str | None = None,
+    pending_question: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
-    # PR-V1-11a: only ``verified`` is success; all other outcomes fail.
+    # Three terminal buckets: ``verified`` → run completed + task done;
+    # ``needs_input`` (PR-V1-19) → run failed + task parked in
+    # ``waiting_input`` with ``pending_question`` populated; anything else
+    # → run failed + task failed. Only the verified path clears the
+    # lifecycle cleanly; ``needs_input`` is an intentional pause, not
+    # a success.
     success = outcome == "verified"
+    needs_input = outcome == "needs_input"
 
     run.finished_at = now
     run.exit_code = exit_code
@@ -413,11 +421,18 @@ def _finalize(
     terminal = "completed" if success else "failed"
     session.add(RunEvent(run_id=run.id, event_type=terminal, payload_json=None))
 
-    new_status = "done" if success else "failed"
+    if success:
+        new_status = "done"
+    elif needs_input:
+        new_status = "waiting_input"
+    else:
+        new_status = "failed"
     from_status = task.status
     task.status = new_status
     if success:
         task.completed_at = now
+    if needs_input:
+        task.pending_question = pending_question
 
     session.add(
         TaskEvent(
