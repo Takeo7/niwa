@@ -87,11 +87,16 @@ def _env(
     cli: str,
     script: Path | None = None,
     exit_code: int = 0,
+    touch: Path | None = None,
 ) -> None:
     monkeypatch.setenv("NIWA_CLAUDE_CLI", cli)
     if script is not None:
         monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
     monkeypatch.setenv("FAKE_CLAUDE_EXIT", str(exit_code))
+    if touch is not None:
+        # PR-V1-11b: E3 requires ≥1 artifact inside the adapter cwd; tests
+        # that expect ``verified`` pass a touch path inside ``git_project``.
+        monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(touch))
 
 
 def _fake_cli_cmd() -> str:
@@ -124,7 +129,13 @@ def test_adapter_parses_stream_and_writes_run_events(
             {"type": "result", "exit_code": 0, "cost_usd": 0.01},
         ],
     )
-    _env(monkeypatch, cli=_fake_cli_cmd(), script=script, exit_code=0)
+    _env(
+        monkeypatch,
+        cli=_fake_cli_cmd(),
+        script=script,
+        exit_code=0,
+        touch=git_project / "touch-{pid}.txt",
+    )
 
     assert process_pending(session) == 1
 
@@ -198,7 +209,13 @@ def test_adapter_skips_malformed_json_lines(
         + "not json garbage\n"
         + json.dumps({"type": "result", "exit_code": 0}) + "\n"
     )
-    _env(monkeypatch, cli=_fake_cli_cmd(), script=script, exit_code=0)
+    _env(
+        monkeypatch,
+        cli=_fake_cli_cmd(),
+        script=script,
+        exit_code=0,
+        touch=git_project / "touch-{pid}.txt",
+    )
 
     assert process_pending(session) == 1
 

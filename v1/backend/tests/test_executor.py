@@ -43,8 +43,10 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     One ``result`` line + exit 0 is the bare minimum to flip a run to
     ``completed`` and a task to ``done`` through the real adapter path.
-    Individual tests that need a different shape (none, today) can
-    override by re-setting the env vars.
+    Since PR-V1-11b, E3 requires ≥1 artifact inside the task cwd, so the
+    default run also touches a pid-scoped file under ``tmp_path``; tests
+    that wire their own ``git_project`` override ``FAKE_CLAUDE_TOUCH``
+    below to land the artifact inside the repo instead.
     """
 
     st = os.stat(FAKE_CLI_PATH)
@@ -128,7 +130,14 @@ def test_process_pending_nothing_to_do(session: Session) -> None:
     assert process_pending(session) == 0
 
 
-def test_process_pending_single_task(session: Session, git_project: Path) -> None:
+def test_process_pending_single_task(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PR-V1-11b: E3 needs ≥1 artifact inside cwd, so the fake touches a
+    # file in the repo before exit.
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
     project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="only one")
 
@@ -158,11 +167,44 @@ def test_process_pending_single_task(session: Session, git_project: Path) -> Non
     assert run.finished_at is not None
 
 
-def test_process_pending_multiple_tasks(session: Session, git_project: Path) -> None:
-    project = _make_project(session, local_path=git_project)
-    first = _make_task(session, project, title="first")
-    second = _make_task(session, project, title="second")
-    third = _make_task(session, project, title="third")
+def test_process_pending_multiple_tasks(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PR-V1-11b finding #3: the default ``git_project`` is shared across
+    # tasks; once task 1 dirties the tree (required for E3 to pass) task
+    # 2's ``prepare_task_branch`` would trip on the dirty state. We seed
+    # a dedicated repo per task and point both the project ``local_path``
+    # and ``FAKE_CLAUDE_TOUCH`` at distinct dirs so every adapter run
+    # writes its artifact into its own workspace.
+    import subprocess as _sp
+
+    repos: list[Path] = []
+    for idx in range(3):
+        d = tmp_path / f"repo-{idx}"
+        d.mkdir()
+        _sp.run(["git", "init", "-b", "main"], cwd=d, check=True, capture_output=True)
+        _sp.run(["git", "config", "user.email", "niwa@test.local"], cwd=d, check=True)
+        _sp.run(["git", "config", "user.name", "Niwa Test"], cwd=d, check=True)
+        _sp.run(["git", "config", "commit.gpgsign", "false"], cwd=d, check=True)
+        (d / "README.md").write_text("seed\n")
+        _sp.run(["git", "add", "README.md"], cwd=d, check=True, capture_output=True)
+        _sp.run(["git", "commit", "-m", "init"], cwd=d, check=True, capture_output=True)
+        repos.append(d)
+
+    # Every task uses its own project rooted on a dedicated repo.
+    first_project = _make_project(session, local_path=repos[0], slug="repo-0")
+    second_project = _make_project(session, local_path=repos[1], slug="repo-1")
+    third_project = _make_project(session, local_path=repos[2], slug="repo-2")
+    first = _make_task(session, first_project, title="first")
+    second = _make_task(session, second_project, title="second")
+    third = _make_task(session, third_project, title="third")
+
+    # The touch path is resolved relative to each run's cwd, so a single
+    # ``touch-<pid>.txt`` placed via the adapter cwd lands inside each
+    # repo in turn.
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "touch-{pid}.txt")
 
     assert process_pending(session) == 3
 
@@ -208,7 +250,12 @@ def test_process_pending_skips_non_queued(session: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_writes_expected_events(session: Session, git_project: Path) -> None:
+def test_run_writes_expected_events(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
     project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="events")
 
@@ -230,7 +277,12 @@ def test_run_writes_expected_events(session: Session, git_project: Path) -> None
     assert "result" in types
 
 
-def test_task_writes_status_transitions(session: Session, git_project: Path) -> None:
+def test_task_writes_status_transitions(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
     project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="transitions")
 
