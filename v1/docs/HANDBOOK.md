@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-11a)
+## Layout actual (tras PR-V1-11b)
 
 ```
 v1/
@@ -21,7 +21,7 @@ v1/
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
 │   │   ├── executor/           # daemon (polling, pipeline, git workspace,
 │   │   │                       # CLI entrypoint)
-│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a)
+│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a/11b)
 │   │   └── api/                # HTTP routers + get_session dep
 │   ├── alembic.ini
 │   ├── migrations/             # env.py con render_as_batch=True
@@ -478,16 +478,17 @@ monousuario).
 end-to-end. `test_adapter.py` y `test_runs_api.py` migrados a
 `git_project`.
 
-## Verification core (PR-V1-11a)
+## Verification core (PR-V1-11a / extendido en 11b)
 
 Implementación inicial del contrato **evidence-based** del SPEC §5. Un
 run ya no se marca `done` solo porque el CLI devolvió `exit 0`: pasa
 por un verifier que corre los chequeos E1..E5 en orden y deja la
 evidencia serializada en `run.verification_json`.
 
-**11a cubre E1 + E2 reales + esqueleto para E3/E4/E5 (stubs).** 11b
-añade E3 (artefactos en cwd) + E4 (tool_use paths fuera de cwd); 11c
-añade E5 (tests del proyecto).
+**Estado actual tras 11b:** E1 + E2 + E3 + E4 son reales; E5 sigue
+stub. 11c reemplazará E5 con el runner de tests del proyecto. La
+forma del `VerificationResult` y la integración en el executor no
+cambiaron entre 11a y 11b — sólo se rellenan slots del `evidence`.
 
 ### Módulo `app/verification/`
 
@@ -500,11 +501,17 @@ añade E5 (tests del proyecto).
   que acaba en `?` → `question_unanswered`, `tool_use` sin
   `tool_result` tras → `tool_use_incomplete`, otra cosa o vacío →
   `empty_stream`.
+- `artifacts.py` — E3+E4 (PR-V1-11b).
+  `check_artifacts_in_cwd(cwd, evidence)` shellea `git status
+  --porcelain`; ≥1 línea → pasa. `check_no_artifacts_outside_cwd(
+  session, run, cwd, evidence)` replay `run_events` filtrando
+  `event_type == "tool_use"` con `name ∈ {Write, Edit, MultiEdit,
+  NotebookEdit}` y chequea que todo `file_path` absoluto sea subpath
+  del `cwd.resolve()`.
 - `core.py` — orquestador `verify_run(session, run, task, project,
-  cwd, *, adapter_outcome, exit_code)`. Popula `evidence` con los
-  slots E3/E4/E5 (`tests_ran`, `git_available`, `artifact_count`,
-  `tool_use_paths_outside`) como placeholders, corre E1→E2, y
-  cortocircuita al primer fallo.
+  cwd, *, adapter_outcome, exit_code)`. Corre E1 → E2 → E3 → E4 →
+  (E5 stub) y cortocircuita al primer fallo. El campo `tests_ran`
+  sigue en `False` porque E5 no se implementa hasta 11c.
 - `__init__.py` — re-exports `verify_run` + `VerificationResult`.
 
 ### E1 — exit code
@@ -532,9 +539,11 @@ transacción que el `status_changed`.
 
 | adapter_outcome        | verifier                   | run.outcome            | run.status  | task.status |
 |------------------------|----------------------------|------------------------|-------------|-------------|
-| `cli_ok` + E1..E2 OK   | pass                       | `verified`             | `completed` | `done`      |
+| `cli_ok` + E1..E4 OK   | pass                       | `verified`             | `completed` | `done`      |
 | `cli_ok` + E1 fail     | E1                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_ok` + E2 fail     | E2                         | `verification_failed`  | `failed`    | `failed`    |
+| `cli_ok` + E3 fail     | E3                         | `verification_failed`  | `failed`    | `failed`    |
+| `cli_ok` + E4 fail     | E4                         | `verification_failed`  | `failed`    | `failed`    |
 | `cli_nonzero_exit`     | bypass                     | `cli_nonzero_exit`     | `failed`    | `failed`    |
 | `cli_not_found`        | bypass                     | `cli_not_found`        | `failed`    | `failed`    |
 | `timeout`              | bypass                     | `timeout`              | `failed`    | `failed`    |
@@ -549,7 +558,9 @@ el run y la task.
 - E1: `exit_nonzero`, `adapter_failure` (stub — 11a reserva el código;
   el bypass del verifier hace que hoy no se emita).
 - E2: `empty_stream`, `tool_use_incomplete`, `question_unanswered`.
-- E3/E4/E5: vendrán en 11b/11c.
+- E3: `no_artifacts`.
+- E4: `artifacts_outside_cwd`.
+- E5: vendrá en 11c.
 
 ### Evidence shape (estable)
 
@@ -560,43 +571,112 @@ el run y la task.
   "exit_ok": true,
   "significant_event_count": 3,
   "stream_terminated_cleanly": true,
-  "tests_ran": false,        // stub — 11c
-  "git_available": null,     // stub — 11b
-  "artifact_count": null,    // stub — 11b
-  "tool_use_paths_outside": []  // stub — 11b
+  "git_available": true,
+  "artifacts_count": 2,
+  "artifacts_outside_cwd": false,
+  "tool_use_writes_scanned": 1,
+  "tool_use_writes_absolute": 0,
+  "tests_ran": false          // stub — 11c
 }
 ```
 
-Ante fallo incluye también `error_code`. La forma no varía entre
-11a/11b/11c — solo se rellenan slots.
+Ante fallo incluye también `error_code`. E4 añade
+`offending_paths: ["/tmp/leak.txt"]` con el primer offender cuando
+falla; E3 deja `artifacts_count: 0`. La forma se amplía en 11c con los
+campos de E5 sin quitar los actuales.
 
 ### Tests
 
 - `tests/verification/test_stream.py` — 4 casos unitarios del E2
   analyzer (result/success, question trailing, tool_use trailing,
   empty stream).
-- `tests/test_verification_integration.py` — 2 casos E2E (happy con
+- `tests/verification/test_artifacts.py` — 4 casos unitarios de E3+E4
+  (dirty cwd pasa, clean cwd falla `no_artifacts`, path absoluto fuera
+  falla `artifacts_outside_cwd`, cwd no-git skip graceful).
+- `tests/test_verification_integration.py` — 3 casos E2E: happy con
   `FAKE_CLAUDE_TOUCH` + stream `result/success` → `verified`; sad con
   assistant trailing `?` → `verification_failed` +
-  `TaskEvent(kind='verification')`).
+  `TaskEvent(kind='verification')`; sad con `tool_use` Write a
+  `/tmp/...` → `verification_failed` con
+  `error_code="artifacts_outside_cwd"`.
 - Legacy migrado: `test_adapter.py`, `test_executor.py`,
   `test_runs_api.py` — asserts que miraban el outcome final del Run
-  pasan de `cli_ok` a `verified`. Los que inspeccionan
+  pasan de `cli_ok` a `verified`. Los happy-path ahora necesitan
+  `FAKE_CLAUDE_TOUCH` (una vez por run; `{pid}` substituido por el
+  pid del fake) para que E3 vea dirty tree. El
+  `test_process_pending_multiple_tasks` usa un `git_project` por
+  task (no comparte el fixture global) porque una vez que E3 corre
+  `git status --porcelain`, el árbol sucio de la 1ª task rompería
+  `prepare_task_branch` en la 2ª. Los que inspeccionan
   `adapter.outcome` (interna) **no** cambian: siguen siendo `cli_ok`
   porque el adapter lo escribe antes del verify.
-- Fake CLI extendido: nueva env `FAKE_CLAUDE_TOUCH` (lista separada
-  por `:`, substituye `{pid}`) para que el fake escriba artefactos
-  durante la ejecución — necesario para 11b (E3 requiere tree dirty)
-  pero ya disponible aquí para no tocar el fake dos veces.
+- Fake CLI (de 11a): env `FAKE_CLAUDE_TOUCH` (lista separada por `:`,
+  substituye `{pid}`) para que el fake escriba artefactos durante la
+  ejecución.
 
-### Evolución esperada (11b/11c)
+### Evolución esperada (11c)
 
-- **11b** añade lógica a los slots `git_available`, `artifact_count`,
-  `tool_use_paths_outside` usando `git status --porcelain` + scan del
-  stream por tool_use con paths absolutos fuera del cwd.
-- **11c** añade `tests_ran` / `tests_passed` corriendo el runner del
-  proyecto (`pyproject.toml` pytest, `package.json` test, Makefile
-  test) cuando `project.kind ∈ (library, web-deployable)`.
+**11c** añade `tests_ran` / `tests_passed` corriendo el runner del
+proyecto (`pyproject.toml` pytest, `package.json` test, Makefile
+test) cuando `project.kind ∈ (library, web-deployable)`. La forma
+de `VerificationResult` y los outcomes del run no cambian; sólo se
+añaden slots al `evidence`.
+
+## Verification artifacts (PR-V1-11b)
+
+### Diseño E3 — `check_artifacts_in_cwd`
+
+Un único `subprocess.run(["git", "status", "--porcelain"], cwd=cwd,
+check=True, capture_output=True, text=True)` sobre la cwd del adapter
+(= `project.local_path`, ya verificada como repo limpio por el
+workspace prep en 11-08). Contamos líneas no vacías; `≥1` → pasa con
+`evidence.artifacts_count = N`. `0` → `error_code="no_artifacts"`.
+
+Si el subprocess falla con `fatal: not a git repository` (o `git` no
+está en PATH), **skip graceful**: `evidence.git_available = False` y
+devolvemos `True` sin emitir `error_code`. Esto evita romper runs en
+proyectos `kind=script` que aún no estén versionados. 11c usará ese
+flag para decidir si puede asumir repo git al chequear E5.
+
+### Diseño E4 — `check_no_artifacts_outside_cwd`
+
+Replay de los `RunEvent` del run con
+`event_type="tool_use"`, ordenados por `id`. Para cada payload:
+
+1. Filtra `payload.name ∈ {Write, Edit, MultiEdit, NotebookEdit}`.
+   `Bash` queda fuera — ver "known limitations" abajo.
+2. Extrae `file_path` de `payload.input.file_path`. Fallback para
+   `NotebookEdit`: `input.path` o `input.notebook_path`.
+3. Si `file_path` es relativo → se asume relativo a la cwd del
+   adapter → acepta.
+4. Si absoluto: `Path(file_path).resolve().relative_to(cwd.resolve())`.
+   Raises `ValueError` → fail `artifacts_outside_cwd`,
+   `evidence.offending_paths = [file_path]` (primer offender, raw sin
+   resolver para que coincida con el payload del stream).
+
+Contadores en evidence: `tool_use_writes_scanned` (todos los writes
+candidatos), `tool_use_writes_absolute` (sólo los absolutos).
+
+### Known limitations (aceptadas, MVP)
+
+- **`Bash` tool_use**: no se detectan escrituras vía shell. Parsear
+  shell arbitrario es overkill para el MVP y fácilmente evadible con
+  `sh -c`. 11c o posterior podrá añadir snapshot hash del cwd si
+  resulta necesario en la práctica.
+- **Symlinks**: `Path.resolve()` los sigue. Si la cwd es un symlink
+  apuntando fuera de su parent, o el CLI escribe a un symlink que
+  apunta fuera del cwd, el juicio final depende del resolve. No
+  reintentamos con lógica especial.
+- **Paths relativos a raíces ajenas (`~`, `$HOME`)**: `Path.is_absolute`
+  los reporta como no absolutos, así que los aceptamos. Claude Code
+  emite paths relativos a la cwd que le pasamos, así que esto sólo
+  afectaría si el adapter futuro se saltara esa convención.
+- **Submodules en `git status --porcelain`**: cada submódulo cuenta
+  como una línea. Aceptable para "existen artefactos".
+- **Commit futuro**: si algún día el finalize commitea automáticamente,
+  el árbol quedaría limpio y E3 fallaría. Hoy el adapter no commitea
+  — cuando esto cambie, E3 deberá mirar también
+  `git log HEAD_original..HEAD`. Documentado para 11c+.
 
 Ambos reemplazan los placeholders con valores reales y añaden nuevos
 `error_code` sin modificar la forma de `VerificationResult` ni la
