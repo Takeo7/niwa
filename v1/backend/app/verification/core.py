@@ -1,19 +1,21 @@
-"""Verification orchestrator (PR-V1-11a).
+"""Verification orchestrator (PR-V1-11a, PR-V1-11b).
 
 Runs SPEC §5 evidence checks in order, short-circuiting on the first
-failure. **11a scope:** E1 (exit code) + E2 (stream) are real; E3/E4/E5
-are stubs that pass vacuously — evidence carries placeholder slots so
-11b/11c only need to add logic, not structure.
+failure. **Current scope:** E1 (exit code) + E2 (stream) + E3 (artifact
+presence in cwd) + E4 (no writes outside cwd) are real. E5 (project
+tests) is still a vacuous stub — 11c wires it.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from ..models import Project, Run, RunEvent, Task
+from .artifacts import check_artifacts_in_cwd, check_no_artifacts_outside_cwd
 from .models import VerificationResult
 from .stream import check_stream_termination
 
@@ -67,15 +69,11 @@ def verify_run(
     (``_finalize`` writes them) so they come in as explicit kwargs.
     """
 
-    # Stable evidence shape: E1+E2 are real; E3/E4/E5 slots are
-    # placeholders that 11b/11c will populate with real values.
+    # Stable evidence shape: E1+E2+E3+E4 are real; only E5 is a stub.
     evidence: dict[str, Any] = {
         "adapter_outcome": adapter_outcome,
         "exit_code": exit_code,
         "tests_ran": False,
-        "git_available": None,
-        "artifact_count": None,
-        "tool_use_paths_outside": [],
     }
 
     e1 = _e1_exit_code(adapter_outcome, exit_code)
@@ -94,8 +92,17 @@ def verify_run(
         evidence["error_code"] = e2
         return VerificationResult(False, "verification_failed", e2, evidence)
 
-    # E3/E4/E5 — stubs pass vacuously for 11a.
-    _ = project, task, cwd
+    cwd_path = Path(cwd)
+    if not check_artifacts_in_cwd(cwd_path, evidence):
+        code = evidence.get("error_code", "no_artifacts")
+        return VerificationResult(False, "verification_failed", code, evidence)
+
+    if not check_no_artifacts_outside_cwd(session, run, cwd_path, evidence):
+        code = evidence.get("error_code", "artifacts_outside_cwd")
+        return VerificationResult(False, "verification_failed", code, evidence)
+
+    # E5 — project tests: still a vacuous stub until 11c.
+    _ = project, task
     return VerificationResult(True, "verified", None, evidence)
 
 
