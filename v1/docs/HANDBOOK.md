@@ -502,12 +502,17 @@ cambiaron entre 11a y 11b — sólo se rellenan slots del `evidence`.
   `tool_result` tras → `tool_use_incomplete`, otra cosa o vacío →
   `empty_stream`.
 - `artifacts.py` — E3+E4 (PR-V1-11b).
-  `check_artifacts_in_cwd(cwd, evidence)` shellea `git status
-  --porcelain`; ≥1 línea → pasa. `check_no_artifacts_outside_cwd(
-  session, run, cwd, evidence)` replay `run_events` filtrando
-  `event_type == "tool_use"` con `name ∈ {Write, Edit, MultiEdit,
-  NotebookEdit}` y chequea que todo `file_path` absoluto sea subpath
-  del `cwd.resolve()`.
+  `check_artifacts_in_cwd(cwd, evidence)` pre-valida que la cwd exista
+  (si no → `error_code="cwd_missing"` fail duro) y después shellea
+  `git status --porcelain`; ≥1 línea → pasa.
+  `check_no_artifacts_outside_cwd(session, run, cwd, evidence)` replay
+  `run_events` inspeccionando **ambos** formatos de `tool_use` que
+  emite Claude: top-level `event_type="tool_use"` (legacy / fake CLI)
+  y bloques embedded en `event_type="assistant"` →
+  `payload.message.content[]` con `type=="tool_use"` (la forma real
+  del CLI tras `FIX-20260420` en v0.2). Filtra `name ∈ {Write, Edit,
+  MultiEdit, NotebookEdit}` y chequea que todo `file_path` absoluto
+  sea subpath del `cwd.resolve()`.
 - `core.py` — orquestador `verify_run(session, run, task, project,
   cwd, *, adapter_outcome, exit_code)`. Corre E1 → E2 → E3 → E4 →
   (E5 stub) y cortocircuita al primer fallo. El campo `tests_ran`
@@ -558,7 +563,8 @@ el run y la task.
 - E1: `exit_nonzero`, `adapter_failure` (stub — 11a reserva el código;
   el bypass del verifier hace que hoy no se emita).
 - E2: `empty_stream`, `tool_use_incomplete`, `question_unanswered`.
-- E3: `no_artifacts`.
+- E3: `no_artifacts`, `cwd_missing` (la cwd del run no existe —
+  normalmente bug del executor/operator, no se skipea).
 - E4: `artifacts_outside_cwd`.
 - E5: vendrá en 11c.
 
@@ -590,9 +596,12 @@ campos de E5 sin quitar los actuales.
 - `tests/verification/test_stream.py` — 4 casos unitarios del E2
   analyzer (result/success, question trailing, tool_use trailing,
   empty stream).
-- `tests/verification/test_artifacts.py` — 4 casos unitarios de E3+E4
+- `tests/verification/test_artifacts.py` — 6 casos unitarios de E3+E4
   (dirty cwd pasa, clean cwd falla `no_artifacts`, path absoluto fuera
-  falla `artifacts_outside_cwd`, cwd no-git skip graceful).
+  top-level `tool_use` falla `artifacts_outside_cwd`, cwd no-git skip
+  graceful, cwd inexistente falla `cwd_missing`, `tool_use` embedded
+  en `assistant.message.content[]` con path fuera falla
+  `artifacts_outside_cwd` — regresión del blocker del codex review).
 - `tests/test_verification_integration.py` — 3 casos E2E: happy con
   `FAKE_CLAUDE_TOUCH` + stream `result/success` → `verified`; sad con
   assistant trailing `?` → `verification_failed` +
@@ -626,11 +635,19 @@ añaden slots al `evidence`.
 
 ### Diseño E3 — `check_artifacts_in_cwd`
 
-Un único `subprocess.run(["git", "status", "--porcelain"], cwd=cwd,
-check=True, capture_output=True, text=True)` sobre la cwd del adapter
-(= `project.local_path`, ya verificada como repo limpio por el
-workspace prep en 11-08). Contamos líneas no vacías; `≥1` → pasa con
-`evidence.artifacts_count = N`. `0` → `error_code="no_artifacts"`.
+Pre-check: si la cwd no existe como directorio, **fail duro** con
+`error_code="cwd_missing"` + `evidence.cwd_exists=False`. El
+`FileNotFoundError` de `subprocess.run` es ambiguo (cubre tanto "git
+no instalado" como "cwd no existe"), así que sin el pre-check un cwd
+roto se confundía con un skip graceful y pasaba vacuamente. Un cwd
+inexistente siempre apunta a bug del executor/operator.
+
+Si la cwd existe: un único `subprocess.run(["git", "status",
+"--porcelain"], cwd=cwd, check=True, capture_output=True, text=True)`
+sobre la cwd del adapter (= `project.local_path`, ya verificada como
+repo limpio por el workspace prep en 11-08). Contamos líneas no
+vacías; `≥1` → pasa con `evidence.artifacts_count = N`. `0` →
+`error_code="no_artifacts"`.
 
 Si el subprocess falla con `fatal: not a git repository` (o `git` no
 está en PATH), **skip graceful**: `evidence.git_available = False` y
@@ -640,8 +657,23 @@ flag para decidir si puede asumir repo git al chequear E5.
 
 ### Diseño E4 — `check_no_artifacts_outside_cwd`
 
-Replay de los `RunEvent` del run con
-`event_type="tool_use"`, ordenados por `id`. Para cada payload:
+Replay de los `RunEvent` del run, ordenados por `id`. El helper
+interno `_iter_tool_use_payloads(session, run)` produce payloads
+desde **dos orígenes**:
+
+- **Top-level**: filas con `event_type == "tool_use"` — la forma
+  legacy que emiten `fake_claude.py` y algunos tests unitarios.
+  Yield directo del `payload`.
+- **Embedded**: filas con `event_type == "assistant"` cuyo
+  `payload.message.content` es una lista; para cada bloque con
+  `type == "tool_use"` yield del propio bloque. Este es el formato
+  **canónico** que emite el CLI real de Claude, documentado en v0.2
+  `FIX-20260420` (`niwa-app/backend/backend_adapters/claude_code.py`).
+  Omitir este camino era el bug que codex marcó como blocker en el
+  review de 11b: en producción E4 no veía ninguna escritura y pasaba
+  vacuamente.
+
+Para cada payload (venga del origen que venga), misma lógica:
 
 1. Filtra `payload.name ∈ {Write, Edit, MultiEdit, NotebookEdit}`.
    `Bash` queda fuera — ver "known limitations" abajo.
@@ -655,7 +687,8 @@ Replay de los `RunEvent` del run con
    resolver para que coincida con el payload del stream).
 
 Contadores en evidence: `tool_use_writes_scanned` (todos los writes
-candidatos), `tool_use_writes_absolute` (sólo los absolutos).
+candidatos de ambos orígenes combinados), `tool_use_writes_absolute`
+(sólo los absolutos).
 
 ### Known limitations (aceptadas, MVP)
 
