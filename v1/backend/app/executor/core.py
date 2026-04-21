@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..models import Project, Run, RunEvent, Task, TaskEvent
+from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
 
 
@@ -144,11 +145,11 @@ def run_adapter(session: Session, task: Task) -> Run:
             for event in adapter.iter_events():
                 _write_event(session, run, event)
             adapter.wait()
-            outcome = adapter.outcome or "cli_ok"
+            adapter_outcome = adapter.outcome or "cli_ok"
             exit_code = adapter.exit_code
         except Exception as exc:  # noqa: BLE001 — must always settle the run
             logger.exception("adapter crashed for task_id=%s", task.id)
-            outcome = "adapter_exception"
+            adapter_outcome = "adapter_exception"
             exit_code = None
             session.add(
                 RunEvent(
@@ -157,6 +158,7 @@ def run_adapter(session: Session, task: Task) -> Run:
                     payload_json=json.dumps({"reason": str(exc)[:500]}),
                 )
             )
+            session.commit()
     finally:
         # Guarantee the subprocess is reaped even if ``iter_events`` or
         # ``_write_event`` raised before ``adapter.wait()`` ran — otherwise
@@ -164,7 +166,27 @@ def run_adapter(session: Session, task: Task) -> Run:
         # long-running daemon.
         adapter.close()
 
-    _finalize(session, task, run, outcome=outcome, exit_code=exit_code)
+    # PR-V1-11a: adapter failures bypass the verifier (outcome flows
+    # through unchanged); only ``cli_ok`` runs the evidence checks.
+    if adapter_outcome != "cli_ok":
+        _finalize(session, task, run, outcome=adapter_outcome, exit_code=exit_code)
+        session.refresh(run)
+        return run
+
+    result = verify_run(
+        session, run, task, project,
+        cwd=artifact_root or ".",
+        adapter_outcome=adapter_outcome,
+        exit_code=exit_code,
+    )
+    run.verification_json = json.dumps(result.evidence)
+    session.commit()
+    _finalize(
+        session, task, run,
+        outcome="verified" if result.passed else result.outcome,
+        exit_code=exit_code,
+        error_code=None if result.passed else result.error_code,
+    )
     session.refresh(run)
     return run
 
@@ -214,9 +236,11 @@ def _finalize(
     *,
     outcome: str,
     exit_code: int | None,
+    error_code: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
-    success = outcome == "cli_ok" and (exit_code == 0)
+    # PR-V1-11a: only ``verified`` is success; all other outcomes fail.
+    success = outcome == "verified"
 
     run.finished_at = now
     run.exit_code = exit_code
@@ -240,6 +264,13 @@ def _finalize(
             payload_json=json.dumps({"from": from_status, "to": new_status}),
         )
     )
+    if error_code is not None:
+        session.add(TaskEvent(
+            task_id=task.id,
+            kind="verification",
+            message=None,
+            payload_json=json.dumps({"error_code": error_code, "outcome": outcome}),
+        ))
     session.commit()
 
 
