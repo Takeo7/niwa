@@ -83,10 +83,16 @@ def prepare_task_branch(local_path: str, task: "Task") -> str:
         ).returncode
         == 0
     )
-    _run_git(
-        ["checkout", branch] if exists else ["checkout", "-b", branch],
-        cwd=local_path,
-    )
+    if exists:
+        # Reuse path — honour the previous state of the task branch.
+        _run_git(["checkout", branch], cwd=local_path)
+    else:
+        # New branch — always fork from the repo's default branch so
+        # sibling Niwa branches can't leak commits into this task
+        # (smoke 2026-04-22, PR-V1-24).
+        default_branch = _detect_default_branch(local_path)
+        _run_git(["checkout", default_branch], cwd=local_path)
+        _run_git(["checkout", "-b", branch], cwd=local_path)
     return branch
 
 
