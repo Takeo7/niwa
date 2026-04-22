@@ -84,17 +84,25 @@ class ClaudeCodeAdapter:
         prompt: str,
         timeout: float = _DEFAULT_TIMEOUT,
         extra_args: list[str] | None = None,
+        resume_handle: str | None = None,
     ) -> None:
         self._cli_path = cli_path
         self._cwd = cwd
         self._prompt = prompt
         self._timeout = timeout
         self._extra_args = list(extra_args or [])
+        # PR-V1-22: when non-None, ``iter_events`` appends
+        # ``--resume <handle>`` to the CLI argv so Claude rehydrates the
+        # prior conversation from the stored session instead of starting
+        # a fresh context. Captured on the instance so the argv stays
+        # reproducible if ``iter_events`` is called again.
+        self._resume_handle = resume_handle
         self._proc: subprocess.Popen[bytes] | None = None
         self._stderr_buf = bytearray()
         self._stderr_thread: threading.Thread | None = None
         self._outcome: str | None = None
         self._exit_code: int | None = None
+        self._session_id: str | None = None
 
     @property
     def outcome(self) -> str | None:
@@ -103,6 +111,18 @@ class ClaudeCodeAdapter:
     @property
     def exit_code(self) -> int | None:
         return self._exit_code
+
+    @property
+    def session_id(self) -> str | None:
+        """Session id extracted from the first ``system``/``init`` event.
+
+        Populated lazily inside ``iter_events`` once the CLI announces the
+        session; stays ``None`` when the run died before emitting the
+        init frame or the CLI is missing. Callers persist it on the
+        ``Run`` so the next attempt can resume via ``--resume``.
+        """
+
+        return self._session_id
 
     def iter_events(self) -> Iterator[AdapterEvent]:
         """Spawn the CLI; yield one event per JSON line of stdout.
@@ -119,6 +139,8 @@ class ClaudeCodeAdapter:
             return
 
         cmd = [self._cli_path, *self.DEFAULT_ARGS, *self._extra_args]
+        if self._resume_handle:
+            cmd += ["--resume", self._resume_handle]
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -168,6 +190,7 @@ class ClaudeCodeAdapter:
                         event = _parse_line(bytes(buf[:nl]))
                         del buf[: nl + 1]
                         if event is not None:
+                            self._capture_session_id(event)
                             yield event
                 elif proc.poll() is not None:
                     rest = proc.stdout.read()
@@ -180,6 +203,7 @@ class ClaudeCodeAdapter:
         if buf:
             event = _parse_line(bytes(buf))
             if event is not None:
+                self._capture_session_id(event)
                 yield event
 
         if deadline_hit:
@@ -224,6 +248,24 @@ class ClaudeCodeAdapter:
                 self._exit_code = self._proc.returncode
         if self._stderr_thread is not None:
             self._stderr_thread.join(timeout=1.0)
+
+    def _capture_session_id(self, event: AdapterEvent) -> None:
+        """Remember the session id from the first ``system``/``init`` frame.
+
+        Later inits (Claude can re-emit on resume) are ignored so the
+        stored handle always reflects the CLI's first announcement.
+        """
+
+        if self._session_id is not None:
+            return
+        if event.kind != "system":
+            return
+        payload = event.payload
+        if payload.get("subtype") != "init":
+            return
+        sid = payload.get("session_id")
+        if isinstance(sid, str) and sid:
+            self._session_id = sid
 
     def _start_stderr_drain(self, proc: subprocess.Popen[bytes]) -> None:
         if proc.stderr is None:
