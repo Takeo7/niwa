@@ -480,6 +480,17 @@ de verdad, la implementación aplica 30.
 responsable de dejar el repo limpio. Si la rama ya existe (reintento),
 se hace `git checkout` sin reset — los commits previos se preservan.
 
+**Branch base (PR-V1-24)** — para una **rama nueva**, el módulo hace
+`git checkout <default>` *antes* del `git checkout -b`, de modo que la
+task siempre parte limpia desde la default branch del repo y no hereda
+commits de ramas hermanas de Niwa. La default branch se resuelve por
+`_detect_default_branch(local_path)` en este orden: `git symbolic-ref
+refs/remotes/origin/HEAD` → `refs/heads/main` → `refs/heads/master` →
+primera rama listada por `git branch --format=%(refname:short)` →
+`GitWorkspaceError("no default branch detected")`. La rama
+**existente** mantiene su estado previo (idempotencia): solo se hace
+`git checkout <branch>` sin tocar la default.
+
 **Flujo en `run_adapter`** — crea `Run` + `started`, llama
 `prepare_task_branch`. En éxito persiste `task.branch_name` y spawnea
 el adapter. En `GitWorkspaceError` escribe `RunEvent(error,

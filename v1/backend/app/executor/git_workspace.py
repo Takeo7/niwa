@@ -83,11 +83,62 @@ def prepare_task_branch(local_path: str, task: "Task") -> str:
         ).returncode
         == 0
     )
-    _run_git(
-        ["checkout", branch] if exists else ["checkout", "-b", branch],
-        cwd=local_path,
-    )
+    if exists:
+        # Reuse path — honour the previous state of the task branch.
+        _run_git(["checkout", branch], cwd=local_path)
+    else:
+        # New branch — always fork from the repo's default branch so
+        # sibling Niwa branches can't leak commits into this task
+        # (smoke 2026-04-22, PR-V1-24).
+        default_branch = _detect_default_branch(local_path)
+        _run_git(["checkout", default_branch], cwd=local_path)
+        _run_git(["checkout", "-b", branch], cwd=local_path)
     return branch
+
+
+def _detect_default_branch(local_path: str) -> str:
+    """Return the repo's default branch name.
+
+    Detection order: ``origin/HEAD`` symbolic-ref, then local ``main``,
+    then local ``master``, then the first local branch listed by
+    ``git branch``. Raises :class:`GitWorkspaceError` if none match —
+    the caller has no reasonable base to branch from.
+    """
+
+    head = subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        cwd=local_path,
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode == 0:
+        ref = head.stdout.strip()
+        if ref:
+            return ref.rsplit("/", 1)[-1]
+
+    for candidate in ("main", "master"):
+        probe = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{candidate}"],
+            cwd=local_path,
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0:
+            return candidate
+
+    listing = subprocess.run(
+        ["git", "branch", "--format=%(refname:short)"],
+        cwd=local_path,
+        capture_output=True,
+        text=True,
+    )
+    if listing.returncode == 0:
+        for line in listing.stdout.splitlines():
+            name = line.strip()
+            if name:
+                return name
+
+    raise GitWorkspaceError("no default branch detected")
 
 
 def _run_git(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
@@ -112,4 +163,5 @@ __all__ = [
     "GitWorkspaceError",
     "build_branch_name",
     "prepare_task_branch",
+    "_detect_default_branch",
 ]
