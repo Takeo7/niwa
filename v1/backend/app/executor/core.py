@@ -249,8 +249,8 @@ def process_pending(session: Session) -> int:
     adapter. The verdict branches the pipeline three ways:
 
     * ``execute`` → fall through to the existing ``run_adapter`` path.
-    * ``split``   → materialize the subtasks, close the parent ``done``
-      without ever spawning the adapter.
+    * ``split``   → record subtasks; parent stays ``running`` and is
+      promoted when all children reach a terminal state (PR-V1-23).
     * ``TriageError`` → synthesize a failed run with
       ``outcome="triage_failed"`` so the UI has something to render.
     """
