@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -331,3 +332,54 @@ def test_adapter_close_is_safe_when_spawn_never_happened(
     # No Popen → close() must still be safe.
     adapter.close()
     adapter.close()
+
+
+def test_default_args_include_dangerously_skip_permissions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR-V1-20: the adapter must always pass --dangerously-skip-permissions.
+
+    Without the flag, ``claude -p --output-format stream-json`` asks for
+    interactive approval on every Write/Edit/Bash tool use; stream-json has
+    no approval channel so the requests are auto-denied and the run ends
+    with no artifacts. Guarded here as both a class-level contract on
+    ``DEFAULT_ARGS`` and an end-to-end assertion that the spawned ``cmd``
+    carries the flag.
+    """
+
+    assert "--dangerously-skip-permissions" in ClaudeCodeAdapter.DEFAULT_ARGS
+
+    captured: dict[str, list[str]] = {}
+
+    real_popen = subprocess.Popen
+
+    def _capturing_popen(cmd, *args, **kwargs):
+        captured["cmd"] = list(cmd)
+        return real_popen(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _capturing_popen)
+
+    cli = _fake_cli_cmd()
+    script = _write_script(
+        tmp_path / "script.jsonl",
+        [{"type": "result", "exit_code": 0}],
+    )
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", cli)
+    monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
+    monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+
+    adapter = ClaudeCodeAdapter(
+        cli_path=cli,
+        cwd=str(tmp_path),
+        prompt="hi",
+        timeout=5.0,
+    )
+    try:
+        list(adapter.iter_events())
+        adapter.wait()
+    finally:
+        adapter.close()
+
+    assert "cmd" in captured, "Popen was not invoked"
+    assert "--dangerously-skip-permissions" in captured["cmd"]

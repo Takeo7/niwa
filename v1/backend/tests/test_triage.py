@@ -190,3 +190,33 @@ def test_decision_plain_json_without_fence(monkeypatch, tmp_path):
     assert decision.kind == "execute"
     assert decision.subtasks == []
     assert decision.rationale == "ok"
+
+
+def test_triage_adapter_spawns_with_permissions_flag(monkeypatch, tmp_path):
+    """PR-V1-20: the adapter that ``triage_task`` spawns must carry
+    ``--dangerously-skip-permissions``.
+
+    Triage reuses ``ClaudeCodeAdapter`` by reference, so the real assertion
+    is that (a) the symbol imported inside ``app.triage`` is the exact
+    same class as the one exported from ``app.adapters.claude_code``, and
+    (b) that class's ``DEFAULT_ARGS`` contains the flag. If either
+    invariant breaks, the live adapter spawned in production loses the
+    flag — reproducing the 2026-04-22 smoke failure where every tool_use
+    was denied.
+    """
+
+    from app.adapters.claude_code import ClaudeCodeAdapter
+    import app.triage as triage_mod
+
+    assert triage_mod.ClaudeCodeAdapter is ClaudeCodeAdapter
+    assert "--dangerously-skip-permissions" in ClaudeCodeAdapter.DEFAULT_ARGS
+
+    # Sanity: the args tuple is actually what an instance would receive
+    # without any caller overrides.
+    adapter = ClaudeCodeAdapter(
+        cli_path=None,
+        cwd=str(tmp_path),
+        prompt="",
+        timeout=1.0,
+    )
+    assert "--dangerously-skip-permissions" in adapter.DEFAULT_ARGS
