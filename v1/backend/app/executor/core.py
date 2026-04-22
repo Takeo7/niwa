@@ -285,14 +285,18 @@ def process_pending(session: Session) -> int:
 
 
 def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None:
-    """Materialize subtasks, mark parent ``done``, and log the split event.
+    """Materialize subtasks and log the split event; parent stays ``running``.
 
     SPEC §3 does not allow ``triage_split`` in the ``task_events.kind``
     enum, so the marker rides inside a ``kind="message"`` payload —
     this is the Opción B resolution agreed for 12b.
+
+    PR-V1-23: the parent is NOT closed here. It stays ``running`` and
+    is promoted to its aggregated terminal state by
+    ``_maybe_promote_parent`` once every subtask has reached a
+    terminal status.
     """
 
-    now = datetime.now(timezone.utc)
     subtasks: list[Task] = []
     for title in decision.subtasks:
         sub = Task(
@@ -306,10 +310,6 @@ def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None
         subtasks.append(sub)
     session.flush()  # populate sub.id for the payload below
 
-    from_status = task.status
-    task.status = "done"
-    task.completed_at = now
-
     session.add(
         TaskEvent(
             task_id=task.id,
@@ -322,14 +322,6 @@ def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None
                     "rationale": decision.rationale,
                 }
             ),
-        )
-    )
-    session.add(
-        TaskEvent(
-            task_id=task.id,
-            kind="status_changed",
-            message=None,
-            payload_json=json.dumps({"from": from_status, "to": "done"}),
         )
     )
     session.commit()
