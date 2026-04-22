@@ -14,8 +14,9 @@ Signals (order of priority, PR-V1-21b):
    ``tool_name=="AskUserQuestion"`` → same.
 3. Walk back to the last ``assistant`` (real CLI always ends on
    ``result``, so the last semantic frame is not load-bearing).
-   Empty text → ``("tool_use_incomplete", None)``. Text ends with
-   ``?`` → ``("needs_input", text)``. Otherwise ``(None, None)``.
+   Empty text (only ``tool_use``) → ``("tool_use_incomplete", None)``.
+   Text ends with ``?`` / ``?`` **or** any ``\\n\\n``-split paragraph
+   does → ``("needs_input", text)``. Otherwise ``(None, None)``.
 
 No semantic events or no ``assistant`` → ``("empty_stream", None)``.
 """
@@ -26,6 +27,7 @@ from typing import Any
 
 
 _LIFECYCLE = {"started", "completed", "failed", "error"}
+_QUESTION_MARKS = ("?", "？")
 
 
 def _assistant_text(payload: dict[str, Any]) -> str:
@@ -82,6 +84,16 @@ def _find_ask_user_question(
         options = first.get("options") if isinstance(first.get("options"), list) else None
         return (question, options)
     return None
+
+
+def _paragraph_ends_with_question(text: str) -> bool:
+    """True if any non-empty ``\\n\\n``-split paragraph ends in ? / ?."""
+
+    for paragraph in text.split("\n\n"):
+        stripped = paragraph.rstrip()
+        if stripped and stripped.endswith(_QUESTION_MARKS):
+            return True
+    return False
 
 
 def _scan_permission_denials(events: list[dict[str, Any]]) -> str | None:
@@ -153,7 +165,11 @@ def check_stream_termination(
     text = _assistant_text(last_assistant)
     if not text:
         return ("tool_use_incomplete", None)
-    if text.rstrip().endswith("?"):
+    trimmed = text.rstrip()
+    if trimmed.endswith(_QUESTION_MARKS):
+        return ("needs_input", text)
+    # Signal 3 — paragraph-level question heuristic (fallback).
+    if _paragraph_ends_with_question(text):
         return ("needs_input", text)
     return (None, None)
 
