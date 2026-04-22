@@ -390,6 +390,13 @@ def _finalize_triage_failure(
     )
     session.commit()
 
+    # PR-V1-23: triage failure also settles a subtask terminally. Without
+    # this hook the parent of a split child that fails triage would be
+    # stranded in ``running`` forever — the very bug parent promotion
+    # exists to prevent, mirrored on the triage path.
+    if task.parent_task_id is not None:
+        _maybe_promote_parent(session, task.parent_task_id)
+
 
 def _last_user_response_text(session: Session, task_id: int) -> str | None:
     """Text of the most recent ``message``/``user_response`` TaskEvent (PR-V1-22)."""
