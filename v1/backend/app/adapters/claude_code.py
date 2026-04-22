@@ -91,11 +91,8 @@ class ClaudeCodeAdapter:
         self._prompt = prompt
         self._timeout = timeout
         self._extra_args = list(extra_args or [])
-        # PR-V1-22: when non-None, ``iter_events`` appends
-        # ``--resume <handle>`` to the CLI argv so Claude rehydrates the
-        # prior conversation from the stored session instead of starting
-        # a fresh context. Captured on the instance so the argv stays
-        # reproducible if ``iter_events`` is called again.
+        # PR-V1-22: non-None → argv gets ``--resume <handle>`` so Claude
+        # rehydrates the prior session instead of starting fresh.
         self._resume_handle = resume_handle
         self._proc: subprocess.Popen[bytes] | None = None
         self._stderr_buf = bytearray()
@@ -114,12 +111,9 @@ class ClaudeCodeAdapter:
 
     @property
     def session_id(self) -> str | None:
-        """Session id extracted from the first ``system``/``init`` event.
-
-        Populated lazily inside ``iter_events`` once the CLI announces the
-        session; stays ``None`` when the run died before emitting the
-        init frame or the CLI is missing. Callers persist it on the
-        ``Run`` so the next attempt can resume via ``--resume``.
+        """``session_id`` from the first ``system``/``init`` frame; ``None``
+        if the CLI died before emitting it. Persisted on the ``Run`` so a
+        later attempt can ``--resume`` the conversation (PR-V1-22).
         """
 
         return self._session_id
@@ -250,20 +244,13 @@ class ClaudeCodeAdapter:
             self._stderr_thread.join(timeout=1.0)
 
     def _capture_session_id(self, event: AdapterEvent) -> None:
-        """Remember the session id from the first ``system``/``init`` frame.
+        """Capture session_id from the first ``system``/``init``; ignore later inits."""
 
-        Later inits (Claude can re-emit on resume) are ignored so the
-        stored handle always reflects the CLI's first announcement.
-        """
-
-        if self._session_id is not None:
+        if self._session_id is not None or event.kind != "system":
             return
-        if event.kind != "system":
+        if event.payload.get("subtype") != "init":
             return
-        payload = event.payload
-        if payload.get("subtype") != "init":
-            return
-        sid = payload.get("session_id")
+        sid = event.payload.get("session_id")
         if isinstance(sid, str) and sid:
             self._session_id = sid
 

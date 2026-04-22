@@ -135,11 +135,9 @@ def run_adapter(session: Session, task: Task) -> Run:
     task.branch_name = branch_name
     session.commit()
 
-    # PR-V1-22: if the task was parked in ``waiting_input`` and the user
-    # just answered, resume the prior Claude session instead of starting
-    # fresh. Both helpers must succeed; missing either (e.g. first run
-    # died before ``system/init``) → fall back to the fresh prompt with
-    # a warning so the task never gets stuck.
+    # PR-V1-22: on a respond-triggered run (user_response event + prior
+    # session_handle), resume the conversation with the user's text as
+    # prompt. Missing either signal → fresh prompt + warning.
     resume_handle: str | None = None
     adapter_prompt = _build_prompt(task)
     user_response = _last_user_response_text(session, task.id)
@@ -148,16 +146,10 @@ def run_adapter(session: Session, task: Task) -> Run:
         if prev_handle is not None:
             resume_handle = prev_handle
             adapter_prompt = user_response
-            logger.info(
-                "resuming task_id=%s via session_handle=%s...",
-                task.id,
-                prev_handle[:8],
-            )
+            logger.info("resuming task_id=%s session=%s...", task.id, prev_handle[:8])
         else:
             logger.warning(
-                "task_id=%s has user_response but no prior session_handle; "
-                "falling back to fresh prompt",
-                task.id,
+                "task_id=%s has user_response but no prior session_handle", task.id,
             )
 
     had_pending_question = task.pending_question is not None
@@ -196,9 +188,8 @@ def run_adapter(session: Session, task: Task) -> Run:
         # long-running daemon.
         adapter.close()
 
-    # PR-V1-22: capture the session handle as soon as the adapter saw
-    # it, even on failed runs. Resume on the next retry depends on the
-    # handle having landed in the DB regardless of run outcome.
+    # PR-V1-22: persist the session handle even on failed runs so a
+    # later respond can resume.
     if adapter.session_id is not None:
         run.session_handle = adapter.session_id
         session.commit()
@@ -408,15 +399,7 @@ def _finalize_triage_failure(
 
 
 def _last_user_response_text(session: Session, task_id: int) -> str | None:
-    """Return the text of the most recent ``message``/``user_response``
-    TaskEvent for ``task_id``, or ``None`` when there is none after the
-    last ``status_changed`` toward ``waiting_input``.
-
-    The executor uses this to detect a resume-on-respond path: a task
-    that was just requeued by ``respond_to_task`` carries a ``message``
-    event whose payload follows the normalized
-    ``{"event":"user_response","text":...}`` schema (PR-V1-22).
-    """
+    """Text of the most recent ``message``/``user_response`` TaskEvent (PR-V1-22)."""
 
     stmt = (
         select(TaskEvent)
@@ -431,18 +414,14 @@ def _last_user_response_text(session: Session, task_id: int) -> str | None:
         payload = json.loads(event.payload_json)
     except ValueError:
         return None
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("event") != "user_response":
+    if not isinstance(payload, dict) or payload.get("event") != "user_response":
         return None
     text_value = payload.get("text")
     return text_value if isinstance(text_value, str) and text_value else None
 
 
 def _last_run_session_handle(session: Session, task_id: int) -> str | None:
-    """Return the ``session_handle`` of the most recent run that recorded
-    one for ``task_id`` — newest first, NULL handles skipped.
-    """
+    """Most recent non-NULL ``session_handle`` for ``task_id`` (PR-V1-22)."""
 
     stmt = (
         select(Run.session_handle)
@@ -514,9 +493,7 @@ def _finalize(
     task.status = new_status
     if success:
         task.completed_at = now
-        # PR-V1-22: clear the stale question once the resumed run
-        # verified cleanly. ``needs_input`` in a later round re-populates
-        # via the branch below.
+        # PR-V1-22: clear stale question once the resumed run verified.
         if had_pending_question:
             task.pending_question = None
     if needs_input:
