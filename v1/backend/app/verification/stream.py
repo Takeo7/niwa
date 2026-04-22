@@ -10,7 +10,9 @@ Signals (order of priority, PR-V1-21b):
    ``assistant.message.content[]``) → ``("needs_input", question)``;
    the optional ``evidence`` kwarg captures ``options`` under
    ``evidence["ask_user_question_options"]``.
-2. Walk back to the last ``assistant`` (real CLI always ends on
+2. Last ``result.permission_denials[]`` with
+   ``tool_name=="AskUserQuestion"`` → same.
+3. Walk back to the last ``assistant`` (real CLI always ends on
    ``result``, so the last semantic frame is not load-bearing).
    Empty text → ``("tool_use_incomplete", None)``. Text ends with
    ``?`` → ``("needs_input", text)``. Otherwise ``(None, None)``.
@@ -82,6 +84,30 @@ def _find_ask_user_question(
     return None
 
 
+def _scan_permission_denials(events: list[dict[str, Any]]) -> str | None:
+    """Last ``result.permission_denials`` entry for AskUserQuestion, if any."""
+
+    for event in reversed(events):
+        if not isinstance(event, dict) or event.get("type") != "result":
+            continue
+        denials = event.get("permission_denials")
+        if not isinstance(denials, list):
+            return None
+        for entry in denials:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("tool_name") != "AskUserQuestion":
+                continue
+            questions = (entry.get("tool_input") or {}).get("questions")
+            if not isinstance(questions, list) or not questions:
+                continue
+            first = questions[0]
+            if isinstance(first, dict) and isinstance(first.get("question"), str):
+                return first["question"]
+        return None
+    return None
+
+
 def check_stream_termination(
     events: list[dict[str, Any]],
     *,
@@ -102,6 +128,11 @@ def check_stream_termination(
         if evidence is not None and options is not None:
             evidence["ask_user_question_options"] = options
         return ("needs_input", question)
+
+    # Signal 2 — result.permission_denials (secondary).
+    denied = _scan_permission_denials(events)
+    if denied is not None:
+        return ("needs_input", denied)
 
     semantic = [e for e in events if e.get("type") not in _LIFECYCLE]
     if not semantic:
