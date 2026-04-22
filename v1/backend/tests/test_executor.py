@@ -20,7 +20,7 @@ import json
 import os
 import threading
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -465,17 +465,21 @@ def test_process_pending_splits_when_triage_says_split(
     git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Triage "split" → parent ``done`` with no run, N subtasks created.
+    """Triage "split" → parent stays ``running`` during the split, then
+    aggregates once every subtask has settled. N subtasks created.
 
     Scope note: the brief asks to assert ``status=="queued"`` on the
     subtasks, which only holds for the instant between ``_apply_split``
     and the next iteration of ``process_pending``. The real executor
     keeps draining, re-triages each subtask (fake falls back to
     ``execute`` once the marker is burned), and runs the adapter on
-    them. We assert the structural invariants (parent done, no parent
-    run, subtasks exist with the right parent/project/titles) that
-    survive that continuation, plus the ``TaskEvent.message`` split
-    marker that is the Opción B resolution for SPEC §3's enum.
+    them.
+
+    PR-V1-23 note: both subtasks share ``git_project`` here, so the
+    second one trips ``prepare_task_branch`` with a dirty tree and
+    fails. Aggregation then promotes the parent to ``failed``. The
+    ``done`` path is covered by
+    ``test_parent_promoted_to_done_when_all_subtasks_done``.
     """
 
     monkeypatch.setenv(
@@ -501,8 +505,8 @@ def test_process_pending_splits_when_triage_says_split(
     session.expire_all()
     refreshed_parent = session.get(Task, parent.id)
     assert refreshed_parent is not None
-    assert refreshed_parent.status == "done"
-    assert refreshed_parent.completed_at is not None
+    # Aggregation: any failed subtask → parent failed. See docstring above.
+    assert refreshed_parent.status == "failed"
 
     # No run was created on the parent — split short-circuits the adapter.
     assert session.query(Run).filter(Run.task_id == parent.id).count() == 0
@@ -658,3 +662,187 @@ def test_process_pending_finalizes_verified_run_with_gh_stub(
     run = session.query(Run).filter(Run.task_id == task.id).one()
     assert run.outcome == "verified"
     assert run.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Parent task promotion (PR-V1-23)
+# ---------------------------------------------------------------------------
+#
+# Before PR-V1-23 ``_apply_split`` closed the parent ``done`` immediately.
+# Now the parent stays ``running`` after the split and is promoted only
+# when every subtask has reached a terminal state. The four tests below
+# pin the contract: one against the split path, three against
+# ``_finalize`` which is where the aggregation hook lives.
+
+
+def _make_parent_with_subtasks(
+    session: Session,
+    *,
+    parent_status: str = "running",
+    subtask_statuses: list[str],
+) -> tuple[Task, list[Task]]:
+    """Seed a parent + N subtasks with scripted statuses for promotion tests."""
+
+    project = _make_project(session)
+    parent = _make_task(session, project, status=parent_status, title="parent")
+    subtasks: list[Task] = []
+    for idx, status in enumerate(subtask_statuses):
+        sub = Task(
+            project_id=project.id,
+            parent_task_id=parent.id,
+            title=f"sub-{idx}",
+            description="",
+            status=status,
+        )
+        session.add(sub)
+        subtasks.append(sub)
+    session.commit()
+    for s in subtasks:
+        session.refresh(s)
+    session.refresh(parent)
+    return parent, subtasks
+
+
+def test_parent_stays_running_after_split(session: Session) -> None:
+    """``_apply_split`` must leave the parent in ``running`` — the
+    terminal transition now ships via ``_maybe_promote_parent`` when
+    the subtasks finish."""
+
+    from app.executor.core import _apply_split
+    from app.triage import TriageDecision
+
+    project = _make_project(session)
+    parent = _make_task(session, project, status="running", title="big change")
+
+    decision = TriageDecision(
+        kind="split",
+        subtasks=["one", "two"],
+        rationale="two areas",
+        raw_output="",
+    )
+    _apply_split(session, parent, decision)
+
+    session.expire_all()
+    refreshed = session.get(Task, parent.id)
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert refreshed.completed_at is None
+
+    subtasks = (
+        session.query(Task)
+        .filter(Task.parent_task_id == parent.id)
+        .order_by(Task.id.asc())
+        .all()
+    )
+    assert [t.status for t in subtasks] == ["queued", "queued"]
+    assert [t.title for t in subtasks] == ["one", "two"]
+
+
+def _finalize_subtask_as(
+    session: Session, subtask: Task, outcome: str
+) -> None:
+    """Minimal ``_finalize`` driver: synthesize a Run and call the hook."""
+
+    from app.executor.core import _finalize
+
+    run = Run(
+        task_id=subtask.id,
+        status="running",
+        model="claude-code",
+        started_at=datetime.now(timezone.utc),
+        artifact_root="",
+    )
+    session.add(run)
+    session.commit()
+    _finalize(session, subtask, run, outcome=outcome, exit_code=0)
+
+
+def test_parent_promoted_to_done_when_all_subtasks_done(
+    session: Session,
+) -> None:
+    """All subtasks ``done`` → parent promoted ``done`` with ``completed_at``."""
+
+    parent, (sub_a, sub_b) = _make_parent_with_subtasks(
+        session, subtask_statuses=["done", "running"],
+    )
+    # Finalize the second subtask through the verified path so that
+    # _finalize itself flips its status to ``done`` and fires the hook.
+    _finalize_subtask_as(session, sub_b, outcome="verified")
+
+    session.expire_all()
+    refreshed = session.get(Task, parent.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    assert refreshed.completed_at is not None
+
+    # A status_changed TaskEvent with reason=subtasks_terminal must be emitted
+    # so downstream consumers (SSE, audit) can trace the aggregation.
+    events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id, TaskEvent.kind == "status_changed")
+        .all()
+    )
+    payloads = [json.loads(e.payload_json or "{}") for e in events]
+    assert any(
+        p.get("to") == "done" and p.get("reason") == "subtasks_terminal"
+        for p in payloads
+    ), payloads
+
+
+def test_parent_promoted_to_failed_when_any_subtask_failed(
+    session: Session,
+) -> None:
+    """Any ``failed`` subtask wins the aggregation even if peers are done."""
+
+    parent, (sub_a, sub_b) = _make_parent_with_subtasks(
+        session, subtask_statuses=["done", "running"],
+    )
+    # Drive the second subtask through the failure path.
+    _finalize_subtask_as(session, sub_b, outcome="adapter_exception")
+
+    session.expire_all()
+    refreshed = session.get(Task, parent.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    # ``completed_at`` is only set on the ``done`` branch.
+    assert refreshed.completed_at is None
+
+    # Symmetric with the ``done`` test: the promotion must emit a
+    # status_changed TaskEvent with ``reason=subtasks_terminal`` so SSE
+    # and audit consumers can distinguish aggregation from a direct
+    # ``_finalize`` on the parent itself.
+    events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id, TaskEvent.kind == "status_changed")
+        .all()
+    )
+    payloads = [json.loads(e.payload_json or "{}") for e in events]
+    assert any(
+        p.get("to") == "failed" and p.get("reason") == "subtasks_terminal"
+        for p in payloads
+    ), payloads
+
+
+def test_parent_stays_running_when_any_subtask_not_terminal(
+    session: Session,
+) -> None:
+    """One subtask still non-terminal → parent stays ``running`` (no promo)."""
+
+    parent, (sub_a, sub_b) = _make_parent_with_subtasks(
+        session, subtask_statuses=["running", "running"],
+    )
+    _finalize_subtask_as(session, sub_a, outcome="verified")
+
+    session.expire_all()
+    refreshed = session.get(Task, parent.id)
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert refreshed.completed_at is None
+
+    # No status_changed event for the parent should fire while children pend.
+    events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id, TaskEvent.kind == "status_changed")
+        .all()
+    )
+    assert not events, [e.payload_json for e in events]
