@@ -564,7 +564,12 @@ class _StubAdapter:
 
 
 def _seed_resume_scenario(session: Session, git_project: Path) -> Task:
-    """Task queued with prior run's session_handle + user_response event."""
+    """Task queued with prior run's session_handle + user_response event.
+
+    Mirrors the real post-``respond_to_task`` state: the endpoint already
+    cleared ``pending_question`` and re-queued the task atomically, so the
+    field is not set here.
+    """
 
     project = _make_project(session, local_path=git_project)
     task = _make_task(session, project, title="needs framework")
@@ -580,7 +585,6 @@ def _seed_resume_scenario(session: Session, git_project: Path) -> Task:
             {"event": "user_response", "text": "Use React with Vite"}
         ),
     ))
-    task.pending_question = "which framework?"
     session.commit()
     return task
 
