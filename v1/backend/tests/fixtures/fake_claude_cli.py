@@ -15,6 +15,11 @@ Environment variables:
   Simulates the adapter touching the tree so future verifier evidence
   (E3 in 11b) has something to inspect. ``{pid}`` is replaced with this
   process's pid so multi-run tests land on distinct files.
+* ``FAKE_CLAUDE_SESSION_ID`` — PR-V1-22 resume support. When set, the
+  fake emits a ``system`` / ``init`` event as the first stdout line
+  carrying this value as ``session_id`` so adapter tests can assert
+  that ``ClaudeCodeAdapter.session_id`` captures it. Has no effect in
+  triage short-circuit mode.
 * ``FAKE_CLAUDE_TRIAGE_JSON`` — PR-V1-12b keyword-dispatch. When the
   prompt (read from stdin) contains the literal ``"triage agent for
   Niwa"`` the fake switches to triage mode: it emits a single
@@ -101,6 +106,16 @@ def main() -> int:
         else:
             _emit_triage_response(payload or _DEFAULT_TRIAGE_JSON)
         return 0
+
+    session_id = os.environ.get("FAKE_CLAUDE_SESSION_ID")
+    if session_id:
+        init_event = {
+            "type": "system",
+            "subtype": "init",
+            "session_id": session_id,
+        }
+        sys.stdout.write(json.dumps(init_event) + "\n")
+        sys.stdout.flush()
 
     if script_path and os.path.exists(script_path):
         with open(script_path, "r", encoding="utf-8") as fh:

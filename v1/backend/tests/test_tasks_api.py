@@ -292,6 +292,47 @@ def test_respond_404_on_missing_task(client) -> None:
     assert response.status_code == 404
 
 
+def test_respond_writes_normalized_user_response_event(client, app) -> None:
+    """PR-V1-22: the ``message`` event uses the normalized
+    ``{event:user_response,text:...}`` schema so the executor resume
+    path can find it via ``json_extract`` against ``payload_json``.
+    """
+
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "framework?"},
+    ).json()
+    _force_waiting_input(app, created["id"], "which framework?")
+
+    response = client.post(
+        f"/api/tasks/{created['id']}/respond",
+        json={"response": "React"},
+    )
+    assert response.status_code == 200, response.text
+
+    override = app.dependency_overrides[get_session]
+    generator = override()
+    session = next(generator)
+    try:
+        row = session.execute(
+            text(
+                "SELECT json_extract(payload_json, '$.event') AS ev, "
+                "json_extract(payload_json, '$.text') AS txt "
+                "FROM task_events "
+                "WHERE task_id = :tid AND kind = 'message' "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            {"tid": created["id"]},
+        ).first()
+    finally:
+        generator.close()
+
+    assert row is not None
+    assert row[0] == "user_response"
+    assert row[1] == "React"
+
+
 def test_respond_empty_response_rejected(client, app) -> None:
     """Minimum validation: empty response → 422 (pydantic min_length=1)."""
 

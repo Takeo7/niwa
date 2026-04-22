@@ -538,6 +538,88 @@ def test_process_pending_splits_when_triage_says_split(
 # ``done``.
 
 
+# PR-V1-22 — resume via session_handle + user response prompt.
+
+
+class _StubAdapter:
+    """Captures ``__init__`` kwargs + behaves like a benign cli_ok run."""
+
+    instances: list["_StubAdapter"] = []
+
+    def __init__(self, cli_path, *, cwd, prompt, timeout, extra_args=None,
+                 resume_handle=None):
+        self.prompt = prompt
+        self.resume_handle = resume_handle
+        type(self).instances.append(self)
+
+    def iter_events(self): return iter([])
+    def wait(self): return 0
+    def close(self): pass
+    @property
+    def outcome(self): return "cli_ok"
+    @property
+    def exit_code(self): return 0
+    @property
+    def session_id(self): return "session-xyz"
+
+
+def _seed_resume_scenario(session: Session, git_project: Path) -> Task:
+    """Task queued with prior run's session_handle + user_response event.
+
+    Mirrors the real post-``respond_to_task`` state: the endpoint already
+    cleared ``pending_question`` and re-queued the task atomically, so the
+    field is not set here.
+    """
+
+    project = _make_project(session, local_path=git_project)
+    task = _make_task(session, project, title="needs framework")
+    session.add(Run(
+        task_id=task.id, status="failed", model="claude-code",
+        started_at=datetime.utcnow(), finished_at=datetime.utcnow(),
+        outcome="needs_input", session_handle="prev-handle-xxx",
+        artifact_root=str(git_project),
+    ))
+    session.add(TaskEvent(
+        task_id=task.id, kind="message", message=None,
+        payload_json=json.dumps(
+            {"event": "user_response", "text": "Use React with Vite"}
+        ),
+    ))
+    session.commit()
+    return task
+
+
+def test_resume_path_uses_prev_run_session_handle(
+    session: Session, git_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executor picks the last run's session_handle and passes it via kwarg."""
+
+    import app.executor.core as executor_core
+    _StubAdapter.instances = []
+    monkeypatch.setattr(executor_core, "ClaudeCodeAdapter", _StubAdapter)
+    _seed_resume_scenario(session, git_project)
+
+    assert process_pending(session) == 1
+    assert len(_StubAdapter.instances) == 1
+    assert _StubAdapter.instances[0].resume_handle == "prev-handle-xxx"
+
+
+def test_resume_prompt_is_user_response_not_task_description(
+    session: Session, git_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On resume, prompt is the user's text — not title/description."""
+
+    import app.executor.core as executor_core
+    _StubAdapter.instances = []
+    monkeypatch.setattr(executor_core, "ClaudeCodeAdapter", _StubAdapter)
+    task = _seed_resume_scenario(session, git_project)
+
+    assert process_pending(session) == 1
+    spawned = _StubAdapter.instances[0]
+    assert spawned.prompt == "Use React with Vite"
+    assert task.title not in spawned.prompt
+
+
 def test_process_pending_finalizes_verified_run_with_gh_stub(
     session: Session, git_project: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

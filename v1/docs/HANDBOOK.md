@@ -1834,11 +1834,76 @@ se itera.
 - `frontend/tests/TaskDetail.test.tsx` (+2 casos): render del banner
   + botón deshabilitado en vacío, y submit con POST capturado.
 
+## Resume via session_handle (PR-V1-22)
+
+Cierra la known limitation que dejó PR-V1-19: el segundo run tras un
+`respond` ahora reanuda la sesión de Claude en lugar de arrancar con
+prompt fresco.
+
+### Flujo
+
+1. **Adapter.** `ClaudeCodeAdapter` gana la kwarg opcional
+   `resume_handle: str | None` y la propiedad `session_id: str | None`.
+   - Cuando se pasa `resume_handle`, la argv spawneada añade
+     `--resume <handle>`.
+   - El primer evento con `type="system"` y `subtype="init"` popula
+     `session_id` desde el campo `session_id` del payload. Se lee una
+     sola vez (inits posteriores se ignoran) para que el handle
+     persistido sea el de la sesión original.
+2. **Executor `run_adapter`.** Tras `claim_next_task` y antes de
+   spawnear el adapter:
+   - `_last_user_response_text(session, task_id)` devuelve el `text`
+     del último `TaskEvent(kind="message")` cuyo payload tiene
+     `event=="user_response"` o `None` si no existe.
+   - `_last_run_session_handle(session, task_id)` devuelve el
+     `session_handle` más reciente no-NULL de los runs de esa task.
+   - Si **ambos** existen: `resume_handle` y `adapter_prompt` se
+     setean con los valores correspondientes (log `info`). Si falta
+     el handle (p. ej. primer run murió antes del `system/init`) →
+     fallback a `_build_prompt(task)` con `logger.warning`.
+   - Tras `adapter.close()`, si `adapter.session_id` no es `None`,
+     `run.session_handle = adapter.session_id` y commit. Se persiste
+     siempre, incluso en runs fallidos, para no perder el handle que
+     habilita el próximo resume.
+3. **Limpieza de `pending_question`.** La hace `respond_to_task`
+   atómicamente al re-queuear la task desde `waiting_input` — mismo
+   commit que el `status_changed` a `queued`. Cuando `run_adapter`
+   toma la task, `pending_question` ya es `None`, de modo que
+   `_finalize` no lo vuelve a tocar en el path `verified`. Si una
+   ronda posterior vuelve a devolver `needs_input`, el branch
+   `needs_input` de `_finalize` repopula con la nueva pregunta.
+4. **`respond_to_task`.** El payload del `TaskEvent(kind="message")`
+   sigue el esquema `{"event":"user_response","text":<response>}`;
+   PR-V1-19 lo dejó así y PR-V1-22 lo fija con el test
+   `test_respond_writes_normalized_user_response_event`.
+
+### Fallback robusto
+
+El resume path requiere **ambas** señales (respuesta del usuario +
+handle previo). Si cualquiera falta, el executor cae a prompt fresco
+con warning; la task nunca se bloquea por un session_handle perdido.
+La sesión del CLI puede expirar con respuestas tardías — el error
+cae en `cli_nonzero_exit` y la task termina `failed`. Aceptable para
+el MVP (seguimiento en las notas del brief).
+
+### Tests
+
+- `tests/test_adapter.py` (+2): `test_session_id_extracted_from_system_init`
+  y `test_resume_handle_adds_resume_arg_to_cli`.
+- `tests/test_executor.py` (+2): `test_resume_path_uses_prev_run_session_handle`
+  (stubea `ClaudeCodeAdapter` para capturar kwargs) y
+  `test_resume_prompt_is_user_response_not_task_description`.
+- `tests/test_tasks_api.py` (+1):
+  `test_respond_writes_normalized_user_response_event` (asserta el
+  payload vía `json_extract`).
+- Fixture: `fake_claude_cli.py` acepta `FAKE_CLAUDE_SESSION_ID` que
+  se emite como `system/init` antes del script principal.
+
 ## Próximos PRs (SPEC §9)
 
 - Semana 5 (restante): instalación en la máquina de la pareja.
-- Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-19:
-  composite prompt / `claude --resume` para que el siguiente run
-  reciba la respuesta del usuario.
+- Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-22:
+  detectar expiración de sesión en el CLI con fallback a prompt
+  compuesto; UI para cancelar un `waiting_input` largo.
 
 Ver `v1/docs/plans/` para los briefs conforme se escriben.

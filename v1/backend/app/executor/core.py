@@ -16,7 +16,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from ..adapters import (
@@ -135,11 +135,29 @@ def run_adapter(session: Session, task: Task) -> Run:
     task.branch_name = branch_name
     session.commit()
 
+    # PR-V1-22: on a respond-triggered run (user_response event + prior
+    # session_handle), resume the conversation with the user's text as
+    # prompt. Missing either signal → fresh prompt + warning.
+    resume_handle: str | None = None
+    adapter_prompt = _build_prompt(task)
+    user_response = _last_user_response_text(session, task.id)
+    if user_response is not None:
+        prev_handle = _last_run_session_handle(session, task.id)
+        if prev_handle is not None:
+            resume_handle = prev_handle
+            adapter_prompt = user_response
+            logger.info("resuming task_id=%s session=%s...", task.id, prev_handle[:8])
+        else:
+            logger.warning(
+                "task_id=%s has user_response but no prior session_handle", task.id,
+            )
+
     adapter = ClaudeCodeAdapter(
         cli_path=resolve_cli_path(),
         cwd=artifact_root or ".",
-        prompt=_build_prompt(task),
+        prompt=adapter_prompt,
         timeout=resolve_timeout(),
+        resume_handle=resume_handle,
     )
 
     try:
@@ -167,6 +185,12 @@ def run_adapter(session: Session, task: Task) -> Run:
         # the ``Popen`` outlives the run and accumulates as a zombie in a
         # long-running daemon.
         adapter.close()
+
+    # PR-V1-22: persist the session handle even on failed runs so a
+    # later respond can resume.
+    if adapter.session_id is not None:
+        run.session_handle = adapter.session_id
+        session.commit()
 
     # PR-V1-11a: adapter failures bypass the verifier (outcome flows
     # through unchanged); only ``cli_ok`` runs the evidence checks.
@@ -369,6 +393,40 @@ def _finalize_triage_failure(
         )
     )
     session.commit()
+
+
+def _last_user_response_text(session: Session, task_id: int) -> str | None:
+    """Text of the most recent ``message``/``user_response`` TaskEvent (PR-V1-22)."""
+
+    stmt = (
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.kind == "message")
+        .order_by(TaskEvent.id.desc())
+        .limit(1)
+    )
+    event = session.scalars(stmt).first()
+    if event is None or not event.payload_json:
+        return None
+    try:
+        payload = json.loads(event.payload_json)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or payload.get("event") != "user_response":
+        return None
+    text_value = payload.get("text")
+    return text_value if isinstance(text_value, str) and text_value else None
+
+
+def _last_run_session_handle(session: Session, task_id: int) -> str | None:
+    """Most recent non-NULL ``session_handle`` for ``task_id`` (PR-V1-22)."""
+
+    stmt = (
+        select(Run.session_handle)
+        .where(Run.task_id == task_id, Run.session_handle.is_not(None))
+        .order_by(Run.id.desc())
+        .limit(1)
+    )
+    return session.scalars(stmt).first()
 
 
 def _build_prompt(task: Task) -> str:
