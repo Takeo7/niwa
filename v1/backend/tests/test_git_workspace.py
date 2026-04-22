@@ -127,3 +127,102 @@ def test_prepare_rejects_dirty_working_tree(git_project: Path) -> None:
     assert "dirty" in msg or "uncommitted" in msg or "working tree" in msg
     # No stash happened — the modification is still there.
     assert (git_project / "README.md").read_text() == "dirty\n"
+
+
+# ---------------------------------------------------------------------------
+# _detect_default_branch + PR-V1-24 isolation
+# ---------------------------------------------------------------------------
+
+
+def test_detect_default_prefers_origin_head(tmp_path: Path) -> None:
+    """``origin/HEAD`` wins over local heuristics when present."""
+
+    from app.executor.git_workspace import _detect_default_branch
+
+    # Build a "remote" bare repo with ``main`` as its default.
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(remote)],
+        check=True,
+        capture_output=True,
+    )
+
+    # Seed the remote by pushing from a temporary clone.
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git(["init", "-b", "main"], cwd=seed)
+    _git(["config", "user.email", "s@t.local"], cwd=seed)
+    _git(["config", "user.name", "s"], cwd=seed)
+    _git(["config", "commit.gpgsign", "false"], cwd=seed)
+    (seed / "x").write_text("x\n")
+    _git(["add", "x"], cwd=seed)
+    _git(["commit", "-m", "init"], cwd=seed)
+    _git(["remote", "add", "origin", str(remote)], cwd=seed)
+    _git(["push", "-u", "origin", "main"], cwd=seed)
+
+    # Clone so ``refs/remotes/origin/HEAD`` is set automatically by ``git clone``.
+    local = tmp_path / "local"
+    subprocess.run(
+        ["git", "clone", str(remote), str(local)], check=True, capture_output=True
+    )
+    # Create a distractor local branch to rule out "first branch" fallback.
+    _git(["checkout", "-b", "zzz-other"], cwd=local)
+
+    assert _detect_default_branch(str(local)) == "main"
+
+
+def test_detect_default_falls_back_to_main(tmp_path: Path) -> None:
+    """No remote, branch ``main`` exists → detect ``main``."""
+
+    from app.executor.git_workspace import _detect_default_branch
+
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(["init", "-b", "main"], cwd=d)
+    _git(["config", "user.email", "s@t.local"], cwd=d)
+    _git(["config", "user.name", "s"], cwd=d)
+    _git(["config", "commit.gpgsign", "false"], cwd=d)
+    (d / "x").write_text("x\n")
+    _git(["add", "x"], cwd=d)
+    _git(["commit", "-m", "init"], cwd=d)
+
+    assert _detect_default_branch(str(d)) == "main"
+
+
+def test_detect_default_falls_back_to_master(tmp_path: Path) -> None:
+    """No remote, no ``main``, branch ``master`` exists → detect ``master``."""
+
+    from app.executor.git_workspace import _detect_default_branch
+
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(["init", "-b", "master"], cwd=d)
+    _git(["config", "user.email", "s@t.local"], cwd=d)
+    _git(["config", "user.name", "s"], cwd=d)
+    _git(["config", "commit.gpgsign", "false"], cwd=d)
+    (d / "x").write_text("x\n")
+    _git(["add", "x"], cwd=d)
+    _git(["commit", "-m", "init"], cwd=d)
+
+    assert _detect_default_branch(str(d)) == "master"
+
+
+def test_prepare_branch_from_default_not_current_head(git_project: Path) -> None:
+    """New task branch inherits only from default, not the active branch."""
+
+    # Create ``feature-a`` off ``main`` with a commit that must NOT leak.
+    _git(["checkout", "-b", "feature-a"], cwd=git_project)
+    (git_project / "leak.txt").write_text("leak\n")
+    _git(["add", "leak.txt"], cwd=git_project)
+    _git(["commit", "-m", "leak commit"], cwd=git_project)
+    # Stay on ``feature-a`` so the old behaviour would branch from here.
+
+    name = prepare_task_branch(str(git_project), _make_task(7, "t"))
+
+    current = _git(["branch", "--show-current"], cwd=git_project).stdout.strip()
+    assert current == name
+    # The leak commit must not be reachable from the task branch.
+    log = _git(["log", "--oneline", name], cwd=git_project).stdout
+    assert "leak commit" not in log
+    assert not (git_project / "leak.txt").exists()
