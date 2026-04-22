@@ -37,13 +37,23 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     PR-V1-11b: the default fake also touches a pid-scoped file (relative
     to the adapter cwd, so it lands inside ``git_project``) so E3 sees
     an artifact and the run can reach the ``verified`` outcome.
+
+    PR-V1-21: emit a realistic ``assistant`` text turn before the
+    ``result`` frame so E2 can walk back to it; a result-only stream is
+    now classified as ``empty_stream``.
     """
 
     st = os.stat(FAKE_CLI_PATH)
     os.chmod(FAKE_CLI_PATH, st.st_mode | 0o111)
 
     script = tmp_path / "api_script.jsonl"
-    script.write_text(json.dumps({"type": "result", "exit_code": 0}) + "\n")
+    script.write_text(
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Done."}]},
+        }) + "\n"
+        + json.dumps({"type": "result", "exit_code": 0}) + "\n"
+    )
 
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))

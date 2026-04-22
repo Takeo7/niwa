@@ -125,8 +125,9 @@ def test_adapter_parses_stream_and_writes_run_events(
     script = _write_script(
         tmp_path / "script.jsonl",
         [
-            {"type": "assistant", "message": {"content": "hi"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}},
             {"type": "tool_use", "name": "Write", "input": {"path": "x"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done."}]}},
             {"type": "result", "exit_code": 0, "cost_usd": 0.01},
         ],
     )
@@ -206,7 +207,7 @@ def test_adapter_skips_malformed_json_lines(
     # Craft the script manually — _write_script would re-JSON the garbage.
     script = tmp_path / "script.jsonl"
     script.write_text(
-        json.dumps({"type": "assistant", "message": {"content": "one"}}) + "\n"
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "one"}]}}) + "\n"
         + "not json garbage\n"
         + json.dumps({"type": "result", "exit_code": 0}) + "\n"
     )
