@@ -521,12 +521,19 @@ executor no cambiaron entre 11a → 11c — sólo se rellenan slots del
 - `models.py` — `@dataclass(frozen=True) VerificationResult(passed,
   outcome, error_code, evidence)`. Evidence es JSON-serializable; la
   owning invariant vive en el orquestador.
-- `stream.py` — E2. `check_stream_termination(events) -> error_code |
-  None`. Ignora lifecycle (`started`/`completed`/`failed`/`error`).
-  Reglas último evento: `result` → OK (MVP trust), `assistant` text
-  que acaba en `?` → `question_unanswered`, `tool_use` sin
-  `tool_result` tras → `tool_use_incomplete`, otra cosa o vacío →
-  `empty_stream`.
+- `stream.py` — E2. `check_stream_termination(events) -> (error_code,
+  pending_question)`. Ignora lifecycle
+  (`started`/`completed`/`failed`/`error`). PR-V1-21 reescribe la
+  lógica: el Claude CLI real **siempre** emite un `result` al final,
+  así que no basta con mirar el último evento semántico. El analyzer
+  camina hacia atrás buscando el último `assistant` y decide sobre su
+  texto. Reglas: sin eventos semánticos → `("empty_stream", None)`;
+  sin ningún `assistant` (solo `result`/`user`/`tool_use`) →
+  `("empty_stream", None)`; último `assistant` sin texto (solo
+  `tool_use` blocks) → `("tool_use_incomplete", None)`; último
+  `assistant` con texto que acaba en `?` → `("needs_input", text)`
+  (PR-V1-19 lo aparca en `waiting_input`); otro caso → `(None,
+  None)`.
 - `artifacts.py` — E3+E4 (PR-V1-11b).
   `check_artifacts_in_cwd(cwd, evidence)` pre-valida que la cwd exista
   (si no → `error_code="cwd_missing"` fail duro) y después shellea
