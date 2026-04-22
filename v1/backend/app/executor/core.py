@@ -152,8 +152,6 @@ def run_adapter(session: Session, task: Task) -> Run:
                 "task_id=%s has user_response but no prior session_handle", task.id,
             )
 
-    had_pending_question = task.pending_question is not None
-
     adapter = ClaudeCodeAdapter(
         cli_path=resolve_cli_path(),
         cwd=artifact_root or ".",
@@ -235,7 +233,6 @@ def run_adapter(session: Session, task: Task) -> Run:
         exit_code=exit_code,
         error_code=None if result.passed else result.error_code,
         pending_question=result.pending_question,
-        had_pending_question=had_pending_question,
     )
     session.refresh(run)
     return run
@@ -463,7 +460,6 @@ def _finalize(
     exit_code: int | None,
     error_code: str | None = None,
     pending_question: str | None = None,
-    had_pending_question: bool = False,
 ) -> None:
     now = datetime.now(timezone.utc)
     # Three terminal buckets: ``verified`` → run completed + task done;
@@ -493,9 +489,6 @@ def _finalize(
     task.status = new_status
     if success:
         task.completed_at = now
-        # PR-V1-22: clear stale question once the resumed run verified.
-        if had_pending_question:
-            task.pending_question = None
     if needs_input:
         task.pending_question = pending_question
 
