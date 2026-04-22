@@ -5,95 +5,105 @@ merge de un PR. El campo `next_pr` indica el PR que debe arrancar la
 siguiente sesión del orquestador.
 
 ```
-pr_merged: PR-V1-21b
+pr_merged: PR-V1-23
 date: 2026-04-22
 week: 6
-next_pr: PR-V1-22
-week_status: week-6-partial-awaiting-smoke-revalidation
+next_pr: PR-V1-25
+week_status: week-6-closed-awaiting-final-smoke
 blockers: []
 ```
 
 ## Historial
 
-- **2026-04-22** — PR-V1-21b (Verification: structural needs_input
-  detection) mergeado en `v1` vía squash (#130). Backend **138
-  passed** (+5). **183 LOC netas** código+tests+fixtures bajo cap
-  250. Cierra los 2 gaps del detector descubiertos en smoke
-  post-PR-V1-21:
-  - Task 11 (subtask "Add CI workflow"): texto final en imperativo
-    "Let me know which direction you'd like." con `?` en párrafo
-    previo — heurística `endswith("?")` lo perdía.
-  - Task 12 (pregunta-forzada): Claude invocó `AskUserQuestion`
-    tool_use con 3 opciones estructuradas; CLI denegó por
-    non-interactive y emitió `permission_denials` en el
-    `result` final.
-  Fix introduce **3 señales en orden de prioridad**:
-  1. **Primaria** — `AskUserQuestion` tool_use en `assistant`
-     (top-level o embebido en `content[]`). Si match, devuelve
-     `(needs_input, question)` + popula
-     `evidence["ask_user_question_options"]` con las opciones
-     del tool_input.
-  2. **Secundaria** — `result.permission_denials` con
-     `tool_name=="AskUserQuestion"`.
-  3. **Fallback** — heurística mejorada: split por `\n\n`,
-     cualquier párrafo acabando en `?` o `？` (fullwidth/español)
-     → needs_input.
-  `check_stream_termination` ahora acepta `evidence: dict | None`
-  como kwarg; firma `tuple[str|None, str|None]` preservada.
-  `verify_run` pasa `evidence=` (cambio mínimo 1 línea).
-  Fixtures `stream_ask_user_question.json` +
-  `stream_question_with_imperative.json` sintéticas basadas en
-  payloads literales del brief (sandbox sin acceso a DB del
-  smoke). Codex: LGTM. **Smoke pending** re-validación: task 11
-  + task 12 deben terminar `waiting_input` con
-  `pending_question` populada.
+- **2026-04-22** — PR-V1-23 (Parent task semantics: promote on
+  subtasks terminal) mergeado en `v1` vía squash (#133). Backend
+  **151 passed** (+4). **262 LOC netas** código+tests tras fix-up
+  (240 inicial + 22 por blocker codex real). Cierra bug visual
+  del smoke: madre de split quedaba `done` tras `_apply_split`
+  aunque las hijas no hubiesen terminado. Fix: madre queda
+  `running` tras split; `_maybe_promote_parent` agrega estado
+  cuando todas las hijas son terminales (`done`/`failed`/
+  `cancelled`). Reglas: alguna `failed` → `failed`; todas `done`
+  → `done`; alguna `cancelled` sin `failed` → `cancelled`.
+  Idempotente (check `parent.status in TERMINAL` antes de
+  mutar). Hook en `_finalize` Y `_finalize_triage_failure`
+  (fix-up codex major: sin el segundo, hijas que fallaban en
+  triage dejaban parent `running` indefinidamente). Codex: LGTM
+  tras fix-up. 3 minors resueltos (test assertion, docstring,
+  datetime aware).
+- **2026-04-22** — PR-V1-22 (Resume via session_handle + user
+  response prompt) mergeado en `v1` vía squash (#132). Backend
+  **147 passed** (+5). **290 LOC netas** código+tests+fixtures
+  bajo cap 300. Cierra el "known limitation" de PR-V1-19:
+  - `ClaudeCodeAdapter.__init__` acepta `resume_handle: str |
+    None` kwarg; `session_id` propiedad populada del primer
+    `system/init` event.
+  - `run.session_handle` persistido tras cada run (incluso
+    failed, para que siguiente resume encuentre el handle).
+  - Executor detecta task queued viniendo de waiting_input via
+    helpers `_last_user_response_event` + `_last_run_with_session_handle`.
+    Si ambos no-None: spawnea adapter con `resume_handle` +
+    `prompt = texto del user_response` (NO title/description).
+    Fallback graceful con logger.warning si falta handle previo.
+  - Adapter añade `--resume <handle>` a argv cuando kwarg set.
+  - Fake CLI extendido con `FAKE_CLAUDE_SESSION_ID`.
+  - `respond_to_task` ya estaba normalizado desde PR-V1-19
+    (payload `{"event":"user_response","text":...}`).
+  Codex: 1 major + 2 minors. Major (dead code
+  `had_pending_question` en `_finalize` — `respond_to_task` ya
+  limpia pending_question atómicamente) cerrado con eliminación.
+  Minors (circuit breaker session expirada + filter
+  `_last_user_response_text` por status_changed) documentados
+  como follow-up.
+- **2026-04-22** — PR-V1-24 (Git workspace: branch from default,
+  not current HEAD) mergeado en `v1` vía squash (#131). Backend
+  **142 passed** (+4). **148 LOC netas** bajo cap 150 (margen 2).
+  Cierra bug del smoke: task 12 heredó commit de LICENSE de
+  task 10 porque rama nació desde HEAD actual del checkout
+  (task-11-*), no desde master. Fix: `_detect_default_branch`
+  con orden `origin/HEAD` → `main` → `master` → primera rama →
+  `GitWorkspaceError`. `prepare_task_branch` hace `checkout
+  <default>` antes de `checkout -b branch_name` en path de rama
+  nueva; path existente intacto (idempotencia preservada). Tests
+  usan bare+clone real para verificar `origin/HEAD`. Codex: LGTM.
+- **2026-04-22** — PR-V1-21b (Verification: structural
+  needs_input detection) mergeado en `v1` vía squash (#130).
+  Backend **138 passed** (+5). **183 LOC netas**. 3 señales en
+  orden: AskUserQuestion tool_use → permission_denials →
+  paragraph scan con `?`/`？`. Cierra gaps detector del smoke
+  (tasks 11 + 12). Codex: LGTM.
 - **2026-04-22** — PR-V1-21 (Verification: detect open question
-  with real CLI stream) mergeado en `v1` vía squash (#129).
-  Backend **133 passed** (+3 nuevos; test 3 renombrado con nueva
-  semántica `tool_use_incomplete`). **101 LOC netas**. Cierra el
-  bug-corazón de task 6 del smoke: walk-back al último `assistant`
-  ignorando `result` trailing. **Opción X aplicada**: 10 tests del
-  baseline con fixtures sintéticos no-realistas actualizados.
-  Codex: LGTM.
+  with real CLI stream) mergeado (#129). Backend **133 passed**.
+  **101 LOC netas**. Walk-back al último assistant ignorando
+  result trailing. **Opción X aplicada**: 10 tests baseline con
+  fixtures sintéticos no-realistas actualizados.
 - **2026-04-22** — PR-V1-20 (Adapter: pass
-  `--dangerously-skip-permissions` always) mergeado en `v1` vía
-  squash (#128). Backend **130 passed** (+2). **97 LOC netas**
-  bajo cap 150. FIX crítico: sin el flag, Claude CLI rechazaba
-  tool_use para Write/Edit/Bash → 6/6 tasks con `no_artifacts`.
-  Decisión de producto: flag siempre activo (safety en rama
-  aislada + merge gate, no en adapter). `autonomy_mode` sigue
-  controlando solo auto-merge post-finalize. Codex: LGTM + 1
-  minor follow-up.
+  `--dangerously-skip-permissions` always) mergeado (#128).
+  Backend **130 passed**. **97 LOC netas** bajo cap 150. FIX
+  crítico smoke: flag siempre activo (safety en rama aislada +
+  merge gate, no en adapter).
 - **2026-04-21** — PR-V1-19 (Clarification round-trip:
-  waiting_input + respond) mergeado en `v1` vía squash (#127).
-  Backend **128 passed** (+4). Frontend **12 passed** (+2).
-  **391 LOC netas** bajo cap. Cierra Semana 5 del SPEC §9.
-  Codex: LGTM.
+  waiting_input + respond) mergeado (#127). Backend **128**,
+  Frontend **12 passed**. **391 LOC**. Cierra Semana 5.
 - **2026-04-21** — PR-V1-18 (Readiness endpoint + /system page)
-  mergeado en `v1` vía squash (#126). Backend **124 passed**.
-  Frontend 10 passed. **421 LOC netas** tras fix-up. Codex
-  primera pasada: 1 blocker cerrado con
-  `check_db_via_session`.
-- **2026-04-21** — PR-V1-17 (Deploy local: static handler)
-  mergeado (#125). Backend **118 passed**. **188 LOC netas**.
-  Codex: LGTM.
-- **2026-04-21** — FIX-20260421 (Config alignment templates ↔
-  config.py) mergeado (#124). Backend **113 passed**. **192 LOC**.
-  Codex: LGTM.
-- **2026-04-21** — PR-V1-16 (Dangerous mode: auto-merge + UI
-  banner) mergeado (#123). Backend 107, Frontend 8. **222 LOC**.
-  Cierra Semana 4.
-- **2026-04-21** — PR-V1-15 (Executor launcher +
-  `niwa-executor` CLI) mergeado (#122). Backend 104. **377 LOC**.
-  Codex: LGTM.
+  mergeado (#126). Backend **124**, Frontend 10. **421 LOC** tras
+  fix-up blocker.
+- **2026-04-21** — PR-V1-17 (Deploy local static handler)
+  mergeado (#125). Backend **118**. **188 LOC**. Codex: LGTM.
+- **2026-04-21** — FIX-20260421 (Config alignment) mergeado
+  (#124). Backend **113**. **192 LOC**.
+- **2026-04-21** — PR-V1-16 (Dangerous mode auto-merge) mergeado
+  (#123). Backend 107, Frontend 8. **222 LOC**. Cierra Semana 4.
+- **2026-04-21** — PR-V1-15 (Executor launcher CLI) mergeado
+  (#122). Backend 104. **377 LOC**.
 - **2026-04-21** — PR-V1-14 (Bootstrap.sh reproducible) mergeado
-  (#121). Backend 94. **306 LOC**. Codex: LGTM.
+  (#121). Backend 94. **306 LOC**.
 - **2026-04-21** — PR-V1-13 (Safe mode) mergeado (#120). Backend
-  89. **400 LOC exactos en cap**. Cierra Semana 3.
+  89. **400 LOC**. Cierra Semana 3.
 - **2026-04-21** — PR-V1-12b (Triage executor integration)
-  mergeado (#119). Backend 83. **299 LOC**. Codex: LGTM.
+  mergeado (#119). Backend 83. **299 LOC**.
 - **2026-04-21** — PR-V1-12a (Triage module puro) mergeado (#118).
-  Backend 81. **392 LOC**. Codex: LGTM.
+  Backend 81. **392 LOC**.
 - **2026-04-21** — PR-V1-12 original marcado **superseded** por
   12a+12b.
 - **2026-04-21** — PR-V1-11c (Verification E5) mergeado (#116).
@@ -105,11 +115,11 @@ blockers: []
 - **2026-04-21** — PR-V1-11 original marcado **superseded** por
   11a+11b+11c.
 - **2026-04-20** — PR-V1-10 (UI task detail con stream) mergeado
-  (#113). Frontend 6. **506 LOC**. Cierra Semana 2. Codex: LGTM.
+  (#113). Frontend 6. **506 LOC**. Cierra Semana 2.
 - **2026-04-20** — PR-V1-09 (SSE endpoint) mergeado (#112).
-  Backend 59. **541 LOC**. Codex: LGTM.
+  Backend 59. **541 LOC**.
 - **2026-04-20** — PR-V1-08 (Git workspace) mergeado (#111).
-  Backend 56. **381 LOC**. Codex: LGTM.
+  Backend 56. **381 LOC**.
 - **2026-04-20** — PR-V1-07 (Claude Code adapter) mergeado
   (#110). Backend 50. **925 LOC** (opción A por brief
   inconsistente).
