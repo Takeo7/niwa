@@ -120,6 +120,11 @@ def test_sad_path_artifacts_outside_cwd(
         tmp_path, monkeypatch,
         lines=[
             _tool_use_write(str(leak)),
+            # PR-V1-21: E2 walks back to the last assistant; without a
+            # text turn the stream is classified ``empty_stream`` and E4
+            # never fires. A realistic CLI run always emits an assistant
+            # wrap-up after the tool_use before closing with ``result``.
+            _assistant("Wrote it."),
             {"type": "result", "subtype": "success"},
         ],
         # Still touch something inside cwd so E3 passes and E4 is the

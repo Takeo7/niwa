@@ -1,0 +1,7 @@
+[
+  {"type": "system", "subtype": "init", "session_id": "smoke-2026-04-22-task-6"},
+  {"type": "assistant", "message": {"content": [{"type": "text", "text": "Voy a leer el código primero."}]}},
+  {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]}},
+  {"type": "assistant", "message": {"content": [{"type": "text", "text": "Antes de escribirla, tengo un par de dudas:\n\n1. Formato: ¿prefieres markdown o texto plano?\n2. Idioma: ¿castellano o inglés?\n3. Longitud: ¿breve o detallado?\n4. Ubicación: ¿en README o en un fichero aparte?"}]}},
+  {"type": "result", "subtype": "success", "stop_reason": "end_turn", "session_id": "smoke-2026-04-22-task-6"}
+]

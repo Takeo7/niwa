@@ -39,10 +39,13 @@ FAKE_CLI_PATH = (
 
 @pytest.fixture(autouse=True)
 def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point every test at the fake CLI with a minimal one-event script.
+    """Point every test at the fake CLI with a minimal realistic script.
 
-    One ``result`` line + exit 0 is the bare minimum to flip a run to
-    ``completed`` and a task to ``done`` through the real adapter path.
+    PR-V1-21: the real Claude CLI always emits a closing ``assistant``
+    with text before the ``result`` frame; E2 now walks back to that
+    assistant so the default fake mirrors the real shape. An empty or
+    result-only stream is classified as ``empty_stream``.
+
     Since PR-V1-11b, E3 requires ≥1 artifact inside the task cwd, so the
     default run also touches a pid-scoped file under ``tmp_path``; tests
     that wire their own ``git_project`` override ``FAKE_CLAUDE_TOUCH``
@@ -53,7 +56,13 @@ def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     os.chmod(FAKE_CLI_PATH, st.st_mode | 0o111)
 
     script = tmp_path / "default_script.jsonl"
-    script.write_text(json.dumps({"type": "result", "exit_code": 0}) + "\n")
+    script.write_text(
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Done."}]},
+        }) + "\n"
+        + json.dumps({"type": "result", "exit_code": 0}) + "\n"
+    )
 
     monkeypatch.setenv("NIWA_CLAUDE_CLI", str(FAKE_CLI_PATH))
     monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
