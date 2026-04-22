@@ -130,6 +130,10 @@ def respond_to_task(session: Session, task_id: int, response: str) -> Task:
     event carrying the user text for audit, followed by a
     ``status_changed`` transition back to ``queued`` — clears
     ``pending_question`` and hands the task back to the executor queue.
+
+    Sole owner of clearing ``pending_question`` on the resume path: by
+    the time ``run_adapter`` picks the task up the field is already
+    ``None``, so the executor's ``_finalize`` does not touch it.
     """
 
     task = get_task(session, task_id)

@@ -1865,11 +1865,13 @@ prompt fresco.
      `run.session_handle = adapter.session_id` y commit. Se persiste
      siempre, incluso en runs fallidos, para no perder el handle que
      habilita el próximo resume.
-3. **Limpieza de `pending_question`.** `_finalize` acepta el kwarg
-   `had_pending_question: bool = False`. En el path `verified` y si
-   la task entró al run con `pending_question` poblado, el campo se
-   limpia a `None`. Si una ronda posterior vuelve a devolver
-   `needs_input`, el branch existente repopula con la nueva pregunta.
+3. **Limpieza de `pending_question`.** La hace `respond_to_task`
+   atómicamente al re-queuear la task desde `waiting_input` — mismo
+   commit que el `status_changed` a `queued`. Cuando `run_adapter`
+   toma la task, `pending_question` ya es `None`, de modo que
+   `_finalize` no lo vuelve a tocar en el path `verified`. Si una
+   ronda posterior vuelve a devolver `needs_input`, el branch
+   `needs_input` de `_finalize` repopula con la nueva pregunta.
 4. **`respond_to_task`.** El payload del `TaskEvent(kind="message")`
    sigue el esquema `{"event":"user_response","text":<response>}`;
    PR-V1-19 lo dejó así y PR-V1-22 lo fija con el test
