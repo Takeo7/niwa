@@ -172,14 +172,11 @@ def test_detect_default_prefers_origin_head(tmp_path: Path) -> None:
     assert _detect_default_branch(str(local)) == "main"
 
 
-def test_detect_default_falls_back_to_main(tmp_path: Path) -> None:
-    """No remote, branch ``main`` exists → detect ``main``."""
+def _init_repo_with_commit(d: Path, branch: str) -> None:
+    """Helper: init a repo on ``branch`` with one seed commit."""
 
-    from app.executor.git_workspace import _detect_default_branch
-
-    d = tmp_path / "repo"
     d.mkdir()
-    _git(["init", "-b", "main"], cwd=d)
+    _git(["init", "-b", branch], cwd=d)
     _git(["config", "user.email", "s@t.local"], cwd=d)
     _git(["config", "user.name", "s"], cwd=d)
     _git(["config", "commit.gpgsign", "false"], cwd=d)
@@ -187,6 +184,14 @@ def test_detect_default_falls_back_to_main(tmp_path: Path) -> None:
     _git(["add", "x"], cwd=d)
     _git(["commit", "-m", "init"], cwd=d)
 
+
+def test_detect_default_falls_back_to_main(tmp_path: Path) -> None:
+    """No remote, branch ``main`` exists → detect ``main``."""
+
+    from app.executor.git_workspace import _detect_default_branch
+
+    d = tmp_path / "repo"
+    _init_repo_with_commit(d, "main")
     assert _detect_default_branch(str(d)) == "main"
 
 
@@ -196,15 +201,7 @@ def test_detect_default_falls_back_to_master(tmp_path: Path) -> None:
     from app.executor.git_workspace import _detect_default_branch
 
     d = tmp_path / "repo"
-    d.mkdir()
-    _git(["init", "-b", "master"], cwd=d)
-    _git(["config", "user.email", "s@t.local"], cwd=d)
-    _git(["config", "user.name", "s"], cwd=d)
-    _git(["config", "commit.gpgsign", "false"], cwd=d)
-    (d / "x").write_text("x\n")
-    _git(["add", "x"], cwd=d)
-    _git(["commit", "-m", "init"], cwd=d)
-
+    _init_repo_with_commit(d, "master")
     assert _detect_default_branch(str(d)) == "master"
 
 
