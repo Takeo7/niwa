@@ -1,4 +1,4 @@
-"""E2 — stream termination analyzer unit tests (PR-V1-11a, PR-V1-21).
+"""E2 — stream termination analyzer unit tests (PR-V1-11a, PR-V1-21, PR-V1-21b).
 
 Feeds ``check_stream_termination`` the ordered payload dicts a run would
 produce and asserts which ``error_code`` (if any) it returns. The
@@ -9,6 +9,14 @@ the real Claude stream drives the decision.
 PR-V1-21 reshapes the semantics: the analyzer now walks back to the
 last ``assistant`` event instead of trusting the last semantic frame,
 because the real Claude CLI always emits a trailing ``result``.
+
+PR-V1-21b adds two structural signals on top of the text heuristic:
+the ``AskUserQuestion`` native tool_use (primary) and
+``result.permission_denials`` (secondary). Fixtures
+``stream_ask_user_question.json`` / ``stream_question_with_imperative.json``
+are synthetic fixtures modelled on smoke 2026-04-22 run_id=10 task 12 and
+run_id=9 task 11 respectively, reconstructed from the brief payloads
+because the sandbox has no access to the humanu2019s DB.
 """
 
 from __future__ import annotations
@@ -102,3 +110,73 @@ def test_stream_with_only_plumbing_no_assistant_returns_empty() -> None:
         {"type": "result", "subtype": "success"},
     ]
     assert check_stream_termination(events) == ("empty_stream", None)
+
+
+def test_ask_user_question_tool_use_signals_needs_input() -> None:
+    """PR-V1-21b signal 1: AskUserQuestion embedded in assistant.content[]."""
+
+    fixture_path = _FIXTURES_DIR / "stream_ask_user_question.json"
+    events = json.loads(fixture_path.read_text(encoding="utf-8"))
+    evidence: dict = {}
+    code, pending = check_stream_termination(events, evidence=evidence)
+    assert code == "needs_input"
+    assert pending == "¿Qué enfoque quieres para el ensayo?"
+    options = evidence.get("ask_user_question_options")
+    assert isinstance(options, list) and len(options) == 3
+    assert {o["label"] for o in options} == {
+        "Alineamiento",
+        "Limitaciones",
+        "Interpretabilidad",
+    }
+
+
+def test_ask_user_question_in_permission_denials_signals_needs_input() -> None:
+    """PR-V1-21b signal 2: denial present, tool_use event absent."""
+
+    events = [
+        {"type": "system", "subtype": "init"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "permission_denials": [
+                {
+                    "tool_name": "AskUserQuestion",
+                    "tool_input": {
+                        "questions": [
+                            {"question": "¿Procedo con tests?", "options": []}
+                        ]
+                    },
+                }
+            ],
+        },
+    ]
+    code, pending = check_stream_termination(events)
+    assert code == "needs_input"
+    assert pending == "¿Procedo con tests?"
+
+
+def test_question_with_imperative_closing_detects_via_paragraph_scan() -> None:
+    """PR-V1-21b signal 3: text ends with '.' but a prior paragraph ends in '?'."""
+
+    fixture_path = _FIXTURES_DIR / "stream_question_with_imperative.json"
+    events = json.loads(fixture_path.read_text(encoding="utf-8"))
+    code, pending = check_stream_termination(events)
+    assert code == "needs_input"
+    assert pending is not None
+    assert "¿Python o Node?" in pending
+
+
+def test_spanish_question_marks_detected() -> None:
+    text = "¿Cómo quieres proceder?\n\nDime cuál prefieres."
+    events = [_assistant(text), {"type": "result", "subtype": "success"}]
+    code, pending = check_stream_termination(events)
+    assert code == "needs_input"
+    assert pending == text
+
+
+def test_statement_with_question_mark_inside_code_not_detected() -> None:
+    """Known false-negative trade-off: ? inside inline code with '.' end."""
+
+    text = "Instalado. El archivo X contiene `?` como separador."
+    events = [_assistant(text), {"type": "result", "subtype": "success"}]
+    assert check_stream_termination(events) == (None, None)

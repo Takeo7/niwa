@@ -521,19 +521,36 @@ executor no cambiaron entre 11a → 11c — sólo se rellenan slots del
 - `models.py` — `@dataclass(frozen=True) VerificationResult(passed,
   outcome, error_code, evidence)`. Evidence es JSON-serializable; la
   owning invariant vive en el orquestador.
-- `stream.py` — E2. `check_stream_termination(events) -> (error_code,
-  pending_question)`. Ignora lifecycle
+- `stream.py` — E2. `check_stream_termination(events, *, evidence=None)
+  -> (error_code, pending_question)`. Ignora lifecycle
   (`started`/`completed`/`failed`/`error`). PR-V1-21 reescribe la
   lógica: el Claude CLI real **siempre** emite un `result` al final,
-  así que no basta con mirar el último evento semántico. El analyzer
-  camina hacia atrás buscando el último `assistant` y decide sobre su
-  texto. Reglas: sin eventos semánticos → `("empty_stream", None)`;
-  sin ningún `assistant` (solo `result`/`user`/`tool_use`) →
-  `("empty_stream", None)`; último `assistant` sin texto (solo
-  `tool_use` blocks) → `("tool_use_incomplete", None)`; último
-  `assistant` con texto que acaba en `?` → `("needs_input", text)`
-  (PR-V1-19 lo aparca en `waiting_input`); otro caso → `(None,
-  None)`.
+  así que no basta con mirar el último evento semántico. PR-V1-21b
+  añade dos señales estructurales por delante del fallback de texto
+  para cubrir casos donde el texto libre miente (imperativo al final,
+  `AskUserQuestion` tool nativo denegado por la CLI). Orden de
+  evaluación:
+    * **Señal 1 — `AskUserQuestion` tool_use (primaria).** Escanea
+      todos los eventos buscando bloques `tool_use` con
+      `name=="AskUserQuestion"` tanto top-level (shape legacy / fake
+      CLI) como embebidos en `assistant.message.content[]` (shape CLI
+      real). Devuelve `("needs_input", questions[0].question)`. Si
+      `evidence` dict viene kwarg y el tool_use trae `options`, los
+      deja en `evidence["ask_user_question_options"]` para que
+      `verify_run` los persista en `run.verification_json`.
+    * **Señal 2 — `permission_denials` (secundaria).** Último evento
+      `result` con `permission_denials[].tool_name=="AskUserQuestion"`
+      también es needs_input determinista. Cubre el caso donde la CLI
+      denegó el tool antes de emitirlo como evento.
+    * **Señal 3 — fallback heurístico de texto.** Walk-back al último
+      `assistant`. Sin eventos semánticos o sin ningún `assistant` →
+      `("empty_stream", None)`. Último `assistant` sin texto (solo
+      `tool_use` blocks) → `("tool_use_incomplete", None)`. Texto
+      que acaba en `?` / `?` → `("needs_input", text)` (PR-V1-19 lo
+      aparca en `waiting_input`). Texto que NO acaba en `?` pero
+      algún párrafo (split `\n\n`) sí → también `needs_input` (caza
+      cierres tipo "Let me know which direction you'd like." después
+      de listar preguntas numeradas). Otro caso → `(None, None)`.
 - `artifacts.py` — E3+E4 (PR-V1-11b).
   `check_artifacts_in_cwd(cwd, evidence)` pre-valida que la cwd exista
   (si no → `error_code="cwd_missing"` fail duro) y después shellea
@@ -638,13 +655,20 @@ false` + `test_reason: "no_test_script_detected" | "kind_script"` en
 lugar de los campos `test_*`. Ante fallo incluye también `error_code`:
 E4 añade `offending_paths: ["/tmp/leak.txt"]` con el primer offender;
 E3 deja `artifacts_count: 0`; E5 mantiene `test_tool` /
-`test_exit_code` / `test_output_tail` para diagnóstico.
+`test_exit_code` / `test_output_tail` para diagnóstico. PR-V1-21b
+añade `ask_user_question_options: [{label, description}, ...]` cuando
+la señal 1 de E2 dispara con opciones estructuradas — hoy la UI sigue
+pintando Textarea libre (follow-up para renderizarlas como botones).
 
 ### Tests
 
-- `tests/verification/test_stream.py` — 4 casos unitarios del E2
-  analyzer (result/success, question trailing, tool_use trailing,
-  empty stream).
+- `tests/verification/test_stream.py` — 12 casos unitarios del E2
+  analyzer: los 4 de PR-V1-11a (result/success, question trailing,
+  tool_use trailing, empty stream), 3 de PR-V1-21 (result-after-
+  assistant-question, answer-after-assistant, plumbing-only) y 5 de
+  PR-V1-21b (AskUserQuestion tool_use, permission_denials,
+  imperative-closing paragraph scan, Spanish ¿?, y el false-negative
+  controlado de `?` dentro de inline-code).
 - `tests/verification/test_artifacts.py` — 6 casos unitarios de E3+E4
   (dirty cwd pasa, clean cwd falla `no_artifacts`, path absoluto fuera
   top-level `tool_use` falla `artifacts_outside_cwd`, cwd no-git skip
