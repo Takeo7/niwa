@@ -807,6 +807,21 @@ def test_parent_promoted_to_failed_when_any_subtask_failed(
     # ``completed_at`` is only set on the ``done`` branch.
     assert refreshed.completed_at is None
 
+    # Symmetric with the ``done`` test: the promotion must emit a
+    # status_changed TaskEvent with ``reason=subtasks_terminal`` so SSE
+    # and audit consumers can distinguish aggregation from a direct
+    # ``_finalize`` on the parent itself.
+    events = (
+        session.query(TaskEvent)
+        .filter(TaskEvent.task_id == parent.id, TaskEvent.kind == "status_changed")
+        .all()
+    )
+    payloads = [json.loads(e.payload_json or "{}") for e in events]
+    assert any(
+        p.get("to") == "failed" and p.get("reason") == "subtasks_terminal"
+        for p in payloads
+    ), payloads
+
 
 def test_parent_stays_running_when_any_subtask_not_terminal(
     session: Session,
