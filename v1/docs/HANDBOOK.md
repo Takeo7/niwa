@@ -1089,19 +1089,20 @@ spawn del CLI + `verify_run`). Ningún cambio de estado extra.
 task, decision)` crea una `Task` por cada `decision.subtasks[i]`
 (`parent_task_id=parent.id`, `status="queued"`, `project_id=
 parent.project_id`, `description=""`), hace `session.flush()` para
-materializar `id`s, marca el parent `done` con `completed_at=now`, y
-escribe dos `task_events`:
+materializar `id`s, y escribe un único `task_event`:
 
 - `kind="message"` con `payload = {"event":"triage_split",
   "subtask_ids":[...],"rationale":...}`. **Esto es la resolución Opción B**:
   SPEC §3 no incluye `triage_split` en el enum `task_events.kind`, así
   que el marker vive dentro del payload del `message` en lugar de
   requerir migración de schema.
-- `kind="status_changed"` con `{"from":"running","to":"done"}`.
 
-No se crea `Run` para el parent — split corta el pipeline antes de
-`run_adapter`. Las subtasks quedan `queued` y se drenan en la(s)
-siguiente(s) iteración(es) del loop de `process_pending`.
+**Desde PR-V1-23** el parent NO se cierra aquí: queda `running`
+tras el split y se promociona al estado agregado cuando cada hija
+termina (ver sección "Parent task promotion"). No se crea `Run`
+para el parent — split corta el pipeline antes de `run_adapter`.
+Las subtasks quedan `queued` y se drenan en la(s) siguiente(s)
+iteración(es) del loop de `process_pending`.
 
 **Rama `triage_failed`** — `triage_task` lanza `TriageError`:
 `_finalize_triage_failure` sintetiza un `Run(status="failed",
@@ -1898,6 +1899,52 @@ el MVP (seguimiento en las notas del brief).
   payload vía `json_extract`).
 - Fixture: `fake_claude_cli.py` acepta `FAKE_CLAUDE_SESSION_ID` que
   se emite como `system/init` antes del script principal.
+
+## Parent task promotion (PR-V1-23)
+
+Antes de PR-V1-23, `_apply_split` cerraba la madre `done` en el
+instante de emitir el `triage_split`. Problema: si una hija quedaba
+`failed` o `waiting_input`, la UI seguía pintando la madre `done`
+aunque el trabajo no había terminado. Smoke 2026-04-22: task 9 con
+`10=done + 11=failed` aparecía como `done`.
+
+**Fix.** `_apply_split` ya no toca `status`/`completed_at` de la
+madre. La madre se queda en `running` tras el split (el
+`claim_next_task` la subió a `running` antes de entrar a triage).
+La promoción a terminal llega cuando `_finalize` de la última
+hija dispara `_maybe_promote_parent`.
+
+### `_maybe_promote_parent(session, parent_id)`
+
+Vive en `app/executor/core.py`. Llamado desde `_finalize` solo si
+`task.parent_task_id is not None`. Reglas:
+
+1. Lee las hijas vía `parent_task_id == parent_id`.
+2. Si alguna hija no está en `{done, failed, cancelled}`, sale
+   (no-op). `waiting_input`, `queued`, `running` cuentan como
+   no-terminales, por lo que una hija parada en
+   `waiting_input` mantiene la madre en `running` indefinidamente
+   hasta que el humano responda.
+3. Si la madre ya está en estado terminal, sale (idempotencia:
+   dos hermanas terminando a la vez, la segunda ve la madre ya
+   promocionada y retorna).
+4. Agrega:
+   - alguna `failed` → madre `failed`.
+   - todas `done` → madre `done` + `completed_at = now`.
+   - resto (alguna `cancelled`, ninguna `failed`) → madre
+     `cancelled`.
+5. Escribe `TaskEvent(kind="status_changed",
+   payload={"from":..,"to":..,"reason":"subtasks_terminal"})` y
+   commitea.
+
+**Defensivo.** La función está envuelta en `try/except`; nunca
+lanza. Si algo inesperado ocurre (huérfanos, ciclo, DB caída),
+loguea `warning niwa.executor: parent promotion failed ...` y
+retorna para que `_finalize` termine de asentar la hija.
+
+**No recursión.** SPEC §4 limita splits a 1 nivel, así que
+`_maybe_promote_parent` no sube a los abuelos. Si en el futuro
+se permite multi-nivel, habrá que encadenar la llamada.
 
 ## Próximos PRs (SPEC §9)
 
