@@ -16,7 +16,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from ..adapters import (
@@ -135,11 +135,39 @@ def run_adapter(session: Session, task: Task) -> Run:
     task.branch_name = branch_name
     session.commit()
 
+    # PR-V1-22: if the task was parked in ``waiting_input`` and the user
+    # just answered, resume the prior Claude session instead of starting
+    # fresh. Both helpers must succeed; missing either (e.g. first run
+    # died before ``system/init``) → fall back to the fresh prompt with
+    # a warning so the task never gets stuck.
+    resume_handle: str | None = None
+    adapter_prompt = _build_prompt(task)
+    user_response = _last_user_response_text(session, task.id)
+    if user_response is not None:
+        prev_handle = _last_run_session_handle(session, task.id)
+        if prev_handle is not None:
+            resume_handle = prev_handle
+            adapter_prompt = user_response
+            logger.info(
+                "resuming task_id=%s via session_handle=%s...",
+                task.id,
+                prev_handle[:8],
+            )
+        else:
+            logger.warning(
+                "task_id=%s has user_response but no prior session_handle; "
+                "falling back to fresh prompt",
+                task.id,
+            )
+
+    had_pending_question = task.pending_question is not None
+
     adapter = ClaudeCodeAdapter(
         cli_path=resolve_cli_path(),
         cwd=artifact_root or ".",
-        prompt=_build_prompt(task),
+        prompt=adapter_prompt,
         timeout=resolve_timeout(),
+        resume_handle=resume_handle,
     )
 
     try:
@@ -167,6 +195,13 @@ def run_adapter(session: Session, task: Task) -> Run:
         # the ``Popen`` outlives the run and accumulates as a zombie in a
         # long-running daemon.
         adapter.close()
+
+    # PR-V1-22: capture the session handle as soon as the adapter saw
+    # it, even on failed runs. Resume on the next retry depends on the
+    # handle having landed in the DB regardless of run outcome.
+    if adapter.session_id is not None:
+        run.session_handle = adapter.session_id
+        session.commit()
 
     # PR-V1-11a: adapter failures bypass the verifier (outcome flows
     # through unchanged); only ``cli_ok`` runs the evidence checks.
@@ -209,6 +244,7 @@ def run_adapter(session: Session, task: Task) -> Run:
         exit_code=exit_code,
         error_code=None if result.passed else result.error_code,
         pending_question=result.pending_question,
+        had_pending_question=had_pending_question,
     )
     session.refresh(run)
     return run
@@ -371,6 +407,52 @@ def _finalize_triage_failure(
     session.commit()
 
 
+def _last_user_response_text(session: Session, task_id: int) -> str | None:
+    """Return the text of the most recent ``message``/``user_response``
+    TaskEvent for ``task_id``, or ``None`` when there is none after the
+    last ``status_changed`` toward ``waiting_input``.
+
+    The executor uses this to detect a resume-on-respond path: a task
+    that was just requeued by ``respond_to_task`` carries a ``message``
+    event whose payload follows the normalized
+    ``{"event":"user_response","text":...}`` schema (PR-V1-22).
+    """
+
+    stmt = (
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.kind == "message")
+        .order_by(TaskEvent.id.desc())
+        .limit(1)
+    )
+    event = session.scalars(stmt).first()
+    if event is None or not event.payload_json:
+        return None
+    try:
+        payload = json.loads(event.payload_json)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("event") != "user_response":
+        return None
+    text_value = payload.get("text")
+    return text_value if isinstance(text_value, str) and text_value else None
+
+
+def _last_run_session_handle(session: Session, task_id: int) -> str | None:
+    """Return the ``session_handle`` of the most recent run that recorded
+    one for ``task_id`` — newest first, NULL handles skipped.
+    """
+
+    stmt = (
+        select(Run.session_handle)
+        .where(Run.task_id == task_id, Run.session_handle.is_not(None))
+        .order_by(Run.id.desc())
+        .limit(1)
+    )
+    return session.scalars(stmt).first()
+
+
 def _build_prompt(task: Task) -> str:
     """Minimal prompt: title + description. System-prompt rules ship later."""
 
@@ -402,6 +484,7 @@ def _finalize(
     exit_code: int | None,
     error_code: str | None = None,
     pending_question: str | None = None,
+    had_pending_question: bool = False,
 ) -> None:
     now = datetime.now(timezone.utc)
     # Three terminal buckets: ``verified`` → run completed + task done;
@@ -431,6 +514,11 @@ def _finalize(
     task.status = new_status
     if success:
         task.completed_at = now
+        # PR-V1-22: clear the stale question once the resumed run
+        # verified cleanly. ``needs_input`` in a later round re-populates
+        # via the branch below.
+        if had_pending_question:
+            task.pending_question = None
     if needs_input:
         task.pending_question = pending_question
 
