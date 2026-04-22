@@ -91,7 +91,7 @@ def verify_run(
     evidence["significant_event_count"] = sum(
         1 for e in stream_events if e.get("type") not in _LIFECYCLE
     )
-    e2, pending_question = check_stream_termination(stream_events)
+    e2, pending_question = check_stream_termination(stream_events, evidence=evidence)
     evidence["stream_terminated_cleanly"] = e2 is None
     if e2 == "needs_input":
         # PR-V1-19: clarification round-trip — the assistant asked a
