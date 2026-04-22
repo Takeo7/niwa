@@ -438,6 +438,29 @@ Cubre los 4 outcomes con combinaciones de args: stream normal + exit 0,
 stream + exit 1, no-existe (apuntando a path inválido), y prompt que
 duerme más que el timeout.
 
+### Permissions model (PR-V1-20)
+
+`DEFAULT_ARGS` incluye `--dangerously-skip-permissions` de forma
+incondicional desde PR-V1-20. El CLI de Claude en modo headless
+(`-p --output-format stream-json`) pide aprobación interactiva en
+cada `Write`/`Edit`/`Bash`/`MultiEdit`, pero el canal stream-json no
+tiene por dónde enviarla, así que sin el flag todo `tool_use` se
+auto-deniega y la task termina `verification_failed` con
+`error_code=no_artifacts` (bug observado en el smoke real del
+2026-04-22). El flag no es configurable — es siempre activo, tanto
+en el adapter del executor como en el que `triage.triage_task`
+spawnea.
+
+La seguridad del modelo vive *fuera* del adapter: cada task corre en
+una rama aislada `niwa/task-N-<slug>` (PR-V1-08), con guard de tree
+limpio antes de arrancar, y la diferencia real entre modos vive en
+`finalize.py` — `autonomy_mode="safe"` abre PR para revisión humana
+(PR-V1-13), `"dangerous"` auto-mergea con `gh pr merge --squash`
+(PR-V1-16). `autonomy_mode` sigue controlando **solo** ese gate de
+post-finalize, nunca los permisos del CLI. Ejecutar sin permisos
+dentro del workspace aislado es coherente con ese diseño, y cualquier
+canal de aprobación interactivo queda fuera del MVP.
+
 ## Git workspace (PR-V1-08)
 
 Antes de spawnear el adapter, `run_adapter` llama a

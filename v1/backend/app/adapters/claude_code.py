@@ -59,7 +59,22 @@ class ClaudeCodeAdapter:
     #                       assistant/tool_use events too. This matches
     #                       v0.2's ``niwa-app/backend/backend_adapters/
     #                       claude_code.py`` command construction.
-    DEFAULT_ARGS: tuple[str, ...] = ("-p", "--output-format", "stream-json", "--verbose")
+    # ``--dangerously-skip-permissions`` : stream-json has no interactive
+    #                       approval channel, so any Write/Edit/Bash
+    #                       tool_use would be auto-denied and the run
+    #                       ends without artifacts. Niwa always runs on
+    #                       an isolated task branch (PR-V1-08) and the
+    #                       safety boundary lives in the merge gate
+    #                       (PR-V1-13/16), so skipping permissions here
+    #                       is safe. See ``docs/HANDBOOK.md`` — Permissions
+    #                       model.
+    DEFAULT_ARGS: tuple[str, ...] = (
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+    )
 
     def __init__(
         self,
