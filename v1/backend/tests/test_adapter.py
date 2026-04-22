@@ -384,3 +384,89 @@ def test_default_args_include_dangerously_skip_permissions(
 
     assert "cmd" in captured, "Popen was not invoked"
     assert "--dangerously-skip-permissions" in captured["cmd"]
+
+
+# ---------------------------------------------------------------------------
+# PR-V1-22 — session_id extraction + --resume kwarg.
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_extracted_from_system_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adapter captures ``session_id`` from the first ``system/init`` event."""
+
+    cli = _fake_cli_cmd()
+    script = _write_script(
+        tmp_path / "script.jsonl",
+        [{"type": "result", "exit_code": 0}],
+    )
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", cli)
+    monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
+    monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+    monkeypatch.setenv("FAKE_CLAUDE_SESSION_ID", "abc-123")
+
+    adapter = ClaudeCodeAdapter(
+        cli_path=cli, cwd=str(tmp_path), prompt="hi", timeout=5.0,
+    )
+    try:
+        list(adapter.iter_events())
+        adapter.wait()
+    finally:
+        adapter.close()
+
+    assert adapter.session_id == "abc-123"
+
+
+def test_resume_handle_adds_resume_arg_to_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``resume_handle`` kwarg appends ``--resume <handle>`` to the spawned argv."""
+
+    captured: dict[str, list[str]] = {}
+    real_popen = subprocess.Popen
+
+    def _capturing_popen(cmd, *args, **kwargs):
+        captured.setdefault("cmds", []).append(list(cmd))
+        return real_popen(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _capturing_popen)
+
+    cli = _fake_cli_cmd()
+    script = _write_script(
+        tmp_path / "script.jsonl",
+        [{"type": "result", "exit_code": 0}],
+    )
+    monkeypatch.setenv("NIWA_CLAUDE_CLI", cli)
+    monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(script))
+    monkeypatch.setenv("FAKE_CLAUDE_EXIT", "0")
+
+    # With handle: --resume must appear.
+    adapter = ClaudeCodeAdapter(
+        cli_path=cli, cwd=str(tmp_path), prompt="hi", timeout=5.0,
+        resume_handle="abc-123",
+    )
+    try:
+        list(adapter.iter_events())
+        adapter.wait()
+    finally:
+        adapter.close()
+
+    # Without handle: --resume must not appear.
+    adapter2 = ClaudeCodeAdapter(
+        cli_path=cli, cwd=str(tmp_path), prompt="hi", timeout=5.0,
+    )
+    try:
+        list(adapter2.iter_events())
+        adapter2.wait()
+    finally:
+        adapter2.close()
+
+    cmds = captured["cmds"]
+    assert len(cmds) == 2
+    assert "--resume" in cmds[0]
+    idx = cmds[0].index("--resume")
+    assert cmds[0][idx + 1] == "abc-123"
+    assert "--resume" not in cmds[1]
