@@ -465,17 +465,21 @@ def test_process_pending_splits_when_triage_says_split(
     git_project: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Triage "split" → parent ``done`` with no run, N subtasks created.
+    """Triage "split" → parent stays ``running`` during the split, then
+    aggregates once every subtask has settled. N subtasks created.
 
     Scope note: the brief asks to assert ``status=="queued"`` on the
     subtasks, which only holds for the instant between ``_apply_split``
     and the next iteration of ``process_pending``. The real executor
     keeps draining, re-triages each subtask (fake falls back to
     ``execute`` once the marker is burned), and runs the adapter on
-    them. We assert the structural invariants (parent done, no parent
-    run, subtasks exist with the right parent/project/titles) that
-    survive that continuation, plus the ``TaskEvent.message`` split
-    marker that is the Opción B resolution for SPEC §3's enum.
+    them.
+
+    PR-V1-23 note: both subtasks share ``git_project`` here, so the
+    second one trips ``prepare_task_branch`` with a dirty tree and
+    fails. Aggregation then promotes the parent to ``failed``. The
+    ``done`` path is covered by
+    ``test_parent_promoted_to_done_when_all_subtasks_done``.
     """
 
     monkeypatch.setenv(
@@ -501,8 +505,8 @@ def test_process_pending_splits_when_triage_says_split(
     session.expire_all()
     refreshed_parent = session.get(Task, parent.id)
     assert refreshed_parent is not None
-    assert refreshed_parent.status == "done"
-    assert refreshed_parent.completed_at is not None
+    # Aggregation: any failed subtask → parent failed. See docstring above.
+    assert refreshed_parent.status == "failed"
 
     # No run was created on the parent — split short-circuits the adapter.
     assert session.query(Run).filter(Run.task_id == parent.id).count() == 0

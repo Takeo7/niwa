@@ -36,6 +36,10 @@ logger = logging.getLogger("niwa.executor")
 
 ADAPTER_MODEL = "claude-code"
 
+# PR-V1-23: terminal statuses used by ``_maybe_promote_parent`` to decide
+# whether every subtask has settled. Kept in sync with SPEC §3 task states.
+_TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
+
 
 def claim_next_task(session: Session) -> Task | None:
     """Atomically take ownership of the oldest ``queued`` task."""
@@ -443,6 +447,70 @@ def _write_event(session: Session, run: Run, event: AdapterEvent) -> None:
     session.commit()
 
 
+def _maybe_promote_parent(session: Session, parent_id: int) -> None:
+    """If every subtask of ``parent_id`` is terminal, update the parent.
+
+    Aggregation (SPEC §3 statuses only):
+
+    * any subtask ``failed``                          → parent ``failed``
+    * all subtasks ``done``                           → parent ``done``
+    * any ``cancelled`` and none ``failed``           → parent ``cancelled``
+    * any subtask in ``waiting_input``/``queued``/
+      ``running``                                     → no-op (not ready)
+
+    Idempotent: if the parent is already terminal the call is a no-op, so
+    two hermano subtasks finishing in parallel cannot corrupt the state.
+    Best-effort: never raises; on any unexpected DB error the call logs
+    a warning and returns so ``_finalize`` still settles the subtask.
+    """
+
+    try:
+        children = session.execute(
+            select(Task).where(Task.parent_task_id == parent_id)
+        ).scalars().all()
+        if not children:
+            return  # defensive — parent with no subtasks should not hit here
+
+        statuses = [c.status for c in children]
+        if any(s not in _TERMINAL_STATUSES for s in statuses):
+            return
+
+        parent = session.get(Task, parent_id)
+        if parent is None:
+            return
+        if parent.status in _TERMINAL_STATUSES:
+            return  # already promoted — the sibling that won the race settled it
+
+        if any(s == "failed" for s in statuses):
+            new_status = "failed"
+        elif all(s == "done" for s in statuses):
+            new_status = "done"
+        else:
+            # Only cancelled + done remain once failed is ruled out.
+            new_status = "cancelled"
+
+        from_status = parent.status
+        parent.status = new_status
+        if new_status == "done":
+            parent.completed_at = datetime.now(timezone.utc)
+
+        session.add(TaskEvent(
+            task_id=parent.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({
+                "from": from_status,
+                "to": new_status,
+                "reason": "subtasks_terminal",
+            }),
+        ))
+        session.commit()
+    except Exception:  # noqa: BLE001 — promotion must never sink _finalize
+        logger.warning(
+            "parent promotion failed for parent_id=%s", parent_id, exc_info=True,
+        )
+
+
 def _finalize(
     session: Session,
     task: Task,
@@ -500,6 +568,13 @@ def _finalize(
             payload_json=json.dumps({"error_code": error_code, "outcome": outcome}),
         ))
     session.commit()
+
+    # PR-V1-23: once this subtask has settled, check whether the parent
+    # is ready to be promoted. The hook is a no-op for top-level tasks
+    # (no parent) and for mothers whose siblings are still non-terminal
+    # — see ``_maybe_promote_parent``.
+    if task.parent_task_id is not None:
+        _maybe_promote_parent(session, task.parent_task_id)
 
 
 __all__ = ["ADAPTER_MODEL", "claim_next_task", "process_pending", "run_adapter"]
