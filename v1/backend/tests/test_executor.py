@@ -20,7 +20,7 @@ import json
 import os
 import threading
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -749,7 +749,7 @@ def _finalize_subtask_as(
         task_id=subtask.id,
         status="running",
         model="claude-code",
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
         artifact_root="",
     )
     session.add(run)
