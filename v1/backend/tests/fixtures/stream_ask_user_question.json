@@ -1,0 +1,6 @@
+[
+  {"type": "system", "subtype": "init", "session_id": "smoke-2026-04-22-task-12"},
+  {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_01KPRgQwSr6ffXdV8YsWNjBB", "name": "AskUserQuestion", "input": {"questions": [{"question": "¿Qué enfoque quieres para el ensayo?", "options": [{"label": "Alineamiento", "description": "Centrar en alineamiento de valores."}, {"label": "Limitaciones", "description": "Explorar limitaciones técnicas actuales."}, {"label": "Interpretabilidad", "description": "Profundizar en mechanistic interpretability."}]}]}}]}},
+  {"type": "user", "message": {"content": [{"type": "tool_result", "is_error": true, "content": "Answer questions?", "tool_use_id": "toolu_01KPRgQwSr6ffXdV8YsWNjBB"}]}},
+  {"type": "result", "subtype": "success", "session_id": "smoke-2026-04-22-task-12", "permission_denials": [{"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "¿Qué enfoque quieres para el ensayo?", "options": [{"label": "Alineamiento", "description": "Centrar en alineamiento de valores."}, {"label": "Limitaciones", "description": "Explorar limitaciones técnicas actuales."}, {"label": "Interpretabilidad", "description": "Profundizar en mechanistic interpretability."}]}]}}]}
+]

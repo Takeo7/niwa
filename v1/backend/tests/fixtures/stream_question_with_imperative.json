@@ -1,0 +1,5 @@
+[
+  {"type": "system", "subtype": "init", "session_id": "smoke-2026-04-22-task-11"},
+  {"type": "assistant", "message": {"content": [{"type": "text", "text": "Tengo dos dudas antes de crear el workflow:\n\n1. ¿Qué framework de tests usar (pytest, jest, etc.)?\n2. ¿Python o Node?\n\nLet me know which direction you'd like."}]}},
+  {"type": "result", "subtype": "success", "stop_reason": "end_turn", "session_id": "smoke-2026-04-22-task-11"}
+]
