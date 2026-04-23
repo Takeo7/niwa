@@ -66,7 +66,7 @@ def _ensure_plist_exists() -> bool:
     if not PLIST_PATH.exists():
         sys.stderr.write(
             f"service file missing at {PLIST_PATH}; "
-            "run v1/bootstrap.sh first\n"
+            "run ./bootstrap.sh first\n"
         )
         return False
     return True
