@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_DIR="${SCRIPT_DIR}"
 NIWA_HOME="${HOME}/.niwa"
 
 _log() { printf '[niwa-bootstrap] %s\n' "$*"; }
