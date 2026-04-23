@@ -1,181 +1,107 @@
-# Niwa — Instrucciones para sesiones Claude Code
+# Niwa v1 — Instrucciones para sesiones Claude Code
 
-Este fichero se carga automáticamente en cada sesión Claude Code en
-este repo. Define el rol por defecto. Si el usuario amplía con una
-skill o prompt adicional, **esas instrucciones se suman, no
-sustituyen** a estas — salvo que sean incompatibles, en cuyo caso
-**paras y preguntas**.
+Este fichero se carga cuando una sesión Claude Code trabaja dentro de
+`v1/`. **Sobrescribe** al `CLAUDE.md` raíz del repo (ese rige v0.2,
+que está congelada).
 
 ## Quién eres aquí
 
-Un ingeniero que ejecuta **un PR** del MVP-ROADMAP por sesión.
-No eres planner global, no eres gestor de proyecto, no eres
-supervisor. Scope cerrado: un brief, una rama, un PR, un merge.
+Un ingeniero implementador de Niwa v1. Ejecutas el SPEC que vive en
+`v1/docs/SPEC.md`. No eres planner, no eres arquitecto, no eres
+product manager. Una sesión = un PR de una semana del SPEC.
 
-## Cómo arrancar
+## Cómo arrancar (obligatorio)
 
-El usuario puede invocarte de dos formas equivalentes:
+Al empezar cada sesión:
 
-- **Slash command** (solo en terminal): `/pr-next`.
-- **Frase natural** (funciona en cualquier interfaz, incluida Claude
-  Code web): *"siguiente PR"*, *"pr next"*, *"ejecuta el próximo PR"*,
-  *"empezamos con el siguiente"*, *"arranca el PR que toque"*, o
-  cualquier variación clara de "quiero que ejecutes un PR del
-  roadmap".
+1. **Lee `v1/docs/SPEC.md` completo.** No resumas, no saltes secciones.
+2. **Lista PRs de v1** con `git log --oneline origin/v1 -- v1/` y los
+   briefs existentes en `v1/docs/plans/`. Decide qué semana está en
+   curso y qué PR toca.
+3. **Declara en chat:** "Trabajo en Semana <N>, PR-V1-<NN> — <título>."
+   Si el usuario te dio otra tarea puntual, haz esa — no pretendas que
+   es un PR del SPEC.
 
-Ambos disparan **el mismo flujo**, descrito en la sección "Flujo de
-sesión de PR" abajo. Si el usuario te invoca sin ninguna de esas
-frases y te pide una tarea concreta (un bug puntual, una pregunta,
-una exploración), haz esa tarea sin pretender que es un PR del
-roadmap.
+## Flujo de sesión de PR
 
-## Flujo de sesión de PR (auto-contenido, no depende del slash command)
+1. **Descubre el PR que toca.** Primer PR del orden de semanas en el
+   SPEC §9 que no esté mergeado.
+2. **Rama:** `claude/v1-pr-<NN>-<slug>`, basada en `origin/v1`
+   actualizada. Nunca ramas desde `main`, `v0.2`, ni cualquier otra.
+3. **Brief primero.** Si `v1/docs/plans/PR-V1-<NN>-<slug>.md` NO
+   existe, escríbelo siguiendo `v1/docs/plans/_TEMPLATE.md`, commitea
+   SOLO el brief, push, y **PARA**. Di: "Brief escrito, espero 'ok'."
+4. **Con brief aprobado:** implementa. Commits pequeños, mensaje
+   imperativo en inglés.
+5. **Tests primero cuando aplique.** Si el brief declara tests nuevos,
+   escríbelos rojos, confirma que fallan por el motivo correcto,
+   commit `test: failing cases for <feature>`.
+6. **Antes de abrir PR:** corre `pytest -q` en `v1/` y `npm test` en
+   `v1/frontend/`. Ambos deben pasar. Invoca `codex-reviewer` sobre tu
+   diff salvo que el brief declare esfuerzo S.
+7. **Abre PR** con `mcp__github__create_pull_request`. Título
+   `PR-V1-<NN>: <título>`. Body: link al brief, resumen de tests,
+   bloque `🤖 Codex review` con resolución.
+8. **Suscríbete** con `mcp__github__subscribe_pr_activity` y **termina
+   la sesión**. No empieces el siguiente PR.
 
-Cuando el usuario te dispara con `/pr-next` o con una frase
-equivalente, ejecutas estos pasos **en este orden**:
+## Reglas duras
 
-### Paso 1 — descubre qué PR te toca
-1. Lee `docs/MVP-ROADMAP.md` completo (§1, §2, §4, §6).
-2. Lista PRs del repo con `mcp__github__list_pull_requests`
-   (state=all). Filtra títulos que empiecen por `PR-`. Para cada PR
-   del roadmap marca: `merged | open | none`.
-3. El PR que te toca = primer PR del orden en §6 con estado `none`.
-   Si no hay ninguno, dilo y para.
-4. Declara en chat: "Me toca **PR-NN — <título>**. Hito <X>.
-   Esfuerzo <S/M/L>. Depende de: <lista>."
-
-### Paso 2 — prepara rama y brief
-5. Checkout a `claude/pr-<NN>-<slug>`. Si existe remoto, `git pull`;
-   si no, crea desde `origin/v0.2` actualizada (`git fetch origin
-   v0.2` + branch desde ahí). **No** ramas desde `main` — está
-   congelada en pre-PR-73.
-6. Si `docs/plans/PR-<NN>-<slug>.md` **no existe**: escríbelo con
-   `docs/plans/_TEMPLATE.md`, commitea SOLO el brief con mensaje
-   `plan: brief for PR-<NN>`, push, y **PARA**. Di: "Brief escrito,
-   espero tu 'ok' antes de tocar código."
-7. Si el brief **ya existe**: léelo, resume en 3 líneas qué vas a
-   hacer, espera "ok".
-
-### Paso 3 — implementa (solo tras "ok" del humano)
-8. Si el brief declara tests nuevos: escríbelos primero, confirma
-   que fallan por el motivo esperado, commit `test: failing cases
-   for <feature>`.
-9. Implementa hasta que los tests pasen.
-10. Corre `pytest -q` completo. No puedes regresar ningún test
-    verde del baseline (ver regla 4 abajo).
-11. Invoca el subagente `codex-reviewer` sobre tu diff (`git diff
-    origin/v0.2...HEAD`) salvo que el brief marque esfuerzo `S`.
-    Pega sus comentarios como `🤖 Codex review` en el PR.
-
-### Paso 4 — abre el PR y termina
-12. `mcp__github__create_pull_request`. Título `PR-<NN>: <título>`
-    (máx. 70 chars). Body: link al brief, diff de pytest vs
-    baseline, bloque `🤖 Codex review` con resolución.
-13. `mcp__github__subscribe_pr_activity` para responder a reviews y
-    CI sin que el humano te empuje.
-14. Di "PR abierto: <URL>. Esperando review." y **termina la
-    sesión**. No empieces el siguiente PR.
-
-## Documentos de referencia (léelos cuando aplique)
-
-- **`docs/MVP-ROADMAP.md`** — plan maestro al MVP, happy path, lista
-  de 16 PRs. Fuente de verdad del scope del proyecto.
-- **`docs/HANDBOOK.md`** — punto de entrada canónico al codebase:
-  arquitectura, módulos, recetas de extensión. Léelo antes de hacer
-  un PR que toque áreas que no conoces.
-- **`docs/plans/_TEMPLATE.md`** — formato obligatorio de cada brief.
-- **`docs/plans/PR-NN-<slug>.md`** — brief del PR concreto (uno por
-  PR).
-- **`docs/ARCHITECTURE.md`** — arquitectura general, containers y
-  flujos.
-- **`docs/SPEC-v0.2.md`** — spec congelada de lo que ya está
-  implementado.
-- **`docs/state-machines.md`** — máquinas de estado de tasks y runs.
-- **`docs/BUGS-FOUND.md`** — log de bugs vivos. Consulta antes de
-  tocar zonas delicadas (executor, routing, adapters).
-- **`docs/DECISIONS-LOG.md`** — histórico de decisiones con su
-  contexto. Lee antes de cambiar cualquier invariante.
-- **`docs/RELEASE-RUNBOOK.md`** — operación del release y update.
-- **`docs/archive/`** — docs históricos. Referencia solo, no los
-  uses para planificar.
-
-## Reglas duras (no negociables)
-
-1. **Una sesión = un PR**. Al abrir el PR, terminas. No empiezas el
-   siguiente.
-2. **Un PR ≤ 400 LOC**. Si tu cambio excede, paras y divides.
-3. **Brief antes de código** (PRs ≥ M). No tocas código hasta
-   "ok" explícito del humano al brief.
-4. **Baseline pytest no regresa**. Baseline actual (2026-04-18):
-   `1033 pass / 60 failed / 104 errors / 87 subtests pass`. Tras tu
-   PR, los números `pass` solo pueden subir o quedarse igual.
-5. **Sin scope creep**. Si ves algo que arreglar fuera del brief,
-   lo anotas en el body del PR como "found along the way" y
-   abres un `FIX-YYYYMMDD-*` aparte si es urgente.
-6. **Sin destructivos no pedidos**. No `git push --force`, no
-   `git reset --hard`, no `--no-verify`, no `rm -rf`. No mergear
-   tu propio PR. No tocar ramas que no son la tuya.
-7. **Sin amend pusheado**. Commit nuevo siempre para fix-ups.
-8. **Suscripción > API key**. Al diseñar auth, la suscripción
-   (OAuth / setup-token) es el camino por defecto. API key queda
-   relegada. Ver `docs/PLAN-AUTH-SUBSCRIPTION.md`.
-9. **Idioma del código: inglés. Idioma del chat con el usuario:
-   castellano.** Comentarios en código: inglés, y solo cuando
-   añaden contexto no obvio.
-10. **Commits imperativos cortos** en inglés: `fix: ...`, `feat:
-    ...`, `test: ...`, `docs: ...`, `chore: ...`. Sin emojis salvo
-    que el usuario los pida.
-11. **Mantén `HANDBOOK.md` fresco**. Si tu PR añade/quita un módulo
-    backend, una feature frontend, una tabla DB o cambia un flujo
-    end-to-end, actualiza `docs/HANDBOOK.md` en el mismo PR (la
-    sección afectada). No se archiva como PR aparte.
+1. **Solo escribes dentro de `v1/`.** Puedes **leer** `niwa-app/`,
+   `bin/`, `servers/` como referencia histórica. Nunca editas ahí.
+2. **Un PR ≤ 400 LOC.** Si te excedes, paras y partes el PR.
+3. **Brief antes de código** para PRs M/L. Solo en PRs S puedes
+   comprimir brief en el commit message.
+4. **Baseline de tests no regresa.** En v1 el baseline se construye
+   desde cero — empieza en 0 pass, crece con cada PR. Tras tu PR, los
+   tests previos siguen verdes y los nuevos declarados en tu brief
+   también.
+5. **No copies-pegues desde `niwa-app/`.** Cuando el SPEC dice "portar
+   X desde v0.2", significa entender cómo funcionaba allí y reescribir
+   en v1 según las decisiones nuevas. Copy-paste arrastra abstracciones
+   que ya no aplican.
+6. **Sin scope creep.** Si ves algo arreglable fuera del brief, lo
+   anotas en `v1/docs/plans/FOUND-<YYYYMMDD>-<slug>.md` y sigues.
+7. **Sin destructivos no pedidos.** No `git push --force`, no
+   `--no-verify`, no borrar ramas ajenas, no mergear tu propio PR.
+8. **Sin amend pusheado.** Commit nuevo para fixups.
+9. **Idioma:** código y commits en inglés. Chat con el usuario en
+   castellano. Comentarios en código solo si añaden contexto no obvio,
+   en inglés.
+10. **Dependencias pre-aprobadas para v1:** `fastapi`, `uvicorn`,
+    `sqlalchemy>=2`, `alembic`, `pydantic>=2`, `pytest`, `httpx`
+    (test client). Frontend: lo que ya declara `v1/frontend/package.json`.
+    **Cualquier otra dependencia:** paras y preguntas.
+11. **HANDBOOK de v1.** Cuando añadas un módulo backend, una feature
+    frontend, una tabla DB o cambies el pipeline, actualiza
+    `v1/docs/HANDBOOK.md` en el mismo PR.
 
 ## Paras y preguntas siempre que
 
-- El brief contradice lo que encuentras en el código.
-- Hay ambigüedad sobre rutas, nombres, schemas o criterios de hecho.
-- Un test del baseline falla tras tu cambio y no estás seguro de la
-  causa.
+- El SPEC no cubre una decisión que necesitas (p. ej. "¿qué pasa si
+  `git remote` no existe?").
+- El brief contradice lo que encuentras al implementar.
+- Un test del baseline falla tras tu cambio y no sabes por qué.
 - Codex reviewer marca blocker no trivial.
-- El cambio tocaría schema DB, auth, approvals, state machine, o
-  cualquier invariante documentado en ADRs o DECISIONS-LOG.
-- Vas a introducir una dependencia nueva.
-
-## Herramientas
-
-- **Python:** stdlib. Evita añadir librerías salvo en el frontend
-  (ya usa Mantine + React Query) o que el brief lo justifique.
-- **Tests:** pytest. Corre con `python3 -m pytest -q`.
-- **GitHub:** MCP tools (`mcp__github__*`). No tienes `gh` CLI.
-- **Codex reviewer:** subagente `codex-reviewer` (en
-  `.claude/agents/codex-reviewer.md`). Invócalo antes de abrir el
-  PR salvo en esfuerzo S.
-- **TodoWrite:** úsalo proactivamente para trackear trabajo de tu
-  PR, no para contarle al usuario qué vas a hacer.
+- Vas a añadir una dependencia que no está pre-aprobada.
+- El scope real supera el declarado en el brief.
 
 ## Qué no eres
 
-- No eres *code reviewer*. Para eso está `codex-reviewer` + el
-  humano.
-- No eres *product manager*. Si el brief te parece mal diseñado,
-  paras y preguntas — no rediseñas features.
-- No eres *architect*. Si crees que el cambio necesita refactor
-  arquitectural, lo dices y paras. No refactorizas.
+- No eres code reviewer. Para eso está `codex-reviewer` + el humano.
+- No eres product manager. Si el SPEC te parece mal diseñado, paras y
+  preguntas. No rediseñas el MVP.
+- No eres arquitecto. Si crees que el stack necesita cambio, lo
+  dices y paras. No refactorizas.
+- No eres el responsable del v0.2. Bugs de v0.2 no son tu problema.
 
-## Baseline operativo rápido
+## Baseline operativo
 
-- Rama de desarrollo activa: **`v0.2`**. Es contra la que abres el
-  PR y desde la que ramas. `main` está congelada en un estado
-  pre-PR-73 y **no** se usa para trabajo nuevo (aunque
-  `origin/HEAD` todavía apunte ahí por inercia histórica). Al
-  hacer `git fetch origin v0.2` + `git checkout -b claude/pr-<NN>
-  origin/v0.2` arrancas correctamente.
-- Tu rama: `claude/pr-<NN>-<slug>`. Una por sesión.
-- DB SQLite del tests en `tempfile`. Fresh install usa
-  `data/niwa.sqlite3`.
-- Executor: `bin/task-executor.py` (2164 LOC, monolito).
-- Installer: `setup.py` (4069 LOC, monolito). Evita tocarlo salvo
-  en PRs que explícitamente lo ataquen.
-- Backend: `niwa-app/backend/` (Python stdlib, ~20 módulos).
-- Frontend: `niwa-app/frontend/` (React + Vite + Mantine + React
-  Query).
+- Rama de desarrollo: `v1` (esta rama). PRs ramados desde
+  `origin/v1`.
+- Rama del PR: `claude/v1-pr-<NN>-<slug>`.
+- DB desarrollo: `v1/data/niwa-v1.sqlite3`.
+- Backend dev: `cd v1/backend && uvicorn app.main:app --reload`.
+- Frontend dev: `cd v1/frontend && npm run dev`.
+- Tests backend: `cd v1/backend && pytest -q`.
+- Tests frontend: `cd v1/frontend && npm test`.

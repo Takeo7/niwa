@@ -1,56 +1,61 @@
-# PR-NN — <título corto, imperativo>
+# PR-V1-NN — <título corto, imperativo>
 
-**Hito:** 0 | A | B | C | D
-**Esfuerzo:** S | S-M | M | L
-**Depende de:** PR-NN, PR-MM (o "ninguna")
-**Bloquea a:** PR-XX (o "ninguno")
+**Semana:** 1 | 2 | 3 | 4 | 5 | 6
+**Esfuerzo:** S | M | L
+**Depende de:** PR-V1-NN (o "ninguna")
 
 ## Qué
 
-<2-3 líneas. "Añade endpoint /api/readiness que devuelve estado de
-backends y qué falta configurar.">
+<2-3 líneas describiendo el entregable concreto.>
 
 ## Por qué
 
-<1 línea que conecta con el happy path del MVP (ver
-`docs/MVP-ROADMAP.md §1`).>
+<1 línea que conecta con la semana correspondiente del SPEC §9.>
 
 ## Scope — archivos que toca
 
-- `ruta/al/fichero.py` (qué cambia en 1 línea)
-- `ruta/al/otro.tsx` (idem)
+- `v1/ruta/al/fichero.py` (qué cambia en 1 línea)
+- `v1/ruta/al/otro.tsx` (idem)
 
 ## Fuera de scope (explícito)
 
 - No toca X
-- No cambia Y (eso es PR-MM)
+- No cambia Y (eso es PR-V1-MM)
+
+## Dependencias nuevas
+
+- Python: <lista o "ninguna">
+- npm: <lista o "ninguna">
+
+Si hay alguna no pre-aprobada en `v1/CLAUDE.md §Reglas duras 10`,
+paras antes de añadirla.
 
 ## Tests
 
-- **Nuevos:** `tests/test_feature.py` con casos: A, B, C.
-- **Existentes que deben seguir verdes:** `test_smoke.py`, `test_X.py`.
-- **Baseline esperada tras el PR:** `≥1060 pass / ≤75 errors` (o el
-  número que aplique según último PR mergeado).
+- **Nuevos:** `v1/backend/tests/test_feature.py` casos A, B, C.
+- **Frontend:** `v1/frontend/src/features/.../Feature.test.tsx` si
+  aplica.
+- **Existentes que deben seguir verdes:** todos los previos del
+  baseline de v1.
 
 ## Criterio de hecho
 
-Lista verificable, ejecutable por otra persona:
+Lista verificable:
 
-- [ ] `curl /api/readiness` devuelve JSON con schema `{docker_ok,
-  db_ok, backends: [...]}`
-- [ ] Widget muestra N items rojos si no hay API key
-- [ ] `pytest -q` sin regresiones respecto al baseline
-- [ ] Review Codex resuelto (o "LGTM")
+- [ ] `curl http://localhost:<port>/api/<endpoint>` devuelve <X>
+- [ ] UI muestra <Y> en <ruta>
+- [ ] `pytest -q` en `v1/backend/` pasa
+- [ ] `npm test` en `v1/frontend/` pasa
+- [ ] Review Codex resuelto (o "LGTM" / skip si esfuerzo S)
 
 ## Riesgos conocidos
 
-- <bullet>: mitigación.
+- <riesgo>: <mitigación>
 - Si ninguno: "ninguno".
 
 ## Notas para Claude Code
 
-- Si al implementar descubres que el scope es mayor del declarado,
-  PARA, reescribe este brief, pide re-aprobación.
-- Commits pequeños, mensaje imperativo en inglés.
-- Antes de pedir review: correr `pytest -q`, pegar el diff de
-  pass/fail/error respecto al baseline en el PR description.
+- Si el scope real supera el declarado, PARA y reescribe el brief.
+- Commits pequeños, imperativos, en inglés.
+- Antes de abrir PR: `pytest -q` y `npm test` en verde, diff pegado
+  en la descripción del PR.
