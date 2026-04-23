@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Niwa v1 bootstrap — reproducible install of ~/.niwa layout, venv, DB
-# migrations, service file. See v1/docs/plans/PR-V1-14-bootstrap.md.
+# migrations, service file. See docs/plans/PR-V1-14-bootstrap.md.
 #
 # Idempotent: reruns upsert venv / deps / migrations, preserve an existing
 # ``config.toml``, and always rewrite the service file with a fresh template

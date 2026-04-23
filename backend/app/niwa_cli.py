@@ -4,7 +4,7 @@ Thin wrapper over ``launchctl`` (macOS) / ``systemctl --user`` (Linux).
 PR-V1-14 writes the service file; this CLI loads/starts/stops/watches
 it. Everything is stdlib; the module is registered as the
 ``niwa-executor`` entry point of the backend package so after
-``pip install -e v1/backend`` inside the ``~/.niwa/venv`` the command
+``pip install -e backend`` inside the ``~/.niwa/venv`` the command
 ``niwa-executor <subcmd>`` is on PATH.
 
 Subcommands: ``start | stop | restart | status | logs``.

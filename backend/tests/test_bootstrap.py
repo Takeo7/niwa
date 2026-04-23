@@ -1,4 +1,4 @@
-"""Subprocess tests for ``v1/bootstrap.sh``.
+"""Subprocess tests for ``bootstrap.sh``.
 
 Each test runs the shell script against an isolated ``HOME`` (``tmp_path``)
 with ``NIWA_BOOTSTRAP_SKIP_NPM=1`` so CI doesn't spend time on ``npm``. The
@@ -9,7 +9,7 @@ tests cover the four scenarios declared in the PR-V1-14 brief:
 * missing ``python3`` makes the script exit fast with a legible error
 * placeholders in the config template are fully substituted
 
-The script lives at ``<repo>/v1/bootstrap.sh``; it must exist and be
+The script lives at ``<repo>/bootstrap.sh``; it must exist and be
 executable before these tests pass.
 """
 
@@ -24,8 +24,8 @@ from pathlib import Path
 import pytest
 
 
-REPO_V1 = Path(__file__).resolve().parents[2]
-BOOTSTRAP = REPO_V1 / "bootstrap.sh"
+REPO_DIR = Path(__file__).resolve().parents[2]
+BOOTSTRAP = REPO_DIR / "bootstrap.sh"
 
 
 def _service_relpath() -> str:
@@ -90,13 +90,12 @@ def test_fresh_install_creates_layout_and_config(tmp_path: Path) -> None:
     # template regressions with ``{{REPO_DIR}}/v1/backend`` hardcoded
     # in the plist/systemd units. Assert the rendered service file has
     # no ``v1/`` leftovers and points at the real ``<repo>/backend``.
-    repo_dir = REPO_V1
     service_content = service.read_text()
     assert "/v1/backend" not in service_content, (
         f"service file still references v1/backend:\n{service_content}"
     )
-    assert f"{repo_dir}/backend" in service_content, (
-        f"service file does not point to {repo_dir}/backend:\n{service_content}"
+    assert f"{REPO_DIR}/backend" in service_content, (
+        f"service file does not point to {REPO_DIR}/backend:\n{service_content}"
     )
 
 

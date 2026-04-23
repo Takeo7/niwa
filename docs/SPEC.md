@@ -128,7 +128,7 @@ Si falla cualquiera → `run.status = failed` con detalle en
 - **Adapter:** wrapper sobre `claude` CLI, stream-json parseado,
   portado y simplificado desde `niwa-app/backend/backend_adapters/
   claude_code.py`.
-- **Bootstrap:** `v1/bootstrap.sh` — instala deps, crea `~/.niwa/`,
+- **Bootstrap:** `bootstrap.sh` — instala deps, crea `~/.niwa/`,
   migra DB, instala systemd unit. Sin wizard interactivo.
 - **Tests:** pytest (backend) + vitest (frontend). Integración con
   Claude Code mockeado vía fake-CLI fixture (portado de v0.2).

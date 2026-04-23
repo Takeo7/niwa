@@ -40,7 +40,7 @@ def client(app) -> Iterator[TestClient]:
     """A synchronous HTTP client bound to ``app`` with an isolated DB.
 
     Each test gets a fresh in-memory SQLite database, so side effects never
-    leak across tests and the dev DB in ``v1/data/niwa-v1.sqlite3`` stays
+    leak across tests and the dev DB in ``data/niwa-v1.sqlite3`` stays
     untouched.
     """
 

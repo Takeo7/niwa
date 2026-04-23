@@ -1,7 +1,7 @@
 """Tests for ``app.config`` — alignment with templates (FIX-20260421).
 
 The config parser must match the contract emitted by
-``v1/templates/config.toml.tmpl`` (sections ``[claude]``, ``[db]``,
+``templates/config.toml.tmpl`` (sections ``[claude]``, ``[db]``,
 ``[executor]``) and honour the env var name used by the service templates
 (``NIWA_CONFIG_PATH``). Historical ``NIWA_CONFIG`` is still accepted as an
 alias so pre-fix tests (see ``test_models.py``) keep passing.

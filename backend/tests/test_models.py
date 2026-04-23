@@ -206,7 +206,7 @@ def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedP
     Uses ``-x db_url=...`` so ``env.py`` ignores the dev DB and writes the
     schema to the temp file. ``NIWA_CONFIG`` is pointed at a non-existent path
     so ``load_settings`` still falls back to defaults if the override ever
-    regresses — the subprocess must never touch ``v1/data/niwa-v1.sqlite3``.
+    regresses — the subprocess must never touch ``data/niwa-v1.sqlite3``.
     """
 
     backend_dir = Path(__file__).resolve().parents[1]

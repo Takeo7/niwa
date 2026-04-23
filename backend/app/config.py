@@ -4,7 +4,7 @@ Reads ``~/.niwa/config.toml`` if present. The file is optional in dev; when
 absent we fall back to sensible defaults so the backend can boot.
 
 Section naming matches the contract emitted by
-``v1/templates/config.toml.tmpl`` (``[claude]``, ``[db]``, ``[executor]``)
+``templates/config.toml.tmpl`` (``[claude]``, ``[db]``, ``[executor]``)
 and the env var name matches what the service templates export
 (``com.niwa.executor.plist.tmpl`` / ``niwa-executor.service.tmpl``).
 """

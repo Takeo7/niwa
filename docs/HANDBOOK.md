@@ -1,8 +1,8 @@
 # Niwa v1 — Handbook
 
-Guía operativa y arquitectural del código dentro de `v1/`. Se actualiza
+Guía operativa y arquitectural del código del repo. Se actualiza
 en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
-cambia el pipeline. El SPEC vive en `v1/docs/SPEC.md` — este documento
+cambia el pipeline. El SPEC vive en `docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
 ## Layout actual (tras PR-V1-11c)
@@ -79,7 +79,7 @@ funciona igual en dev y en build.
 
 - `server.host = 127.0.0.1`
 - `server.port = 8000`
-- `database.path = v1/data/niwa-v1.sqlite3`
+- `database.path = data/niwa-v1.sqlite3`
 
 ## DB y migraciones
 
@@ -118,14 +118,14 @@ migración `9d205b6968c1_initial_schema`:
 Todos los timestamps (`created_at`, `updated_at`) usan
 `server_default=func.now()` y `updated_at` además `onupdate=func.now()`.
 
-Manda la declaración de las tablas con `cd v1/backend && alembic
+Manda la declaración de las tablas con `cd backend && alembic
 upgrade head`; la reversión es `alembic downgrade base`.
 
 ## Tests
 
-- **Backend:** `cd v1/backend && pytest -q` (fixture `client` monta
+- **Backend:** `cd backend && pytest -q` (fixture `client` monta
   `TestClient` sobre `app.main:app`).
-- **Frontend:** `cd v1/frontend && npm test` (vitest + jsdom). Suite
+- **Frontend:** `cd frontend && npm test` (vitest + jsdom). Suite
   actual: 4 casos (`ProjectList.test.tsx` × 2 + `TaskCreateModal.test.tsx`
   × 2). El helper `renderWithProviders` monta `MantineProvider` +
   `QueryClientProvider` (retry=false) + `MemoryRouter` para aislar los
@@ -426,7 +426,7 @@ el run nunca queda atascado en `running`.
 
 ### Fake CLI en tests
 
-`v1/backend/tests/fixtures/fake_claude_cli.py` es un script Python
+`backend/tests/fixtures/fake_claude_cli.py` es un script Python
 ejecutable que imita el contrato del CLI real: acepta el prompt por
 stdin, escribe una secuencia configurable de líneas JSON en stdout, y
 sale con el código que le indique la fixture. Se activa en los tests
@@ -1148,7 +1148,7 @@ triage.
 
 Tras `verify_run` aprobar (outcome `verified`), el executor invoca
 `finalize_task(session, run, task, project)` (módulo
-`v1/backend/app/finalize.py`) **antes** de `_finalize(...,
+`backend/app/finalize.py`) **antes** de `_finalize(...,
 outcome="verified")`. La función es **best-effort**: nunca lanza; cada
 paso fallido queda en `FinalizeResult.commands_skipped` y se loggea a
 nivel `warning`/`info`. Si lanza una excepción catastrófica no-
@@ -1342,7 +1342,7 @@ follow-up.
 
 ## Bootstrap (PR-V1-14)
 
-`v1/bootstrap.sh` deja la máquina lista para correr Niwa v1 en un
+`bootstrap.sh` deja la máquina lista para correr Niwa v1 en un
 tirón, sin wizard interactivo. SPEC §6 lo declara como canal único
 de instalación.
 
@@ -1357,22 +1357,22 @@ de instalación.
 2. **Layout.** `mkdir -p ${HOME}/.niwa/{logs,data}` (idempotente).
 3. **Venv.** `${HOME}/.niwa/venv` creado solo si no existe su
    `bin/python`; `pip install --upgrade pip` siempre.
-4. **Backend editable.** `pip install -e v1/backend[dev]` desde el
+4. **Backend editable.** `pip install -e backend[dev]` desde el
    venv. Re-run reconcilia deps sin borrar.
-5. **Frontend.** `cd v1/frontend && npm install --silent`, saltable
+5. **Frontend.** `cd frontend && npm install --silent`, saltable
    con `NIWA_BOOTSTRAP_SKIP_NPM=1` (tests usan este skip para no
    gastar CI en npm).
 6. **Migrations.** `alembic -x db_url=sqlite:///<HOME>/.niwa/data/niwa-v1.sqlite3 upgrade head`
-   desde `v1/backend`. `env.py` (PR-V1-02) consume el `-x db_url`.
+   desde `backend`. `env.py` (PR-V1-02) consume el `-x db_url`.
 7. **Config (preserva).** Si `${HOME}/.niwa/config.toml` existe, se
    deja intacto. Si no, se renderiza desde
-   `v1/templates/config.toml.tmpl` sustituyendo `{{CLAUDE_CLI_PATH}}`
+   `templates/config.toml.tmpl` sustituyendo `{{CLAUDE_CLI_PATH}}`
    (`command -v claude || echo claude`) y `{{HOME}}` con `sed`.
 8. **Service file (write-only).** Según `uname -s`:
    - `Darwin` → `${HOME}/Library/LaunchAgents/com.niwa.executor.plist`
-     desde `v1/templates/com.niwa.executor.plist.tmpl`.
+     desde `templates/com.niwa.executor.plist.tmpl`.
    - `Linux` → `${HOME}/.config/systemd/user/niwa-executor.service`
-     desde `v1/templates/niwa-executor.service.tmpl`.
+     desde `templates/niwa-executor.service.tmpl`.
    - Otros → `exit 1`.
    Se renderiza con `sed` sustituyendo `{{CLAUDE_CLI_PATH}}`,
    `{{HOME}}`, `{{REPO_DIR}}`, `{{VENV_PYTHON}}`. El fichero se
@@ -1384,7 +1384,7 @@ de instalación.
 
 ### Templates
 
-Los tres templates viven en `v1/templates/` para evitar heredocs
+Los tres templates viven en `templates/` para evitar heredocs
 gigantes en bash:
 
 - `config.toml.tmpl` — defaults de SPEC §2/§6 (claude.cli,
@@ -1446,17 +1446,17 @@ añade `niwa-executor [start|stop|status]` que abstrae
 ## Executor launcher (PR-V1-15)
 
 `niwa-executor` es el wrapper CLI sobre el service file que
-escribió PR-V1-14. Vive en `v1/backend/app/niwa_cli.py`, stdlib
+escribió PR-V1-14. Vive en `backend/app/niwa_cli.py`, stdlib
 puro (`argparse`, `subprocess`, `pathlib`, `platform`,
 `sys`, `os`). Se registra como entry point en
-`v1/backend/pyproject.toml`:
+`backend/pyproject.toml`:
 
 ```toml
 [project.scripts]
 niwa-executor = "app.niwa_cli:main"
 ```
 
-Tras `pip install -e v1/backend` dentro de `~/.niwa/venv` (lo que
+Tras `pip install -e backend` dentro de `~/.niwa/venv` (lo que
 hace `bootstrap.sh`), `~/.niwa/venv/bin/niwa-executor` queda en
 PATH.
 
@@ -1508,7 +1508,7 @@ Binario ausente (p. ej. `launchctl` en un Linux) → exit 127 con
   `~/.config/systemd/user/`.
 
 Si `start`/`restart` corren en macOS y el plist no existe, el CLI
-sale 1 con `service file missing at <path>; run v1/bootstrap.sh
+sale 1 con `service file missing at <path>; run ./bootstrap.sh
 first` — la pista concreta para el usuario.
 
 ### Arranque al boot/login
@@ -1953,4 +1953,4 @@ se permite multi-nivel, habrá que encadenar la llamada.
   detectar expiración de sesión en el CLI con fallback a prompt
   compuesto; UI para cancelar un `waiting_input` largo.
 
-Ver `v1/docs/plans/` para los briefs conforme se escriben.
+Ver `docs/plans/` para los briefs conforme se escriben.

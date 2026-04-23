@@ -2,7 +2,7 @@
 
 The ``client`` fixture (see ``conftest.py``) overrides the ``get_session``
 dependency with an in-memory SQLite engine built per test, so the dev DB at
-``v1/data/niwa-v1.sqlite3`` is never touched. ``Base.metadata.create_all``
+``data/niwa-v1.sqlite3`` is never touched. ``Base.metadata.create_all``
 is used instead of running Alembic because the point here is to exercise
 the API, not the migrations — migrations have their own tests.
 """
