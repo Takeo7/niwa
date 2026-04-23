@@ -1,20 +1,15 @@
-# Generated install state
-/install/
-/.install/
-*.env
-!*.env.example
-secrets/
-*.log
-
 # Python
 __pycache__/
-*.pyc
-*.pyo
-.venv/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
+.venv/
 
-# Node (just in case)
+# Node
 node_modules/
+dist/
+.vite/
+*.tsbuildinfo
 
 # IDE / editor
 .vscode/
@@ -22,18 +17,12 @@ node_modules/
 *.swp
 .DS_Store
 
-# Backups
-*.bak
-*.backup
-backups/
+# SQLite dev DB (only schema is committed)
+data/*.sqlite3
+data/*.sqlite3-journal
+data/*.sqlite3-wal
+data/*.sqlite3-shm
 
-# Local sqlite databases (only the schema files are committed)
-*.sqlite
-*.sqlite3
-!schema/*.sql
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-node_modules
+# Local env
+*.env
+!*.env.example

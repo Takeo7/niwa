@@ -1,0 +1,18 @@
+[Unit]
+Description=Niwa v1 executor daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="NIWA_CLAUDE_CLI={{CLAUDE_CLI_PATH}}"
+Environment="NIWA_CONFIG_PATH={{HOME}}/.niwa/config.toml"
+WorkingDirectory={{REPO_DIR}}/backend
+ExecStart={{VENV_PYTHON}} -m app.executor
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:{{HOME}}/.niwa/logs/executor.log
+StandardError=append:{{HOME}}/.niwa/logs/executor.log
+
+[Install]
+WantedBy=default.target

@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# Niwa CLI wrapper — just dispatches to setup.py
-set -e
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-exec python3 "$SCRIPT_DIR/setup.py" "$@"
