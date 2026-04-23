@@ -21,12 +21,22 @@ _require() {
 # 1. Preconditions (fail fast). We list the required tools up-front so a
 # failure message always mentions the whole set, regardless of which one
 # ``command -v`` trips on first.
-_log "checking preconditions: python3 (>=3.11), npm, git"
-_require python3
+_log "checking preconditions: python3.11+, npm, git"
 _require npm
 _require git
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
-    || _die "python 3.11+ required, found $(python3 --version 2>&1)"
+
+# Prefer ``python3.11`` explicitly — brew on Apple Silicon installs the
+# 3.11 keg but does NOT expose it as ``python3``, only ``python3.11``.
+# Falling back to ``python3`` keeps Linux default installs working.
+if command -v python3.11 >/dev/null 2>&1; then
+    PYTHON_BIN="python3.11"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+else
+    _die "python 3.11+ required: install python@3.11 (brew) or python3.11 (apt)"
+fi
+"${PYTHON_BIN}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+    || _die "python 3.11+ required, found $(${PYTHON_BIN} --version 2>&1)"
 
 # 2. Layout.
 mkdir -p "${NIWA_HOME}/logs" "${NIWA_HOME}/data"
@@ -36,7 +46,7 @@ VENV_DIR="${NIWA_HOME}/venv"
 VENV_PYTHON="${VENV_DIR}/bin/python"
 if [[ ! -x "${VENV_PYTHON}" ]]; then
     _log "creating venv at ${VENV_DIR}"
-    python3 -m venv "${VENV_DIR}"
+    "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 "${VENV_DIR}/bin/pip" install --quiet --upgrade pip
 
