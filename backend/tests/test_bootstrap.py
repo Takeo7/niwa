@@ -202,13 +202,13 @@ def test_bootstrap_prefers_python311(tmp_path: Path) -> None:
 
     home = tmp_path / "home"
     home.mkdir()
-    env = {
-        "HOME": str(home),
-        "NIWA_BOOTSTRAP_SKIP_NPM": "1",
-        "PATH": str(shim_dir),
-    }
-    # Preserve SYSTEMROOT on Windows CI; here we mostly rely on the small
-    # curated env to make the PATH restriction meaningful.
+    # Inherit host env so pip keeps access to SSL_CERT_FILE / REQUESTS_CA_BUNDLE
+    # / PIP_CERT / HTTP(S)_PROXY under corporate CI with SSL interception.
+    # Prepend the shim dir so our fake ``python3`` wins the PATH lookup.
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["NIWA_BOOTSTRAP_SKIP_NPM"] = "1"
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
         ["bash", str(BOOTSTRAP)],
         env=env,
