@@ -79,6 +79,19 @@ Niwa works on existing git repos. Point it at one.
    with Claude asking you something parks in `waiting_input`
    — respond in the UI and the executor resumes the session.
 
+## Known limitations (v1.0)
+
+- DB lives in `~/.niwa/data/niwa-v1.sqlite3` and is shared
+  across all clones on the same user account. For isolated
+  testing use a separate user.
+- `bootstrap.sh` on macOS with brew requires `python3.11`
+  available; the script picks it automatically.
+- `niwa-executor stop` stops the launchd/systemd service but
+  does not kill `make dev` — use Ctrl-C in the terminal where
+  you launched it.
+
+See v1.1 roadmap in `docs/plans/FOUND-20260422-onboarding.md`.
+
 ## Architecture
 
 See `docs/HANDBOOK.md`.
