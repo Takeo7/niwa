@@ -86,6 +86,19 @@ def test_fresh_install_creates_layout_and_config(tmp_path: Path) -> None:
     service = tmp_path / _service_relpath()
     assert service.exists(), f"service file not written: {service}"
 
+    # The promotion from ``v1/`` to repo root (PR-V1-25) exposed two
+    # template regressions with ``{{REPO_DIR}}/v1/backend`` hardcoded
+    # in the plist/systemd units. Assert the rendered service file has
+    # no ``v1/`` leftovers and points at the real ``<repo>/backend``.
+    repo_dir = REPO_V1
+    service_content = service.read_text()
+    assert "/v1/backend" not in service_content, (
+        f"service file still references v1/backend:\n{service_content}"
+    )
+    assert f"{repo_dir}/backend" in service_content, (
+        f"service file does not point to {repo_dir}/backend:\n{service_content}"
+    )
+
 
 def test_rerun_is_idempotent(tmp_path: Path) -> None:
     """Two runs in a row: config.toml is preserved between them."""
