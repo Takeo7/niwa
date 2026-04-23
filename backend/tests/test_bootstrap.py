@@ -142,3 +142,89 @@ def test_config_substitution_replaces_placeholders(tmp_path: Path) -> None:
     config = (tmp_path / ".niwa" / "config.toml").read_text()
     assert "{{CLAUDE_CLI_PATH}}" not in config
     assert "{{HOME}}" not in config
+
+
+def test_bootstrap_prefers_python311(tmp_path: Path) -> None:
+    """When both ``python3`` and ``python3.11`` exist on PATH, bootstrap picks 3.11.
+
+    Regression for fresh-install friction on macOS + brew, where ``python3``
+    points to 3.13 but ``python3.11`` is the keg that Niwa actually needs.
+    The bootstrap must pick ``python3.11`` explicitly.
+
+    Setup: place a ``python3`` shim that reports an unsupported version
+    (3.9) first on PATH, alongside the real ``python3.11``. Pre-fix, the
+    script picks ``python3``, fails the version gate and exits non-zero.
+    Post-fix, ``python3.11`` is preferred and the script completes.
+    """
+
+    real_python311 = shutil.which("python3.11")
+    if real_python311 is None:
+        pytest.skip("python3.11 not available on this host")
+
+    # Shim dir with a fake ``python3`` that reports 3.9 and a real
+    # ``python3.11`` symlinked to the host's interpreter.
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    fake_python3 = shim_dir / "python3"
+    fake_python3.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == "--version" ]]; then\n'
+        '    echo "Python 3.9.0"\n'
+        "    exit 0\n"
+        "fi\n"
+        "# Any other invocation: fail the version gate.\n"
+        'if [[ "$1" == "-c" ]]; then\n'
+        "    exit 1\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    fake_python3.chmod(0o755)
+    (shim_dir / "python3.11").symlink_to(real_python311)
+
+    # Symlink the helper binaries the script uses (npm is skipped, but
+    # bash/git plus coreutils are invoked). Put our shim dir first.
+    helpers = (
+        "bash",
+        "cat",
+        "command",
+        "dirname",
+        "git",
+        "mkdir",
+        "npm",
+        "sed",
+        "uname",
+    )
+    for name in helpers:
+        path = shutil.which(name)
+        if path is None:
+            continue  # builtins like ``command`` are shell-level, skip if absent
+        (shim_dir / name).symlink_to(path)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    # Inherit host env so pip keeps access to SSL_CERT_FILE / REQUESTS_CA_BUNDLE
+    # / PIP_CERT / HTTP(S)_PROXY under corporate CI with SSL interception.
+    # Prepend the shim dir so our fake ``python3`` wins the PATH lookup.
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["NIWA_BOOTSTRAP_SKIP_NPM"] = "1"
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        ["bash", str(BOOTSTRAP)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, (
+        f"bootstrap exited {result.returncode} with restricted PATH\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    # The venv's interpreter must be (a link to) python3.11, not the fake.
+    venv_python = home / ".niwa" / "venv" / "bin" / "python"
+    assert venv_python.exists()
+    pyvenv_cfg = (home / ".niwa" / "venv" / "pyvenv.cfg").read_text()
+    # ``home`` path layout reveals which binary created the venv. Either
+    # pyvenv.cfg's ``home`` line or ``version`` line should expose 3.11.
+    assert "3.11" in pyvenv_cfg, f"pyvenv.cfg does not reference 3.11:\n{pyvenv_cfg}"
