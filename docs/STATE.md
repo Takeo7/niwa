@@ -1,39 +1,53 @@
 # Niwa — Orchestrator state
 
-Estado operativo final del MVP Niwa. Tras el rename de ramas
-(`v1 → main`, antiguo `main → legacy`), `main` es la rama oficial
-del MVP.
+Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 
 ```
-pr_merged: PR-V1-26
-date: 2026-04-23
-week: 6
+pr_merged: PR-V1-28
+date: 2026-04-25
+week: 6+
 next_pr: (none)
-week_status: MVP-COMPLETE-POLISHED
+week_status: MVP-COMPLETE-POLISHED-WITH-IN-APP-HELP
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-25** — PR-V1-28 (In-app help + first-project
+  guidance) mergeado en `main` vía squash (#137). Frontend **14
+  passed** (+2 nuevos en `HelpPage.test.tsx`; `ProjectList.test.tsx`
+  extendido in-place para cubrir empty state + regression).
+  Backend 152 sin cambios. **85 LOC código+tests** sin contenido
+  estático del help; total con contenido 265 LOC. Cierra
+  fricción del segundo usuario (pareja del autor) abriendo UI
+  por primera vez tras PR-V1-26: el modelo mental "Niwa trabaja
+  sobre repos clonados, no clona desde GitHub" no era obvio.
+  Tres entregables: (1) **empty state** en `ProjectList` cuando
+  `projects.length === 0` post-carga: card con welcome + 3 pasos
+  + bloque `<Code block>` con `git clone` + botón "+ New project"
+  + link a `/help`; gated por `!isLoading && !isError`. (2)
+  **Página `/help`** dedicada (`HelpRoute` → `HelpPage`) con
+  7 secciones literales del brief: What Niwa does, Quickstart,
+  Project kinds, Task states, Autonomy modes, Common gotchas,
+  Architecture/spec links. Mantine `Stack` + `Code block` +
+  `Table` + `List`, sin Tabs/Joyride. (3) **Helper text** bajo
+  `local_path` en `ProjectCreateModal` via prop `description`
+  de Mantine `TextInput`. Link "Help" añadido al header del
+  `AppShell` con `IconHelpCircle` (tabler ya en deps). Codex:
+  LGTM sin hallazgos (empty state correctamente gated, modal
+  state compartido entre header + empty state, texto literal
+  del brief sin invenciones).
+- **2026-04-23** — PR-V1-27 (docs: clarify Python install on
+  Ubuntu 24.04+ python3-venv) mergeado (#136) directo por el
+  humano sin orquestador. Pequeño doc fix.
 - **2026-04-23** — PR-V1-26 (Onboarding polish for fresh install)
   mergeado en `main` vía squash (#135). Backend **152 passed**
   (+1 regression). Frontend 12 sin cambios. **127 LOC netas
   código+tests** + 139 LOC de docs bajo cap 200. Cierra los 5
-  bloqueadores duros del smoke de install fresca 2026-04-22:
-  (1) `bootstrap.sh` ahora prefiere `python3.11` sobre `python3`
-  (brew macOS); (2) mensaje final del bootstrap accionable con
-  `source venv + niwa-executor start + make dev`, sin
-  referencias internas a PR-V1-15 ni paths absolutos; (3-5)
-  README reescrito con prereqs enumerados con comandos literales
-  (brew/apt/npm), sección "First project" con 4 pasos E2E,
-  "Known limitations (v1.0)". Nuevo
-  `docs/plans/FOUND-20260422-onboarding.md` con 4 fricciones
-  diferidas a v1.1 (7, 8, 9, 10: stop-no-kills-make-dev,
-  per-clone isolation, plist huérfano, make dev-daemon). Test
-  `test_bootstrap_prefers_python311` regression. Codex primera
-  pasada: 1 major (test con env curado sin heredar
-  SSL/certs/proxies) — cerrado con `env = os.environ.copy()` en
-  fix-up. MVP ahora listo para install fresca sin fricción.
+  bloqueadores duros del smoke de install fresca 2026-04-22.
+  Codex primera pasada: 1 major (test con env curado sin
+  heredar SSL/certs/proxies) — cerrado con
+  `env = os.environ.copy()` en fix-up.
 - **2026-04-22** — Rename de ramas ejecutado por el humano:
   `v1 → main` (default), antiguo `main → legacy`, `v0.2`
   preservada. Fase 4 del PR-V1-25 completada.
