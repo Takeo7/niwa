@@ -11,8 +11,12 @@ See `docs/SPEC.md` for the full spec.
 
 Tested on macOS and Linux. Requires:
 
-- Python 3.11+ — `brew install python@3.11` (macOS) or
-  `sudo apt install python3.11 python3.11-venv` (Ubuntu).
+- Python 3.11+:
+  - macOS: `brew install python@3.11`.
+  - Ubuntu 22.04 LTS: `sudo apt install python3.11 python3.11-venv`.
+  - Ubuntu 24.04+: the system `python3` is already 3.12+
+    (≥3.11), but the venv module ships separately —
+    `sudo apt install python3-venv`.
 - Node.js 22+ — `brew install node@22` (macOS) or
   https://nodejs.org (Linux).
 - git.
@@ -86,6 +90,11 @@ Niwa works on existing git repos. Point it at one.
   testing use a separate user.
 - `bootstrap.sh` on macOS with brew requires `python3.11`
   available; the script picks it automatically.
+- On Ubuntu 24.04+ the system `python3` (3.12 / 3.13) satisfies
+  the version requirement, but `python3-venv` must be installed
+  separately. Without it, `bootstrap.sh` fails at venv creation
+  with `ensurepip is not available`. Install it once with
+  `sudo apt install python3-venv` and rerun.
 - `niwa-executor stop` stops the launchd/systemd service but
   does not kill `make dev` — use Ctrl-C in the terminal where
   you launched it.
