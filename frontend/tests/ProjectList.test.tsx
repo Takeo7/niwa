@@ -35,15 +35,15 @@ describe("ProjectList", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders empty state", async () => {
+  it("renders welcome empty state when no projects", async () => {
     vi.stubGlobal("fetch", mockFetchJson([]));
     renderWithProviders(<ProjectList />);
     await waitFor(() => {
-      expect(screen.getByText("No projects yet")).toBeTruthy();
+      expect(screen.getByText(/Welcome to Niwa/i)).toBeTruthy();
     });
   });
 
-  it("renders two project cards", async () => {
+  it("does not render empty state when projects exist", async () => {
     const projects: Project[] = [
       makeProject({ id: 1, slug: "alpha", name: "Alpha" }),
       makeProject({ id: 2, slug: "beta", name: "Beta", kind: "script" }),
@@ -54,5 +54,6 @@ describe("ProjectList", () => {
       expect(screen.getByText("Alpha")).toBeTruthy();
       expect(screen.getByText("Beta")).toBeTruthy();
     });
+    expect(screen.queryByText(/Welcome to Niwa/i)).toBeNull();
   });
 });

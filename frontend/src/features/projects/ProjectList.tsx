@@ -4,7 +4,9 @@ import {
   Badge,
   Button,
   Card,
+  Code,
   Group,
+  List,
   Loader,
   SimpleGrid,
   Stack,
@@ -20,6 +22,7 @@ import { ProjectCreateModal } from "./ProjectCreateModal";
 export function ProjectList() {
   const [modalOpen, setModalOpen] = useState(false);
   const query = useProjects();
+  const isEmpty = !query.isLoading && !query.isError && query.data && query.data.length === 0;
 
   return (
     <Stack gap="md">
@@ -41,10 +44,48 @@ export function ProjectList() {
         <Alert icon={<IconAlertCircle size={16} />} color="red" title="Error">
           No se pudieron cargar los proyectos.
         </Alert>
-      ) : query.data && query.data.length === 0 ? (
-        <Text c="dimmed" py="xl" ta="center">
-          No projects yet
-        </Text>
+      ) : isEmpty ? (
+        <Card withBorder shadow="sm" padding="lg">
+          <Stack gap="md">
+            <Title order={3}>👋 Welcome to Niwa</Title>
+            <Text>
+              Niwa runs Claude Code on your local git repos. To get started:
+            </Text>
+            <List type="ordered" spacing="sm">
+              <List.Item>
+                <Stack gap="xs">
+                  <Text>
+                    Clone a repo to your machine if you haven't yet:
+                  </Text>
+                  <Code block>
+{`git clone https://github.com/you/your-repo
+cd your-repo`}
+                  </Code>
+                </Stack>
+              </List.Item>
+              <List.Item>
+                <Stack gap="xs">
+                  <Text>Create a project pointing at it.</Text>
+                  <Group>
+                    <Button
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => setModalOpen(true)}
+                    >
+                      New project
+                    </Button>
+                  </Group>
+                </Stack>
+              </List.Item>
+            </List>
+            <Text c="dimmed" size="sm">
+              Need more detail? See{" "}
+              <Text component={Link} to="/help" td="underline" inherit>
+                Help
+              </Text>{" "}
+              for the full onboarding guide.
+            </Text>
+          </Stack>
+        </Card>
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md">
           {query.data?.map((p) => (

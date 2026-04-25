@@ -108,6 +108,7 @@ export function ProjectCreateModal({ opened, onClose }: Props) {
           <TextInput
             label="Local path"
             placeholder="/home/user/code/my-project"
+            description="Absolute path to a git repo already cloned on your machine. Niwa won't clone for you — clone first, then paste the path here."
             required
             {...form.getInputProps("local_path")}
           />
