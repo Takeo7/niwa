@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ..db import Base
 
+from .attachment import Attachment
 from .project import Project
 from .task import Task
 from .task_event import TaskEvent
@@ -16,6 +17,7 @@ from .run_event import RunEvent
 
 __all__ = [
     "Base",
+    "Attachment",
     "Project",
     "Task",
     "TaskEvent",

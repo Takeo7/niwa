@@ -99,3 +99,9 @@ class Task(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    attachments: Mapped[list["Attachment"]] = relationship(  # noqa: F821
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Attachment.id.asc()",
+    )
