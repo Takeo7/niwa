@@ -138,7 +138,11 @@ def _detect_default_branch(local_path: str) -> str:
             if name:
                 return name
 
-    raise GitWorkspaceError("no default branch detected")
+    raise GitWorkspaceError(
+        "no default branch detected: the repo has no `main`/`master` "
+        "branch and no `origin/HEAD`. Run `git remote set-head origin -a` "
+        "if it's a clone, or `git commit -m init` if it's a new repo."
+    )
 
 
 def _run_git(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:

@@ -205,6 +205,23 @@ def test_detect_default_falls_back_to_master(tmp_path: Path) -> None:
     assert _detect_default_branch(str(d)) == "master"
 
 
+def test_detect_default_raises_actionable_error_when_missing(tmp_path: Path) -> None:
+    """No remote, no commits, no branches → error names the fix commands."""
+
+    from app.executor.git_workspace import _detect_default_branch
+
+    d = tmp_path / "empty"
+    d.mkdir()
+    _git(["init", "-b", "main"], cwd=d)
+
+    with pytest.raises(GitWorkspaceError) as excinfo:
+        _detect_default_branch(str(d))
+
+    msg = str(excinfo.value)
+    assert "git remote set-head origin -a" in msg
+    assert "git commit -m init" in msg
+
+
 def test_prepare_branch_from_default_not_current_head(git_project: Path) -> None:
     """New task branch inherits only from default, not the active branch."""
 
