@@ -229,9 +229,11 @@ def test_update_runs_pip_when_pyproject_changed(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(cli, "cmd_restart", lambda _a: 0)
     assert cli.main(["update"]) == 0
-    joined = [" ".join(c) for c in calls]
-    assert any("pip" in s and "install" in s and "-e" in s for s in joined)
-    assert not any("alembic" in s for s in joined)
+    expected_pip = str(Path.home() / ".niwa" / "venv" / "bin" / "pip")
+    pip_calls = [c for c in calls if c and c[0] == expected_pip]
+    assert pip_calls, f"no pip call at venv-absolute path; calls={calls}"
+    assert pip_calls[0][:3] == [expected_pip, "install", "-e"]
+    assert not any("alembic" in " ".join(c) for c in calls)
 
 
 def test_update_with_no_restart_skips_restart(tmp_path, monkeypatch):
