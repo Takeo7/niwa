@@ -54,6 +54,15 @@ Para referencia, los cinco bloqueadores que sí se cerraron:
 5. Sin documentación de "primer proyecto" → sección "First project"
    completa con paso a paso de la UI.
 
+## Fricciones cerradas en PR-V1-30
+
+- **systemd user linger en Linux** (smoke 2026-04-25, no listada
+  en el reporte original del 2026-04-22). Tras reboot del PC, el
+  `niwa-executor` no arrancaba hasta el primer login porque
+  `loginctl enable-linger` no se ejecutaba. PR-V1-30 hace que
+  `bootstrap.sh` lo intente automáticamente con fallo suave si
+  `sudo` no está disponible.
+
 ## Referencia
 
 - Brief del PR-V1-26:
