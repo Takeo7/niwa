@@ -190,3 +190,58 @@ def test_run_captures_file_not_found_returns_127(
     assert cli.main(["status"]) == 127
     err = capsys.readouterr().err
     assert "systemctl" in err or "not found" in err
+
+
+# ---- PR-V1-31: update subcommand ----
+
+
+def _stub_update(monkeypatch, cli, repo, *, same_sha, diff_files):
+    monkeypatch.setattr(cli, "_resolve_repo_path", lambda _o=None: repo)
+    calls: list[list[str]] = []
+
+    def fake(args, *a, **kw):
+        calls.append(list(args))
+        out = ""
+        if "rev-parse" in args:
+            out = "A\n" if ("HEAD" in args or same_sha) else "B\n"
+        elif "diff" in args:
+            out = diff_files
+        return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    return calls
+
+
+def test_update_skips_when_already_up_to_date(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    calls = _stub_update(monkeypatch, cli, tmp_path, same_sha=True, diff_files="")
+    assert cli.main(["update"]) == 0
+    joined = [" ".join(c) for c in calls]
+    assert not any("pip" in s or "alembic" in s for s in joined)
+    assert "up to date" in capsys.readouterr().out.lower()
+
+
+def test_update_runs_pip_when_pyproject_changed(tmp_path, monkeypatch):
+    cli = _load_cli(monkeypatch, tmp_path)
+    calls = _stub_update(
+        monkeypatch, cli, tmp_path, same_sha=False,
+        diff_files="backend/pyproject.toml\nREADME.md\n",
+    )
+    monkeypatch.setattr(cli, "cmd_restart", lambda _a: 0)
+    assert cli.main(["update"]) == 0
+    expected_pip = str(Path.home() / ".niwa" / "venv" / "bin" / "pip")
+    pip_calls = [c for c in calls if c and c[0] == expected_pip]
+    assert pip_calls, f"no pip call at venv-absolute path; calls={calls}"
+    assert pip_calls[0][:3] == [expected_pip, "install", "-e"]
+    assert not any("alembic" in " ".join(c) for c in calls)
+
+
+def test_update_with_no_restart_skips_restart(tmp_path, monkeypatch):
+    cli = _load_cli(monkeypatch, tmp_path)
+    _stub_update(monkeypatch, cli, tmp_path, same_sha=False, diff_files="")
+    seen = {"r": 0}
+    monkeypatch.setattr(
+        cli, "cmd_restart", lambda _a: (seen.update(r=seen["r"] + 1) or 0),
+    )
+    assert cli.main(["update", "--no-restart"]) == 0
+    assert seen["r"] == 0
