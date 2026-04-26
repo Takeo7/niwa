@@ -210,3 +210,35 @@ def test_list_pulls_returns_504_when_gh_times_out(
 )
 def test_collapse_check_state_priority(rollup: Any, expected: str) -> None:
     assert collapse_check_state(rollup) == expected
+
+
+def test_merge_pull_calls_gh_with_squash(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {**PROJECT_PAYLOAD, "git_remote": "git@github.com:owner/repo.git"}
+    assert client.post("/api/projects", json=payload).status_code == 201
+    _gh_installed(monkeypatch)
+    calls = _stub_gh(monkeypatch, "")
+
+    response = client.post("/api/projects/demo/pulls/7/merge")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"merged": True, "method": "squash"}
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:3] == ["gh", "pr", "merge"]
+    assert "7" in argv and "--repo" in argv and "owner/repo" in argv
+    assert "--squash" in argv and "--delete-branch" in argv and "--auto" in argv
+
+
+def test_merge_pull_409_when_not_mergeable(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {**PROJECT_PAYLOAD, "git_remote": "git@github.com:owner/repo.git"}
+    assert client.post("/api/projects", json=payload).status_code == 201
+    _gh_installed(monkeypatch)
+    _stub_gh(monkeypatch, "", rc=1, stderr="Pull request is not mergeable")
+
+    response = client.post("/api/projects/demo/pulls/7/merge")
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"] == "not_mergeable"

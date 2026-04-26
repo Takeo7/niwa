@@ -53,6 +53,34 @@ describe("PullsTab", () => {
     expect(screen.getByLabelText(/Checks failing/i)).toBeTruthy();
   });
 
+  it("only shows merge button on mergeable rows", async () => {
+    const pulls: PullRead[] = [
+      makePull({ number: 1, title: "feat: ok", mergeable: "MERGEABLE" }),
+      makePull({ number: 2, title: "fix: conflict", mergeable: "CONFLICTING" }),
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/projects/demo/pulls")) {
+        return { ok: true, status: 200, json: async () => ({ pulls }) } as Response;
+      }
+      if (url.includes("/projects/demo")) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ slug: "demo", autonomy_mode: "safe" }),
+        } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    }));
+
+    renderWithProviders(<PullsTab projectSlug="demo" active />);
+
+    await waitFor(() => {
+      expect(screen.getByText("feat: ok")).toBeTruthy();
+    });
+    const mergeButtons = screen.getAllByRole("button", { name: /Merge/i });
+    expect(mergeButtons.length).toBe(1);
+  });
+
   it("shows the GitHub CLI install message when the API returns 503", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
