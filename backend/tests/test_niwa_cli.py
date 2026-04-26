@@ -195,93 +195,51 @@ def test_run_captures_file_not_found_returns_127(
 # ---- PR-V1-31: update subcommand ----
 
 
-def _stub_update_run(
-    monkeypatch: pytest.MonkeyPatch,
-    cli,
-    repo: Path,
-    *,
-    same_sha: bool,
-    diff_files: str,
-) -> list[list[str]]:
-    """Stub ``subprocess.run`` for ``cmd_update`` flows.
-
-    Returns the captured argv list. Maps command shapes to fixed stdout:
-    ``rev-parse HEAD`` → ``A``, ``rev-parse origin/main`` → ``A`` if
-    ``same_sha`` else ``B``. ``diff --name-only`` returns ``diff_files``.
-    Everything else returns rc=0 with empty stdout.
-    """
-
-    monkeypatch.setattr(cli, "_resolve_repo_path", lambda _arg=None: repo)
+def _stub_update(monkeypatch, cli, repo, *, same_sha, diff_files):
+    monkeypatch.setattr(cli, "_resolve_repo_path", lambda _o=None: repo)
     calls: list[list[str]] = []
 
-    def fake_run(args, *a, **kw):
+    def fake(args, *a, **kw):
         calls.append(list(args))
         out = ""
         if "rev-parse" in args:
-            out = "A\n" if "HEAD" in args or same_sha else "B\n"
-        elif "diff" in args and "--name-only" in args:
+            out = "A\n" if ("HEAD" in args or same_sha) else "B\n"
+        elif "diff" in args:
             out = diff_files
         return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake)
     return calls
 
 
-def test_update_skips_when_already_up_to_date(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_update_skips_when_already_up_to_date(tmp_path, monkeypatch, capsys):
     cli = _load_cli(monkeypatch, tmp_path)
-    calls = _stub_update_run(
-        monkeypatch, cli, tmp_path, same_sha=True, diff_files=""
-    )
-
+    calls = _stub_update(monkeypatch, cli, tmp_path, same_sha=True, diff_files="")
     assert cli.main(["update"]) == 0
-    # No pip/alembic/restart spawned when up to date.
     joined = [" ".join(c) for c in calls]
-    assert not any("pip" in s for s in joined)
-    assert not any("alembic" in s for s in joined)
-    out = capsys.readouterr().out
-    assert "up to date" in out.lower()
+    assert not any("pip" in s or "alembic" in s for s in joined)
+    assert "up to date" in capsys.readouterr().out.lower()
 
 
-def test_update_runs_pip_when_pyproject_changed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_update_runs_pip_when_pyproject_changed(tmp_path, monkeypatch):
     cli = _load_cli(monkeypatch, tmp_path)
-    calls = _stub_update_run(
-        monkeypatch,
-        cli,
-        tmp_path,
-        same_sha=False,
+    calls = _stub_update(
+        monkeypatch, cli, tmp_path, same_sha=False,
         diff_files="backend/pyproject.toml\nREADME.md\n",
     )
-    # Avoid hitting the real cmd_restart on the host.
     monkeypatch.setattr(cli, "cmd_restart", lambda _a: 0)
-
     assert cli.main(["update"]) == 0
     joined = [" ".join(c) for c in calls]
     assert any("pip" in s and "install" in s and "-e" in s for s in joined)
     assert not any("alembic" in s for s in joined)
 
 
-def test_update_with_no_restart_skips_restart(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_update_with_no_restart_skips_restart(tmp_path, monkeypatch):
     cli = _load_cli(monkeypatch, tmp_path)
-    _stub_update_run(
-        monkeypatch, cli, tmp_path, same_sha=False, diff_files=""
+    _stub_update(monkeypatch, cli, tmp_path, same_sha=False, diff_files="")
+    seen = {"r": 0}
+    monkeypatch.setattr(
+        cli, "cmd_restart", lambda _a: (seen.update(r=seen["r"] + 1) or 0),
     )
-    sentinel = {"restart": 0}
-
-    def fake_restart(_args):
-        sentinel["restart"] += 1
-        return 0
-
-    monkeypatch.setattr(cli, "cmd_restart", fake_restart)
-
     assert cli.main(["update", "--no-restart"]) == 0
-    assert sentinel["restart"] == 0
+    assert seen["r"] == 0

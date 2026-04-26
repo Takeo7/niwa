@@ -1468,11 +1468,21 @@ niwa-executor stop           # stop + unload
 niwa-executor restart        # reload del service file
 niwa-executor status         # exit code mapeado a estado
 niwa-executor logs [--follow] [--lines N]   # tail del log
+niwa-executor update [--no-restart] [--repo-path P]   # PR-V1-31
 ```
 
 - `--lines`/`-n` default 50.
 - `--follow`/`-f` invoca `tail -f`; hereda stdio del padre para
   que `Ctrl-C` mate el tail hijo.
+- `update` (PR-V1-31): `git fetch origin main` + comparación de
+  SHAs; si distinto, `git pull --ff-only`, luego `pip install -e
+  backend` si `backend/pyproject.toml` cambió y `alembic upgrade
+  head` si aparecieron migraciones nuevas, y `cmd_restart` salvo
+  `--no-restart`. Ruta del repo se autodetecta subiendo niveles
+  desde `app/__init__.py` hasta encontrar `.git/`; override con
+  `--repo-path`. Usa `~/.niwa/venv/bin/{pip,alembic}` (no PATH
+  global). Si `--ff-only` falla, imprime instrucciones manuales
+  y exit 1.
 
 ### Dispatch por OS
 

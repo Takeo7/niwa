@@ -7,7 +7,7 @@ it. Everything is stdlib; the module is registered as the
 ``pip install -e backend`` inside the ``~/.niwa/venv`` the command
 ``niwa-executor <subcmd>`` is on PATH.
 
-Subcommands: ``start | stop | restart | status | logs``.
+Subcommands: ``start | stop | restart | status | logs | update``.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
+
+import app as _app_pkg
 
 
 NIWA_HOME = Path(os.environ.get("NIWA_HOME", str(Path.home() / ".niwa")))
@@ -141,6 +143,57 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return _run(cmd, inherit_stdio=True)
 
 
+def _resolve_repo_path(override: str | None = None) -> Path | None:
+    """Walk up from ``app/__init__.py`` looking for ``.git/``."""
+    if override:
+        c = Path(override).expanduser().resolve()
+        return c if (c / ".git").exists() else None
+    for p in Path(_app_pkg.__file__).resolve().parents:
+        if (p / ".git").exists():
+            return p
+    return None
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    repo = _resolve_repo_path(getattr(args, "repo_path", None))
+    if repo is None:
+        sys.stderr.write("could not locate Niwa git repo; pass --repo-path\n")
+        return 1
+    git = ["git", "-C", str(repo)]
+    out = lambda c: subprocess.run(c, capture_output=True, text=True).stdout or ""  # noqa: E731
+    if _run(git + ["fetch", "origin", "main"]) != 0:
+        return 1
+    before = out(git + ["rev-parse", "HEAD"]).strip()
+    if before == out(git + ["rev-parse", "origin/main"]).strip():
+        sys.stdout.write("Already up to date.\n")
+        return 0
+    if _run(git + ["pull", "origin", "main", "--ff-only"]) != 0:
+        sys.stderr.write(
+            f"git pull --ff-only failed in {repo}; resolve divergence "
+            "manually (git fetch && git rebase origin/main).\n"
+        )
+        return 1
+    after = out(git + ["rev-parse", "HEAD"]).strip()
+    changed = out(git + ["diff", "--name-only", f"{before}..{after}"]).splitlines()
+    summary, bin_ = ["pulled origin/main"], Path.home() / ".niwa" / "venv" / "bin"
+    if "backend/pyproject.toml" in changed:
+        if _run([str(bin_ / "pip"), "install", "-e", str(repo / "backend")]) != 0:
+            return 1
+        summary.append("reinstalled backend")
+    if any(p.startswith("backend/migrations/versions/") for p in changed):
+        from app.config import load_settings
+        url = f"sqlite:///{load_settings().db_path}"
+        if _run([str(bin_ / "alembic"), "-x", f"db_url={url}", "upgrade", "head"]) != 0:
+            return 1
+        summary.append("applied migrations")
+    if not args.no_restart:
+        if cmd_restart(args) != 0:
+            return 1
+        summary.append("restarted executor")
+    sys.stdout.write("update done: " + ", ".join(summary) + ".\n")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="niwa-executor",
@@ -159,6 +212,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--lines", "-n", type=int, default=50,
         help="lines from the end of the log (default: 50)",
     )
+    update = sub.add_parser("update", help="pull + pip + alembic + restart")
+    update.add_argument("--no-restart", action="store_true")
+    update.add_argument("--repo-path", default=None)
     return parser
 
 
@@ -168,6 +224,7 @@ _DISPATCH = {
     "restart": cmd_restart,
     "status": cmd_status,
     "logs": cmd_logs,
+    "update": cmd_update,
 }
 
 
