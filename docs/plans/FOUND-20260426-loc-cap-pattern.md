@@ -21,6 +21,18 @@ Ejemplos:
 - PR-V1-26: brief 200 → final 234 (+34) tras blocker env curado.
 - PR-V1-30: brief 30 → final 36 (+6) tras blocker SKIP_LINGER.
 - PR-V1-31: brief 100 → final 140 (+40) tras 2 majors + minor.
+- PR-V1-33: brief 350 → 466 LOC en primer push (+116, sólo data
+  layer, sin endpoints/frontend). **Nuevo síntoma**: el overage se
+  detecta antes de codex y obliga a split en sub-PRs (33a-i,
+  33a-ii, 33b). Total tres-PR: 372 + 252 + 353 = 977 LOC. Brief
+  original subestimó scope ~3×.
+- PR-V1-34: brief 300 → 551 LOC en primer push (+251, también
+  pre-codex). **Tercera muestra**: como en 33, obliga a split por
+  capa (34a backend ~240 + 34b frontend ~310). Total estimado
+  dos-PR: 550 LOC, casi 2× el cap original. Confirma que el
+  patrón "brief subestima scope" no es ruido — es sistemático en
+  features cross-stack (backend service + endpoint + frontend +
+  tests).
 
 ## Diagnóstico
 
@@ -72,6 +84,15 @@ Tres direcciones posibles, no excluyentes:
 Baja. No bloquea ningún PR del ciclo v1.1 actual. Para
 considerar en retro post-cierre del ciclo (cuando se acabe Tier
 2: PR-V1-33/34/35).
+
+**Nota 2026-04-26**: humano explícito "no actuar sobre el patrón
+en caliente — retro post-ciclo". Tras 3 muestras
+consecutivas (33, 34) con overage 50-200% obligando a split,
+queda claro que el problema es upstream del codex (estimación
+del brief), no downstream. Retro debería separar:
+- LOC cap como herramienta de scope (preventivo, en brief).
+- LOC cap como freno de PR (reactivo, en split).
+La fricción actual mezcla ambos.
 
 ## Referencias
 
