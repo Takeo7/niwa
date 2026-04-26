@@ -62,9 +62,9 @@ describe("PullsTab", () => {
     // Two open-in-github links rendered, one per pull.
     const links = screen.getAllByRole("link", { name: /Open/i });
     expect(links.length).toBe(2);
-    // Tooltips encode the check state — assert both spellings show up.
-    const tooltips = document.querySelectorAll('[aria-label*="check"]');
-    expect(tooltips.length).toBeGreaterThanOrEqual(2);
+    // Each row renders a check icon with an aria-label encoding its state.
+    expect(screen.getByLabelText(/All checks passing/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Checks failing/i)).toBeTruthy();
   });
 
   it("shows the GitHub CLI install message when the API returns 503", async () => {
