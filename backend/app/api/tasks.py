@@ -12,10 +12,11 @@ are project-scoped while detail/delete address tasks by their global id:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from ..schemas import RunRead, TaskCreate, TaskRead, TaskRespondPayload
+from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespondPayload
+from ..services import attachments as attachments_service
 from ..services import runs as runs_service
 from ..services import tasks as service
 from .deps import get_session
@@ -150,3 +151,89 @@ def respond_to_task(
             detail="Task is not waiting for input",
         )
     return TaskRead.model_validate(task)
+
+
+# ---- Attachments (PR-V1-33) -------------------------------------------------
+
+
+@tasks_router.get(
+    "/{task_id}/attachments",
+    response_model=list[AttachmentRead],
+)
+def list_attachments(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> list[AttachmentRead]:
+    try:
+        rows = attachments_service.list_attachments(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    return [AttachmentRead.model_validate(row) for row in rows]
+
+
+@tasks_router.post(
+    "/{task_id}/attachments",
+    response_model=AttachmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_attachment(
+    task_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+) -> AttachmentRead:
+    try:
+        row = attachments_service.create_attachment(
+            session,
+            task_id,
+            filename=file.filename or "",
+            content_type=file.content_type,
+            stream=file.file,
+        )
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    except attachments_service.InvalidFilename as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except attachments_service.TaskNotAcceptingAttachments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="task already started; attachments are frozen",
+        )
+    return AttachmentRead.model_validate(row)
+
+
+@tasks_router.delete(
+    "/{task_id}/attachments/{attachment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_attachment(
+    task_id: int,
+    attachment_id: int,
+    session: Session = Depends(get_session),
+) -> Response:
+    try:
+        attachments_service.delete_attachment(session, task_id, attachment_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    except attachments_service.AttachmentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="attachment not found",
+        )
+    except attachments_service.TaskNotAcceptingAttachments:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="task already started; attachments are frozen",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
