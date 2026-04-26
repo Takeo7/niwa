@@ -160,7 +160,17 @@ def cmd_update(args: argparse.Namespace) -> int:
         sys.stderr.write("could not locate Niwa git repo; pass --repo-path\n")
         return 1
     git = ["git", "-C", str(repo)]
-    out = lambda c: subprocess.run(c, capture_output=True, text=True).stdout or ""  # noqa: E731
+
+    def out(c: list[str]) -> str:
+        proc = subprocess.run(c, capture_output=True, text=True)
+        if proc.returncode != 0:
+            sys.stderr.write(
+                f"{' '.join(c)} failed (rc={proc.returncode}): "
+                f"{(proc.stderr or '').strip()}\n"
+            )
+            raise SystemExit(1)
+        return proc.stdout or ""
+
     if _run(git + ["fetch", "origin", "main"]) != 0:
         return 1
     before = out(git + ["rev-parse", "HEAD"]).strip()
