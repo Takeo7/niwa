@@ -155,9 +155,17 @@ def _resolve_repo_path(override: str | None = None) -> Path | None:
 
 
 def cmd_update(args: argparse.Namespace) -> int:
-    repo = _resolve_repo_path(getattr(args, "repo_path", None))
+    override = getattr(args, "repo_path", None)
+    repo = _resolve_repo_path(override)
     if repo is None:
-        sys.stderr.write("could not locate Niwa git repo; pass --repo-path\n")
+        if override:
+            sys.stderr.write(
+                f"--repo-path {override!r} is not a git repo\n"
+            )
+        else:
+            sys.stderr.write(
+                "could not locate Niwa git repo; pass --repo-path\n"
+            )
         return 1
     git = ["git", "-C", str(repo)]
 
