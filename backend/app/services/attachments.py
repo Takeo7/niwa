@@ -1,40 +1,35 @@
 """Attachments storage helpers (PR-V1-33).
 
-Storage layout: ``<project.local_path>/.niwa/attachments/task-<id>/``.
-Filename sanitization is intentionally narrow — reject path traversal
-(``..``, ``/``, ``\\``, NUL) and obvious abuse, then keep the original
-name. Unicode niceties are left to the OS per brief §Riesgos.
-
-Collisions get a ``__N`` suffix before the extension; the table stores
-the resolved on-disk name + absolute path.
+Files land at ``<project.local_path>/.niwa/attachments/task-<id>/``.
+Filename sanitization rejects path traversal (``..``, ``/``, ``\\``,
+NUL); collisions get a ``__N`` suffix before the extension.
 """
 
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 from typing import BinaryIO
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Attachment, Task
+from ..models import Attachment
 from .tasks import TaskNotFound, get_task
 
 
-# Statuses where the user is still allowed to mutate the attachment set.
-# Once the executor took over the task, the disk layout is frozen so the
-# adapter sees a stable cwd.
+# Statuses where the user can still mutate the attachment set; once the
+# executor took over, disk layout is frozen for the adapter cwd.
 EDITABLE_STATUSES: frozenset[str] = frozenset({"inbox", "queued"})
+_FORBIDDEN = ("..", "/", "\\", "\x00")
 
 
 class AttachmentError(Exception):
-    """Base class for attachment-domain errors mapped to HTTP statuses."""
+    """Base class mapped to HTTP statuses by the API layer."""
 
 
 class InvalidFilename(AttachmentError):
-    """Sanitization rejected the upload filename (path traversal, NUL, …)."""
+    """Sanitization rejected the upload filename."""
 
 
 class TaskNotAcceptingAttachments(AttachmentError):
@@ -45,67 +40,32 @@ class AttachmentNotFound(AttachmentError):
     """Lookup by attachment id missed."""
 
 
-# Forbidden filename payloads — any match → 400. Brief §Sanitización.
-_FORBIDDEN_FRAGMENTS = ("..", "/", "\\", "\x00")
-
-
 def sanitize_filename(name: str) -> str:
-    """Strip directories + reject traversal. Returns the safe basename.
-
-    Raises ``InvalidFilename`` when the input contains forbidden
-    fragments or collapses to an empty string. The function is pure.
-    """
+    """Reject traversal payloads and return the safe basename."""
 
     if not name:
         raise InvalidFilename("empty filename")
-    for frag in _FORBIDDEN_FRAGMENTS:
-        if frag in name:
-            raise InvalidFilename(f"filename contains forbidden fragment: {frag!r}")
-    # Defensive: even though we rejected separators above, run basename
-    # in case a future relaxation of the rules forgets to.
+    if any(frag in name for frag in _FORBIDDEN):
+        raise InvalidFilename(f"forbidden fragment in filename: {name!r}")
     safe = os.path.basename(name).strip()
     if not safe or safe in {".", ".."}:
         raise InvalidFilename("filename collapses to invalid basename")
     return safe
 
 
-def _attachment_dir(local_path: str, task_id: int) -> Path:
-    return Path(local_path) / ".niwa" / "attachments" / f"task-{task_id}"
-
-
-def _resolve_unique_path(directory: Path, filename: str) -> Path:
-    """Append ``__N`` to ``filename`` until the resulting path is free.
-
-    Splits on the *last* dot so ``foo.tar.gz`` becomes ``foo.tar__1.gz``
-    — close enough for human-friendly listings without parsing every
-    multi-extension special case.
-    """
-
-    candidate = directory / filename
-    if not candidate.exists():
-        return candidate
-    stem, dot, ext = filename.rpartition(".")
-    if not dot:
-        stem, ext = filename, ""
-    suffix = f".{ext}" if ext else ""
-    n = 1
-    while True:
-        candidate = directory / f"{stem}__{n}{suffix}"
-        if not candidate.exists():
-            return candidate
-        n += 1
-
-
 def list_attachments(session: Session, task_id: int) -> list[Attachment]:
-    """Return every attachment for ``task_id`` in insertion order."""
-
     get_task(session, task_id)  # raises TaskNotFound
-    stmt = (
-        select(Attachment)
-        .where(Attachment.task_id == task_id)
-        .order_by(Attachment.id.asc())
+    stmt = select(Attachment).where(Attachment.task_id == task_id).order_by(
+        Attachment.id.asc()
     )
     return list(session.scalars(stmt).all())
+
+
+def _require_editable_task(session: Session, task_id: int):
+    task = get_task(session, task_id)
+    if task.status not in EDITABLE_STATUSES:
+        raise TaskNotAcceptingAttachments(task.status)
+    return task
 
 
 def create_attachment(
@@ -116,66 +76,56 @@ def create_attachment(
     content_type: str | None,
     stream: BinaryIO,
 ) -> Attachment:
-    """Persist ``stream`` to disk + insert the metadata row.
-
-    Raises:
-      ``TaskNotFound``                  → 404.
-      ``InvalidFilename``               → 400 (path traversal etc.).
-      ``TaskNotAcceptingAttachments``   → 409 (task already started).
-    """
-
-    task = get_task(session, task_id)
-    if task.status not in EDITABLE_STATUSES:
-        raise TaskNotAcceptingAttachments(task.status)
-
+    task = _require_editable_task(session, task_id)
     safe_name = sanitize_filename(filename)
-    project = task.project
-    local_path = project.local_path if project is not None else ""
+    local_path = task.project.local_path if task.project is not None else ""
     if not local_path:
         raise AttachmentError("project has no local_path")
 
-    directory = _attachment_dir(local_path, task_id)
+    directory = Path(local_path) / ".niwa" / "attachments" / f"task-{task_id}"
     directory.mkdir(parents=True, exist_ok=True)
-    target = _resolve_unique_path(directory, safe_name)
+
+    # Dedup ``foo.tar.gz`` → ``foo.tar__1.gz`` (last-dot split is good
+    # enough for listings without per-extension parsing).
+    target = directory / safe_name
+    if target.exists():
+        stem, dot, ext = safe_name.rpartition(".")
+        if not dot:
+            stem, ext = safe_name, ""
+        suffix = f".{ext}" if ext else ""
+        n = 1
+        while (target := directory / f"{stem}__{n}{suffix}").exists():
+            n += 1
 
     size = 0
     with target.open("wb") as fh:
-        while True:
-            chunk = stream.read(64 * 1024)
-            if not chunk:
-                break
+        while chunk := stream.read(64 * 1024):
             fh.write(chunk)
             size += len(chunk)
 
-    attachment = Attachment(
+    row = Attachment(
         task_id=task_id,
         filename=target.name,
         content_type=content_type,
         size_bytes=size,
         storage_path=str(target.resolve()),
     )
-    session.add(attachment)
+    session.add(row)
     session.commit()
-    session.refresh(attachment)
-    return attachment
+    session.refresh(row)
+    return row
 
 
 def delete_attachment(session: Session, task_id: int, attachment_id: int) -> None:
-    """Remove the row + the file. 409 once the task left editable states."""
-
-    task = get_task(session, task_id)
-    if task.status not in EDITABLE_STATUSES:
-        raise TaskNotAcceptingAttachments(task.status)
-
+    _require_editable_task(session, task_id)
     row = session.get(Attachment, attachment_id)
     if row is None or row.task_id != task_id:
         raise AttachmentNotFound(attachment_id)
-
+    # Best-effort disk delete — drop the row regardless so the UI does
+    # not show a phantom attachment.
     try:
         Path(row.storage_path).unlink(missing_ok=True)
     except OSError:
-        # Best-effort: even if disk delete fails we still want the row
-        # gone so the UI does not show a phantom attachment.
         pass
     session.delete(row)
     session.commit()
