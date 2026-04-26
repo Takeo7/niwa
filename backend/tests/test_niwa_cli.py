@@ -11,6 +11,8 @@ import time.
 from __future__ import annotations
 
 import importlib
+import os
+import signal
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -245,3 +247,87 @@ def test_update_with_no_restart_skips_restart(tmp_path, monkeypatch):
     )
     assert cli.main(["update", "--no-restart"]) == 0
     assert seen["r"] == 0
+
+
+# ---- PR-V1-32: dev start/stop/status ----
+
+
+def _prepare_dev_env(monkeypatch, cli, tmp_path):
+    """Stub repo path + venv uvicorn + node_modules so dev start passes
+    its preflight checks. Returns the fake repo path."""
+    repo = tmp_path / "repo"
+    (repo / "frontend" / "node_modules").mkdir(parents=True)
+    (repo / "backend").mkdir(parents=True)
+    monkeypatch.setattr(cli, "_resolve_repo_path", lambda _o=None: repo)
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "uvicorn").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(cli, "NIWA_HOME", tmp_path)
+    return repo
+
+
+def test_dev_start_detach_writes_pid_files(tmp_path, monkeypatch):
+    cli = _load_cli(monkeypatch, tmp_path)
+    _prepare_dev_env(monkeypatch, cli, tmp_path)
+    pids = iter([4242, 4343])
+
+    class FakePopen:
+        def __init__(self, *a, **kw):
+            self.pid = next(pids)
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    assert cli.main(["dev", "start", "--detach"]) == 0
+    assert (tmp_path / "run" / "uvicorn.pid").read_text().strip() == "4242"
+    assert (tmp_path / "run" / "vite.pid").read_text().strip() == "4343"
+
+
+def test_dev_stop_kills_pids_from_files(tmp_path, monkeypatch):
+    cli = _load_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "NIWA_HOME", tmp_path)
+    run = tmp_path / "run"
+    run.mkdir(parents=True)
+    (run / "uvicorn.pid").write_text("100\n")
+    (run / "vite.pid").write_text("200\n")
+    calls: list[tuple[int, int]] = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+        # signal 0 (liveness) keeps returning success → forces SIGKILL.
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    assert cli.main(["dev", "stop"]) == 0
+    sigs = {(p, s) for p, s in calls}
+    assert (100, signal.SIGTERM) in sigs
+    assert (200, signal.SIGTERM) in sigs
+    assert (100, signal.SIGKILL) in sigs
+    assert (200, signal.SIGKILL) in sigs
+    assert not (run / "uvicorn.pid").exists()
+    assert not (run / "vite.pid").exists()
+
+
+def test_dev_stop_no_pid_files_is_noop(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "NIWA_HOME", tmp_path)
+    assert cli.main(["dev", "stop"]) == 0
+    assert "no dev process running" in capsys.readouterr().out
+
+
+def test_dev_status_reports_alive_or_dead(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "NIWA_HOME", tmp_path)
+    run = tmp_path / "run"
+    run.mkdir(parents=True)
+    (run / "uvicorn.pid").write_text("111\n")
+    (run / "vite.pid").write_text("222\n")
+
+    def fake_kill(pid, sig):
+        # 111 alive, 222 dead.
+        if pid == 222:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(os, "kill", fake_kill)
+    assert cli.main(["dev", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "uvicorn: alive" in out and "111" in out
+    assert "vite:" in out and "dead" in out
