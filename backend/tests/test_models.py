@@ -196,8 +196,16 @@ def test_run_event_fk(session: Session) -> None:
     session.rollback()
 
 
-EXPECTED_TABLES = {"projects", "tasks", "task_events", "runs", "run_events"}
-INITIAL_REVISION = "9d205b6968c1"
+EXPECTED_TABLES = {
+    "projects", "tasks", "task_events", "runs", "run_events",
+    # PR-V1-33 added the attachments table — keep this set in lock-step
+    # with whatever ``alembic upgrade head`` materializes so the smoke
+    # test catches table-name drift.
+    "attachments",
+}
+# Revision id of the current head migration. Bump when adding a new
+# revision so the partner test below pins the latest applied schema.
+HEAD_REVISION = "f98a50e87242"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:
@@ -268,7 +276,7 @@ def test_alembic_upgrade_records_expected_revision(tmp_path: Path) -> None:
         rows = conn.execute(
             "SELECT version_num FROM alembic_version"
         ).fetchall()
-    assert rows == [(INITIAL_REVISION,)], rows
+    assert rows == [(HEAD_REVISION,)], rows
 
 
 # Each entry is (table_name, index_name, indexed_column).
