@@ -3,39 +3,53 @@
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 Tier 1 v1.1 cerrado. Tier 2 (features de uso real) en curso —
 PR-V1-33 (task attachments) splitado en 33a-i + 33a-ii + 33b
-por overage de scope.
+por overage de scope. Backend completo de attachments en main;
+frontend (33b) pendiente.
 
 ```
-pr_merged: PR-V1-33a-i
+pr_merged: PR-V1-33a-ii
 date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-33a-ii
-week_status: v1.1-tier-2-attachments-data-merged
+next_pr: PR-V1-33b
+week_status: v1.1-tier-2-attachments-backend-complete
 blockers: []
 ```
 
 ## Historial
 
-- **2026-04-26** — PR-V1-33a-i (Task attachments — data layer:
-  model + migration + service + unit tests) mergeado en `main`
-  vía squash (#142). Backend **169 passed** (+9 vía
-  parametrize sobre 4 casos del service). **372 LOC** ≤ cap
-  real 400 (sobre cap del brief 350 por +22). Primera mitad
-  del split del original PR-V1-33 (517 LOC proyectados → split
-  per brief). Entregables: ORM `Attachment` con
-  `ON DELETE CASCADE`, migration `f98a50e87242` reversible y
-  encadenada, service `attachments.py` (145 LOC compactado
-  desde 178) con `sanitize_filename` (`..`/`/`/`\\`/NUL) +
-  dedup `__N`, helpers `attach_file`/`delete_attachment`. Test
-  file separado `test_attachments_service.py` para reservar
-  `test_attachments.py` a 33a-ii (4 casos HTTP+executor del
-  brief original). Codex: 2 minors (docstring stale en
-  `test_models.py`, write parcial sin cleanup) — no-blockers,
-  follow-up. Pendiente: 33a-ii (API + executor) + 33b
-  (frontend Dropzone). FOUND nuevo
+- **2026-04-26** — PR-V1-33a-ii (Task attachments — API +
+  executor integration) mergeado en `main` vía squash (#143).
+  Backend **176 passed** (+4 nuevos del brief original; +3
+  vía parametrize de path traversal). **252 LOC** ≤ cap real
+  400. Cherry-pick limpio desde la rama abandonada
+  `claude/v1-pr-33-task-attachments` de los commits API. Tres
+  endpoints nuevos: `POST /api/tasks/{id}/attachments`
+  (multipart), `GET .../attachments`, `DELETE
+  .../attachments/{aid}` con 404/409 gating. Schema
+  `AttachmentRead` Pydantic v2. `_build_prompt(task,
+  attachments)` extiende prompt con "## Attached files (read
+  these as context):" + paths via `os.path.relpath`. Resume
+  path (PR-V1-22) sobrescribe `adapter_prompt` con
+  user_response sin tocar attachments — coherente con brief
+  (resume = task ya empezada, attachments congeladas a
+  inbox/queued). `python-multipart` añadida como peer canónica
+  de FastAPI para `UploadFile` (aprobada explícitamente por
+  humano + documentada en
+  `FOUND-20260426-brief-loc-estimation.md`). Codex: 3 minors
+  no-blockers (formalización dep policy en PR aparte; DELETE
+  status_code redundante; test traversal sin assert DB —
+  cosmético). Pendiente: 33b (frontend Dropzone + bump
+  `@mantine/dropzone@7.17.8`).
+- **2026-04-26** — PR-V1-33a-i (Task attachments — data layer)
+  mergeado (#142). Backend **169 passed**. **372 LOC**. ORM
+  `Attachment` con `ON DELETE CASCADE`, migration
+  `f98a50e87242` reversible, service `attachments.py` (145
+  LOC) con `sanitize_filename` (`..`/`/`/`\\`/NUL) + dedup
+  `__N`. Codex: 2 minors (docstring stale, write parcial sin
+  cleanup) — follow-up. FOUND nuevo
   `docs/plans/FOUND-20260426-brief-loc-estimation.md`
   documenta el patrón sistemático de briefs subestimando
-  scope (PR-V1-31 cap 100→140; PR-V1-33 cap 350→517).
+  scope.
 - **2026-04-26** — PR-V1-32 (`niwa-executor dev start/stop/status`)
   mergeado (#141). Backend **160 passed**. **169 LOC** (+19).
   Cierra Tier 1 del ciclo v1.1. Codex: LGTM.
