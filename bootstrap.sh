@@ -112,20 +112,29 @@ _log "service file written: ${SERVICE_FILE}"
 # 8b. Linger (Linux only). systemd user services don't survive reboot
 # unless the user has linger enabled. macOS launchd handles this via
 # RunAtLoad in the plist, so it's not needed there.
-case "$(uname -s)" in
-    Linux)
-        LINGER_USER="${USER:-$(id -un)}"
-        if ! loginctl show-user "${LINGER_USER}" 2>/dev/null | \
-             grep -q '^Linger=yes'; then
-            _log "enabling user linger (requires sudo password)"
-            sudo loginctl enable-linger "${LINGER_USER}" \
-                && _log "linger enabled" \
-                || _log "WARN: enable-linger failed; service will not autostart on reboot. Run manually: sudo loginctl enable-linger ${LINGER_USER}"
-        else
-            _log "linger already enabled"
-        fi
-        ;;
-esac
+#
+# Skippable for tests: bootstrap tests override HOME but not USER, so
+# without the escape hatch ``loginctl enable-linger "$USER"`` would
+# target the real host user (mutating system state on dev boxes with
+# NOPASSWD sudo, or hanging on a TTY password prompt in CI).
+if [[ "${NIWA_BOOTSTRAP_SKIP_LINGER:-0}" != "1" ]]; then
+    case "$(uname -s)" in
+        Linux)
+            LINGER_USER="${USER:-$(id -un)}"
+            if ! loginctl show-user "${LINGER_USER}" 2>/dev/null | \
+                 grep -q '^Linger=yes'; then
+                _log "enabling user linger (requires sudo password)"
+                sudo loginctl enable-linger "${LINGER_USER}" \
+                    && _log "linger enabled" \
+                    || _log "WARN: enable-linger failed; service will not autostart on reboot. Run manually: sudo loginctl enable-linger ${LINGER_USER}"
+            else
+                _log "linger already enabled"
+            fi
+            ;;
+    esac
+else
+    _log "skipping linger setup (NIWA_BOOTSTRAP_SKIP_LINGER=1)"
+fi
 
 # 9. Summary. Paths are shown relative to $HOME so the message stays the
 # same across machines; the service file path varies per-OS and is less
