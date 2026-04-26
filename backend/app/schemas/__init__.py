@@ -6,11 +6,13 @@ the public names so callers can write ``from app.schemas import ProjectRead``.
 
 from __future__ import annotations
 
+from .attachment import AttachmentRead
 from .project import ProjectCreate, ProjectPatch, ProjectRead
 from .run import RunRead
 from .task import TaskCreate, TaskRead, TaskRespondPayload
 
 __all__ = [
+    "AttachmentRead",
     "ProjectCreate",
     "ProjectPatch",
     "ProjectRead",

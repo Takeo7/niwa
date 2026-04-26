@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select, text, update
@@ -26,7 +27,7 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..finalize import finalize_task
-from ..models import Project, Run, RunEvent, Task, TaskEvent
+from ..models import Attachment, Project, Run, RunEvent, Task, TaskEvent
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
@@ -143,7 +144,14 @@ def run_adapter(session: Session, task: Task) -> Run:
     # session_handle), resume the conversation with the user's text as
     # prompt. Missing either signal → fresh prompt + warning.
     resume_handle: str | None = None
-    adapter_prompt = _build_prompt(task)
+    attachments = list(
+        session.scalars(
+            select(Attachment)
+            .where(Attachment.task_id == task.id)
+            .order_by(Attachment.id.asc())
+        ).all()
+    )
+    adapter_prompt = _build_prompt(task, attachments)
     user_response = _last_user_response_text(session, task.id)
     if user_response is not None:
         prev_handle = _last_run_session_handle(session, task.id)
@@ -432,14 +440,27 @@ def _last_run_session_handle(session: Session, task_id: int) -> str | None:
     return session.scalars(stmt).first()
 
 
-def _build_prompt(task: Task) -> str:
-    """Minimal prompt: title + description. System-prompt rules ship later."""
+def _build_prompt(task: Task, attachments: list[Attachment] | None = None) -> str:
+    """Minimal prompt: title + description + attachment paths (relative)."""
 
     parts: list[str] = []
     if task.title:
         parts.append(f"# Task: {task.title}")
     if task.description:
         parts.append(task.description)
+    if attachments:
+        # Render paths relative to the project root so the adapter (whose
+        # cwd == ``project.local_path``) can ``Read`` them as context.
+        local_path = task.project.local_path if task.project is not None else ""
+        lines = ["## Attached files (read these as context):"]
+        for a in attachments:
+            rel = (
+                os.path.relpath(a.storage_path, local_path)
+                if local_path
+                else a.storage_path
+            )
+            lines.append(f"- `{rel}`")
+        parts.append("\n".join(lines))
     return "\n\n".join(parts) if parts else "Complete the assigned task."
 
 
