@@ -1,43 +1,50 @@
 # Niwa — Orchestrator state
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
-Tier 1 v1.1 cerrado. Tier 2 (features de uso real) en curso.
+Tier 1 v1.1 cerrado. Tier 2 (features de uso real) en curso —
+PR-V1-33 (task attachments) splitado en 33a-i + 33a-ii + 33b
+por overage de scope.
 
 ```
-pr_merged: PR-V1-32
+pr_merged: PR-V1-33a-i
 date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-33
-week_status: v1.1-tier-1-complete-tier-2-in-flight
+next_pr: PR-V1-33a-ii
+week_status: v1.1-tier-2-attachments-data-merged
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-26** — PR-V1-33a-i (Task attachments — data layer:
+  model + migration + service + unit tests) mergeado en `main`
+  vía squash (#142). Backend **169 passed** (+9 vía
+  parametrize sobre 4 casos del service). **372 LOC** ≤ cap
+  real 400 (sobre cap del brief 350 por +22). Primera mitad
+  del split del original PR-V1-33 (517 LOC proyectados → split
+  per brief). Entregables: ORM `Attachment` con
+  `ON DELETE CASCADE`, migration `f98a50e87242` reversible y
+  encadenada, service `attachments.py` (145 LOC compactado
+  desde 178) con `sanitize_filename` (`..`/`/`/`\\`/NUL) +
+  dedup `__N`, helpers `attach_file`/`delete_attachment`. Test
+  file separado `test_attachments_service.py` para reservar
+  `test_attachments.py` a 33a-ii (4 casos HTTP+executor del
+  brief original). Codex: 2 minors (docstring stale en
+  `test_models.py`, write parcial sin cleanup) — no-blockers,
+  follow-up. Pendiente: 33a-ii (API + executor) + 33b
+  (frontend Dropzone). FOUND nuevo
+  `docs/plans/FOUND-20260426-brief-loc-estimation.md`
+  documenta el patrón sistemático de briefs subestimando
+  scope (PR-V1-31 cap 100→140; PR-V1-33 cap 350→517).
 - **2026-04-26** — PR-V1-32 (`niwa-executor dev start/stop/status`)
-  mergeado en `main` vía squash (#141). Backend **160 passed**
-  (+4). **169 LOC** (sobre cap S 150 por +19; el 4º test
-  opcional añade ~17 del overage). Tres subcomandos nuevos:
-  `dev start [--detach]` con preflight (uvicorn venv +
-  node_modules), foreground via `os.execvp("make", ["make",
-  "-C", repo, "dev"])`, detach con `subprocess.Popen
-  start_new_session=True` y PID files en `~/.niwa/run/`; `dev
-  stop` con TERM → poll 3s → SIGKILL fallback +
-  ProcessLookupError silente; `dev status` con `kill(pid, 0)`
-  liveness. Codex: LGTM. Cierra Tier 1 del ciclo v1.1.
+  mergeado (#141). Backend **160 passed**. **169 LOC** (+19).
+  Cierra Tier 1 del ciclo v1.1. Codex: LGTM.
 - **2026-04-26** — PR-V1-31 (`niwa-executor update` wrapper)
-  mergeado (#140). Backend **156 passed**. **140 LOC** (+40
-  sobre cap por +11 scope inicial + ~30 fix-ups codex). Codex
-  primera pasada: 2 majors + 1 minor cerrados en fix-up:
-  `out()` ignoraba returncode (mentira-de-completion estilo
-  v0.2) → aborta con error claro; test no verificaba ruta venv
-  → assert reforzado; `--repo-path` inválido → mensaje
-  diferenciado. Patrón sistemático del overage por fix-ups
-  documentado en `docs/plans/FOUND-20260426-loc-cap-pattern.md`.
+  mergeado (#140). Backend **156 passed**. **140 LOC** (+40).
+  Codex 2 majors + 1 minor cerrados en fix-up.
 - **2026-04-26** — PR-V1-30 (Bootstrap enables systemd user
   linger) mergeado (#139). Backend **153 passed**. **36 LOC**
-  (+6). Codex: 1 major (test side effect host) cerrado en
-  fix-up con `NIWA_BOOTSTRAP_SKIP_LINGER`.
+  (+6). Codex: 1 major fix-up.
 - **2026-04-25** — PR-V1-29 (Actionable error when no default
   branch detected) mergeado (#138). Backend **153 passed**.
   **22 LOC**. Codex: LGTM.
@@ -48,7 +55,7 @@ blockers: []
   (#136) directo por el humano.
 - **2026-04-23** — PR-V1-26 (Onboarding polish for fresh
   install) mergeado (#135). Backend **152 passed**. Codex: 1
-  major en fix-up.
+  major fix-up.
 - **2026-04-22** — Rename de ramas: `v1 → main`. Fase 4 del
   PR-V1-25.
 - **2026-04-22** — PR-V1-25 (Promote v1 to root + cleanup
