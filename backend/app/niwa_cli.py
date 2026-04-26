@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import app as _app_pkg
@@ -212,6 +214,91 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+_DEV_PROCS = (("uvicorn", "uvicorn.pid"), ("vite", "vite.pid"))
+
+
+def _pid_path(name: str) -> Path:
+    return NIWA_HOME / "run" / name
+
+
+def _read_pid(p: Path) -> int | None:
+    try:
+        return int(p.read_text().strip()) if p.exists() else None
+    except ValueError:
+        return None
+
+
+def cmd_dev_start(args: argparse.Namespace) -> int:
+    repo = _resolve_repo_path(None)
+    if repo is None:
+        sys.stderr.write("could not locate Niwa git repo\n")
+        return 1
+    uv_bin = NIWA_HOME / "venv" / "bin" / "uvicorn"
+    if not uv_bin.exists():
+        sys.stderr.write(f"{uv_bin} missing; run ./bootstrap.sh first\n")
+        return 1
+    if not (repo / "frontend" / "node_modules").exists():
+        sys.stderr.write(
+            f"node_modules missing; run: cd {repo}/frontend && npm install\n"
+        )
+        return 1
+    if not args.detach:
+        os.execvp("make", ["make", "-C", str(repo), "dev"])
+        return 0  # pragma: no cover — execvp does not return
+    (NIWA_HOME / "run").mkdir(parents=True, exist_ok=True)
+    (NIWA_HOME / "logs").mkdir(parents=True, exist_ok=True)
+    log = open(NIWA_HOME / "logs" / "dev.log", "ab")
+    cmds = [
+        ([str(uv_bin), "app.main:app", "--reload",
+          "--host", "127.0.0.1", "--port", "8000"], repo / "backend"),
+        (["npm", "run", "dev"], repo / "frontend"),
+    ]
+    for (_n, fname), (cmd, cwd) in zip(_DEV_PROCS, cmds):
+        p = subprocess.Popen(cmd, cwd=str(cwd), stdout=log, stderr=log,
+                             start_new_session=True)
+        _pid_path(fname).write_text(f"{p.pid}\n")
+    sys.stdout.write(
+        "dev detached: backend http://127.0.0.1:8000 "
+        "frontend http://127.0.0.1:5173\nstop with: niwa-executor dev stop\n"
+    )
+    return 0
+
+
+def cmd_dev_stop(args: argparse.Namespace) -> int:
+    items = [(_pid_path(f), _read_pid(_pid_path(f))) for _n, f in _DEV_PROCS]
+    if all(pid is None for _f, pid in items):
+        sys.stdout.write("no dev process running\n")
+        return 0
+    for path, pid in items:
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(30):
+                    time.sleep(0.1)
+                    os.kill(pid, 0)
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        path.unlink(missing_ok=True)
+    sys.stdout.write("dev stopped\n")
+    return 0
+
+
+def cmd_dev_status(args: argparse.Namespace) -> int:
+    for name, fname in _DEV_PROCS:
+        pid = _read_pid(_pid_path(fname))
+        if pid is None:
+            sys.stdout.write(f"{name}: not running\n")
+            continue
+        try:
+            os.kill(pid, 0)
+            state = f"alive (pid {pid})"
+        except ProcessLookupError:
+            state = f"dead (stale pid {pid})"
+        sys.stdout.write(f"{name}: {state}\n")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="niwa-executor",
@@ -233,6 +320,11 @@ def _build_parser() -> argparse.ArgumentParser:
     update = sub.add_parser("update", help="pull + pip + alembic + restart")
     update.add_argument("--no-restart", action="store_true")
     update.add_argument("--repo-path", default=None)
+    dev = sub.add_parser("dev", help="run backend + frontend dev servers")
+    dev_s = dev.add_subparsers(dest="dev_cmd", required=True)
+    dev_s.add_parser("start").add_argument("--detach", action="store_true")
+    dev_s.add_parser("stop")
+    dev_s.add_parser("status")
     return parser
 
 
@@ -245,10 +337,18 @@ _DISPATCH = {
     "update": cmd_update,
 }
 
+_DEV_DISPATCH = {
+    "start": cmd_dev_start,
+    "stop": cmd_dev_stop,
+    "status": cmd_dev_status,
+}
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.subcommand == "dev":
+        return _DEV_DISPATCH[args.dev_cmd](args)
     handler = _DISPATCH[args.subcommand]
     return handler(args)
 

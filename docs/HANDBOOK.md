@@ -1469,6 +1469,9 @@ niwa-executor restart        # reload del service file
 niwa-executor status         # exit code mapeado a estado
 niwa-executor logs [--follow] [--lines N]   # tail del log
 niwa-executor update [--no-restart] [--repo-path P]   # PR-V1-31
+niwa-executor dev start [--detach]   # PR-V1-32: uvicorn + vite
+niwa-executor dev stop               # PR-V1-32: kill detached pair
+niwa-executor dev status             # PR-V1-32: alive / dead / not running
 ```
 
 - `--lines`/`-n` default 50.
@@ -1483,6 +1486,19 @@ niwa-executor update [--no-restart] [--repo-path P]   # PR-V1-31
   `--repo-path`. Usa `~/.niwa/venv/bin/{pip,alembic}` (no PATH
   global). Si `--ff-only` falla, imprime instrucciones manuales
   y exit 1.
+- `dev start/stop/status` (PR-V1-32): wrapper sobre el par
+  uvicorn+vite. Sin `--detach`, `dev start` hace `os.execvp` a
+  `make -C <repo> dev` (idéntico a `make dev` actual). Con
+  `--detach`, lanza ambos vía `subprocess.Popen` con
+  `start_new_session=True`, redirige stdout+stderr a
+  `~/.niwa/logs/dev.log` (append) y guarda PIDs en
+  `~/.niwa/run/{uvicorn,vite}.pid`. `dev stop` lee los PID files,
+  envía `SIGTERM`, espera ~3s con poll `kill(pid, 0)`, escala a
+  `SIGKILL` si sigue vivo, y borra los PID files; sin PID files
+  imprime "no dev process running". `dev status` reporta `alive
+  (pid X)` / `dead (stale pid X)` / `not running` para cada
+  proceso. Preflight: requiere `~/.niwa/venv/bin/uvicorn` y
+  `<repo>/frontend/node_modules`.
 
 ### Dispatch por OS
 
