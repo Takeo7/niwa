@@ -2,20 +2,42 @@
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 Tier 1 v1.1 cerrado. Tier 2: PR-V1-33 (task attachments) cerrado
-en 3 sub-PRs (33a-i + 33a-ii + 33b). PR-V1-34 (project pulls
-view) y PR-V1-35 (PR merge button) pendientes para cerrar Tier 2.
+en 3 sub-PRs. PR-V1-34 (project pulls view) en split por capa,
+backend cerrado en 34a; falta 34b (frontend). PR-V1-35 (PR merge
+button) pendiente para cerrar Tier 2.
 
 ```
-pr_merged: PR-V1-33b
+pr_merged: PR-V1-34a
 date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-34
-week_status: v1.1-tier-2-attachments-complete
+next_pr: PR-V1-34b
+week_status: v1.1-tier-2-pulls-backend-complete
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-26** — PR-V1-34a (Project pulls — backend service +
+  endpoint) mergeado vía squash (#145). Backend **188 passed**
+  (+12 nuevos: 3 originales + 4 ramas error + 5 parametrize de
+  `collapse_check_state`). **Backend 388 LOC** (cap brief 240,
+  +148 por fix-ups codex; aceptado pre-merge). Servicio
+  `github_pulls` envuelve `gh pr list --json` con detección
+  owner/repo (HTTPS+SSH), filtra a ramas `niwa/task-*`. Endpoint
+  `GET /api/projects/{slug}/pulls` con contrato Pydantic
+  (`PullRead`/`PullCheck`/`PullsResponse`, snake_case) y colapso
+  server-side de `statusCheckRollup` a `check_state` con
+  prioridad `failing>pending>passing>none`. Excepciones tipadas:
+  `GhUnavailable`→503, `GhTimeout`→504, `GhCommandFailed`→502.
+  Codex 3 majors + 2 minors resueltos en fix-up: contrato
+  Pydantic ausente (Major 2), timeout 502→504 (Major 1), tests
+  faltantes para rc!=0 / non-JSON / invalid_remote (Major 3),
+  regex anchoring + logger DEBUG (minors). FOUND nuevo
+  `FOUND-20260426-spec-deviation.md` documenta el patrón "el
+  sub-agente desvía del brief sin parar a consultar" — companion
+  al FOUND de LOC cap, mismo root probable; retro post-ciclo.
+  Frontend NO se toca; reescrito en 34b contra el contrato
+  Pydantic (no cherry-pick directo del PR-V1-34 monolítico).
 - **2026-04-26** — PR-V1-33b (Task attachments — frontend
   Dropzone + lista) mergeado en `main` vía squash (#144).
   Frontend **15 passed** (+1 nuevo). Backend 176 sin cambios.
