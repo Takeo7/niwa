@@ -1,35 +1,28 @@
 import { useState } from "react";
 import {
-  Alert,
-  Badge,
-  Button,
-  Divider,
-  Group,
-  Loader,
-  Stack,
-  Text,
-  Title,
+  Alert, Badge, Button, Divider, Group, Loader, Stack, Tabs, Text, Title,
 } from "@mantine/core";
-import { IconAlertCircle, IconAlertTriangle, IconPlus } from "@tabler/icons-react";
+import {
+  IconAlertCircle, IconAlertTriangle, IconGitPullRequest,
+  IconListCheck, IconPlus,
+} from "@tabler/icons-react";
 
 import { TaskCreateModal } from "../tasks/TaskCreateModal";
 import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
+import { PullsTab } from "./PullsTab";
 
-interface Props {
-  slug: string;
-}
+interface Props { slug: string }
+
+type TabValue = "tasks" | "pulls";
 
 export function ProjectDetail({ slug }: Props) {
   const query = useProject(slug);
   const [modalOpen, setModalOpen] = useState(false);
+  const [tab, setTab] = useState<TabValue>("tasks");
 
   if (query.isLoading) {
-    return (
-      <Group justify="center" py="xl">
-        <Loader />
-      </Group>
-    );
+    return <Group justify="center" py="xl"><Loader /></Group>;
   }
   if (query.isError || !query.data) {
     return (
@@ -44,8 +37,7 @@ export function ProjectDetail({ slug }: Props) {
     <Stack gap="md">
       {p.autonomy_mode === "dangerous" && (
         // Loud red banner: PR-V1-16 auto-merges PRs without review when
-        // this flag is on, so the user must see it at a glance — the
-        // small badge below is not enough on its own.
+        // this flag is on; the small badge below isn't enough on its own.
         <Alert
           color="red"
           variant="filled"
@@ -69,17 +61,39 @@ export function ProjectDetail({ slug }: Props) {
 
       <Divider my="xs" />
 
-      <Group justify="space-between" align="center">
-        <Title order={4}>Tareas</Title>
-        <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setModalOpen(true)}
-        >
-          Nueva tarea
-        </Button>
-      </Group>
+      <Tabs
+        value={tab}
+        onChange={(v) => setTab((v as TabValue) ?? "tasks")}
+        keepMounted={false}
+      >
+        <Tabs.List>
+          <Tabs.Tab value="tasks" leftSection={<IconListCheck size={14} />}>
+            Tareas
+          </Tabs.Tab>
+          <Tabs.Tab value="pulls" leftSection={<IconGitPullRequest size={14} />}>
+            Pull requests
+          </Tabs.Tab>
+        </Tabs.List>
 
-      <TaskList slug={slug} />
+        <Tabs.Panel value="tasks" pt="md">
+          <Stack gap="md">
+            <Group justify="space-between" align="center">
+              <Title order={4}>Tareas</Title>
+              <Button
+                leftSection={<IconPlus size={16} />}
+                onClick={() => setModalOpen(true)}
+              >
+                Nueva tarea
+              </Button>
+            </Group>
+            <TaskList slug={slug} />
+          </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="pulls" pt="md">
+          <PullsTab projectSlug={slug} active={tab === "pulls"} />
+        </Tabs.Panel>
+      </Tabs>
 
       <TaskCreateModal
         slug={slug}

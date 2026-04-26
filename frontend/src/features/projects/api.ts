@@ -4,6 +4,44 @@ import { apiFetch, type Project, type ProjectCreatePayload } from "../../api";
 
 const PROJECTS_KEY = ["projects"] as const;
 
+// ---- Pulls wire types (mirror backend app/schemas/pulls.py) -------------
+// snake_case + uppercase enums match the Pydantic shape from PR-V1-34a;
+// `checks.state` is already collapsed server-side.
+
+export type PullCheckState = "failing" | "pending" | "passing" | "none";
+
+export interface PullRead {
+  number: number;
+  title: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  url: string;
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  checks: { state: PullCheckState };
+  head_ref_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PullsResponse {
+  pulls: PullRead[];
+  warning?: "no_remote" | "invalid_remote";
+}
+
+export interface ListPullsOptions {
+  state?: "open" | "closed" | "all";
+  include_all?: boolean;
+}
+
+export function listPulls(
+  slug: string, opts: ListPullsOptions = {},
+): Promise<PullsResponse> {
+  const params = new URLSearchParams();
+  if (opts.state) params.set("state", opts.state);
+  if (opts.include_all !== undefined) params.set("include_all", String(opts.include_all));
+  const qs = params.toString();
+  return apiFetch<PullsResponse>(`/projects/${slug}/pulls${qs ? `?${qs}` : ""}`);
+}
+
 export function useProjects() {
   return useQuery<Project[]>({
     queryKey: PROJECTS_KEY,
