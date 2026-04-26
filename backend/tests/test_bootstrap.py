@@ -48,6 +48,10 @@ def _run_bootstrap(
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["NIWA_BOOTSTRAP_SKIP_NPM"] = "1"
+    # Tests override HOME but not USER; without this skip the linger
+    # block would target the real host user, mutating system state on
+    # NOPASSWD dev boxes or hanging on a TTY prompt in CI.
+    env["NIWA_BOOTSTRAP_SKIP_LINGER"] = "1"
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -208,6 +212,7 @@ def test_bootstrap_prefers_python311(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["NIWA_BOOTSTRAP_SKIP_NPM"] = "1"
+    env["NIWA_BOOTSTRAP_SKIP_LINGER"] = "1"
     env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
         ["bash", str(BOOTSTRAP)],
