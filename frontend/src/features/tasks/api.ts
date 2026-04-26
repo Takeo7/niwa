@@ -1,12 +1,49 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  ApiError,
   apiFetch,
   hasInFlightTask,
+  type Attachment,
   type Run,
   type Task,
   type TaskCreatePayload,
 } from "../../api";
+
+const API_BASE = "/api";
+
+const attachmentsKey = (taskId: number) =>
+  ["task", taskId, "attachments"] as const;
+
+// Multipart helper. We can't reuse `apiFetch` because it forces
+// `Content-Type: application/json`; for `multipart/form-data` we need
+// the browser to set the boundary header itself, which only happens
+// when no Content-Type is supplied.
+export async function uploadAttachment(
+  taskId: number,
+  file: File,
+): Promise<Attachment> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${API_BASE}/tasks/${taskId}/attachments`, {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) {
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      // tolerate non-JSON error bodies
+    }
+    throw new ApiError(
+      `upload ${file.name} failed: ${response.status}`,
+      response.status,
+      body,
+    );
+  }
+  return (await response.json()) as Attachment;
+}
 
 // Polling cadence (ms) while at least one task is in-flight. Turned off
 // when all rows are terminal, when the list is empty, or while the query
@@ -90,6 +127,30 @@ export function useDeleteTask(slug: string) {
       // refused delete (likely because the task transitioned to active
       // since render), so we want the UI to mirror the server state.
       qc.invalidateQueries({ queryKey: tasksKey(slug) });
+    },
+  });
+}
+
+// PR-V1-33: read the attachments tied to a task. Always enabled when
+// `taskId` is set — the detail page renders the section conditionally
+// based on `data.length`, not on `enabled`.
+export function useTaskAttachments(taskId: number | undefined) {
+  return useQuery<Attachment[]>({
+    queryKey: attachmentsKey(taskId ?? 0),
+    queryFn: () => apiFetch<Attachment[]>(`/tasks/${taskId}/attachments`),
+    enabled: Boolean(taskId),
+  });
+}
+
+export function useDeleteAttachment(taskId: number) {
+  const qc = useQueryClient();
+  return useMutation<void, Error, number>({
+    mutationFn: (attachmentId) =>
+      apiFetch<void>(`/tasks/${taskId}/attachments/${attachmentId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: attachmentsKey(taskId) });
     },
   });
 }
