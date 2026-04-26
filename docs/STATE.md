@@ -4,16 +4,33 @@ Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 Ciclo v1.1 en curso (Tier 1 fricciones de uso real).
 
 ```
-pr_merged: PR-V1-29
-date: 2026-04-25
+pr_merged: PR-V1-30
+date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-30
+next_pr: PR-V1-31
 week_status: v1.1-tier-1-in-flight
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-26** — PR-V1-30 (Bootstrap enables systemd user
+  linger) mergeado en `main` vía squash (#139). Backend **153
+  passed** sin regresión. **36 LOC** (27 inicial + 9 fix-up
+  codex; ligeramente sobre cap S 30 por fix defensivo
+  obligatorio). En Linux, tras escribir el systemd user unit,
+  bootstrap detecta si `Linger=yes` y, si no, intenta
+  `sudo loginctl enable-linger "$USER"`. Falla suave (warning +
+  comando manual) si sudo no está disponible. macOS intacto
+  (RunAtLoad=true ya cubre autostart). Cierra fricción del
+  smoke 2026-04-25: tras reboot, niwa-executor no arrancaba
+  hasta login. Codex primera pasada: 1 major (bloque se
+  ejecutaba en tests con $USER del host → side effect en dev /
+  cuelgue en CI) cerrado con flag escape
+  `NIWA_BOOTSTRAP_SKIP_LINGER` (mismo patrón
+  `NIWA_BOOTSTRAP_SKIP_NPM` existente). `LINGER_USER="${USER:-$(id
+  -un)}"` defensivo para tolerar entornos sin USER exportado
+  bajo `set -euo pipefail`.
 - **2026-04-25** — PR-V1-29 (Actionable error when no default
   branch detected) mergeado en `main` vía squash (#138). Backend
   **153 passed** (+1 nuevo). **22 LOC** ≤ cap S 50. Cambia el
