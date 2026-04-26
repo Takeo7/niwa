@@ -1972,6 +1972,40 @@ retorna para que `_finalize` termine de asentar la hija.
 `_maybe_promote_parent` no sube a los abuelos. Si en el futuro
 se permite multi-nivel, habrá que encadenar la llamada.
 
+## Task attachments (PR-V1-33a-i / 33a-ii / 33b)
+
+Splitado en tres por overage de scope.
+
+- **33a-i (data layer).** `Attachment` ORM con
+  `ON DELETE CASCADE`, migration `f98a50e87242`, service
+  `app/services/attachments.py` con `sanitize_filename`
+  (`..`/`/`/`\\`/NUL bloqueados) + dedup `__N` por colisión.
+- **33a-ii (API + executor).** Tres endpoints sobre tasks:
+  `POST /api/tasks/{id}/attachments` (multipart, peer
+  `python-multipart`), `GET .../attachments`,
+  `DELETE .../attachments/{aid}`. Gating 404 si no existe la
+  task / 409 si ya empezó (`status not in {inbox, queued}`).
+  `_build_prompt(task, attachments)` extiende el prompt con
+  una sección "## Attached files (read these as context):"
+  listando paths relativos via `os.path.relpath`.
+- **33b (frontend).** `TaskCreateModal` añade
+  `@mantine/dropzone` debajo de `description` con lista de
+  archivos seleccionados (icono + name + size + delete).
+  Submit: 1) `POST /projects/<slug>/tasks` para crear la
+  task, 2) por cada file `POST /tasks/<id>/attachments`
+  secuencial (FormData con field `file`). Fallo en upload
+  no rompe la task — toast rojo, task creada queda. El
+  detail muestra sección "Attachments" sobre el run stream;
+  delete sólo si la task está en `inbox` o `queued`.
+
+**Lifecycle.** Borrar la task cascade-borra las filas
+`attachments`; los ficheros en disco se purgan con la fila
+(ver `attachments_service.delete_attachment`). Tras `done`,
+los ficheros siguen en
+`<project.local_path>/.niwa/attachments/task-N/` para
+consulta humana — añadir `.niwa/` al `.gitignore` del
+proyecto evita ensuciar el working tree del próximo task.
+
 ## Próximos PRs (SPEC §9)
 
 - Semana 5 (restante): instalación en la máquina de la pareja.

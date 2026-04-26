@@ -103,6 +103,17 @@ export interface TaskCreatePayload {
   description?: string | null;
 }
 
+// ---- Attachments wire types (mirror backend app/schemas/attachment.py) -
+
+export interface Attachment {
+  id: number;
+  task_id: number;
+  filename: string;
+  content_type: string | null;
+  size_bytes: number;
+  created_at: string;
+}
+
 // ---- Runs wire types (mirror backend app/schemas/run.py) ---------------
 
 export type RunStatus =
