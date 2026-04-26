@@ -1,55 +1,52 @@
 # Niwa — Orchestrator state
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
-Tier 1 v1.1 cerrado. Tier 2 (features de uso real) en curso —
-PR-V1-33 (task attachments) splitado en 33a-i + 33a-ii + 33b
-por overage de scope. Backend completo de attachments en main;
-frontend (33b) pendiente.
+Tier 1 v1.1 cerrado. Tier 2: PR-V1-33 (task attachments) cerrado
+en 3 sub-PRs (33a-i + 33a-ii + 33b). PR-V1-34 (project pulls
+view) y PR-V1-35 (PR merge button) pendientes para cerrar Tier 2.
 
 ```
-pr_merged: PR-V1-33a-ii
+pr_merged: PR-V1-33b
 date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-33b
-week_status: v1.1-tier-2-attachments-backend-complete
+next_pr: PR-V1-34
+week_status: v1.1-tier-2-attachments-complete
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-26** — PR-V1-33b (Task attachments — frontend
+  Dropzone + lista) mergeado en `main` vía squash (#144).
+  Frontend **15 passed** (+1 nuevo). Backend 176 sin cambios.
+  **353 LOC** ≤ cap 400 (sin lockfile). Cierra el feature
+  attachments end-to-end. Bump `@mantine/dropzone@7.17.8`
+  (cherry-pick) + import del stylesheet en `main.tsx`.
+  `uploadAttachment` con `fetch` directo + FormData (boundary
+  multipart correcto). Modal con Dropzone debajo de
+  `description`, lista local de files seleccionados, submit:
+  POST task → N POST attachments secuencial.
+  `TaskDetail.tsx` con sección "Attachments" gated por
+  `task.status in {inbox, queued}` para botón delete. HANDBOOK
+  añade sección completa "Task attachments" cubriendo trío
+  (33a-i/ii/b). Codex: 2 minors no-blockers (cancel durante
+  uploads, doble toast en fallo total) — UX edge cases follow-up.
 - **2026-04-26** — PR-V1-33a-ii (Task attachments — API +
-  executor integration) mergeado en `main` vía squash (#143).
-  Backend **176 passed** (+4 nuevos del brief original; +3
-  vía parametrize de path traversal). **252 LOC** ≤ cap real
-  400. Cherry-pick limpio desde la rama abandonada
-  `claude/v1-pr-33-task-attachments` de los commits API. Tres
-  endpoints nuevos: `POST /api/tasks/{id}/attachments`
-  (multipart), `GET .../attachments`, `DELETE
-  .../attachments/{aid}` con 404/409 gating. Schema
-  `AttachmentRead` Pydantic v2. `_build_prompt(task,
-  attachments)` extiende prompt con "## Attached files (read
-  these as context):" + paths via `os.path.relpath`. Resume
-  path (PR-V1-22) sobrescribe `adapter_prompt` con
-  user_response sin tocar attachments — coherente con brief
-  (resume = task ya empezada, attachments congeladas a
-  inbox/queued). `python-multipart` añadida como peer canónica
-  de FastAPI para `UploadFile` (aprobada explícitamente por
-  humano + documentada en
-  `FOUND-20260426-brief-loc-estimation.md`). Codex: 3 minors
-  no-blockers (formalización dep policy en PR aparte; DELETE
-  status_code redundante; test traversal sin assert DB —
-  cosmético). Pendiente: 33b (frontend Dropzone + bump
-  `@mantine/dropzone@7.17.8`).
+  executor integration) mergeado (#143). Backend **176 passed**
+  (+4 brief + 3 parametrize). **252 LOC**. Cherry-pick limpio
+  desde rama abandonada. 3 endpoints
+  (`POST/GET/DELETE /api/tasks/{id}/attachments`) con 404/409
+  gating. `_build_prompt(task, attachments)` extiende prompt
+  con sección literal + paths via `os.path.relpath`. Resume
+  path coexiste correctamente (descarta attachments en resume).
+  `python-multipart` añadida (peer canónica FastAPI, aprobada
+  explícitamente por humano). Codex: 3 minors no-blockers.
 - **2026-04-26** — PR-V1-33a-i (Task attachments — data layer)
   mergeado (#142). Backend **169 passed**. **372 LOC**. ORM
-  `Attachment` con `ON DELETE CASCADE`, migration
-  `f98a50e87242` reversible, service `attachments.py` (145
-  LOC) con `sanitize_filename` (`..`/`/`/`\\`/NUL) + dedup
-  `__N`. Codex: 2 minors (docstring stale, write parcial sin
-  cleanup) — follow-up. FOUND nuevo
-  `docs/plans/FOUND-20260426-brief-loc-estimation.md`
-  documenta el patrón sistemático de briefs subestimando
-  scope.
+  `Attachment` con CASCADE, migration `f98a50e87242`, service
+  con sanitización + dedup. Codex: 2 minors. FOUND nuevo
+  `FOUND-20260426-brief-loc-estimation.md` documenta patrón
+  de briefs subestimando scope.
 - **2026-04-26** — PR-V1-32 (`niwa-executor dev start/stop/status`)
   mergeado (#141). Backend **160 passed**. **169 LOC** (+19).
   Cierra Tier 1 del ciclo v1.1. Codex: LGTM.
