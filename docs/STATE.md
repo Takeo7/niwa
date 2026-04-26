@@ -2,21 +2,36 @@
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 Tier 1 v1.1 cerrado. Tier 2: PR-V1-33 (task attachments) cerrado
-en 3 sub-PRs. PR-V1-34 (project pulls view) en split por capa,
-backend cerrado en 34a; falta 34b (frontend). PR-V1-35 (PR merge
-button) pendiente para cerrar Tier 2.
+en 3 sub-PRs. PR-V1-34 (project pulls view) cerrado en split por
+capa (34a backend + 34b frontend). PR-V1-35 (PR merge button)
+pendiente para cerrar Tier 2.
 
 ```
-pr_merged: PR-V1-34a
+pr_merged: PR-V1-34b
 date: 2026-04-26
 week: v1.1
-next_pr: PR-V1-34b
-week_status: v1.1-tier-2-pulls-backend-complete
+next_pr: PR-V1-35
+week_status: v1.1-tier-2-pulls-complete
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-26** — PR-V1-34b (Project pulls — frontend tab +
+  PullsTab) mergeado vía squash (#146). Frontend **17 passed**
+  (+2 nuevos). Backend 188 sin cambios. **543 LOC totales con
+  brief; código frontend +320/-30** (cap 310, drift +10 dentro
+  de tolerancia +30). Mantine `Tabs` en `ProjectDetail` con
+  `keepMounted={false}`. `PullsTab` consume contrato Pydantic
+  snake_case de 34a; renderiza `checks.state` directo sin
+  recálculo cliente. 4 ramas de empty/warning state cubiertas
+  (`no_remote`, `invalid_remote`, `gh_missing` 503, `gh_failed`/
+  `gh_timeout` 502/504 unificados en Alert inline). Tests con
+  mock `listPulls` cubren passing+failing data y 503.
+  Codex LGTM (orquestador). 2 desviaciones del brief declaradas
+  transparentemente: toast→Alert inline (UX, React Query ya
+  reintenta) y doble protección refetch (`enabled: active` +
+  `keepMounted={false}`). Cierra PR-V1-34 entero.
 - **2026-04-26** — PR-V1-34a (Project pulls — backend service +
   endpoint) mergeado vía squash (#145). Backend **188 passed**
   (+12 nuevos: 3 originales + 4 ramas error + 5 parametrize de
