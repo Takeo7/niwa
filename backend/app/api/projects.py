@@ -16,7 +16,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from ..schemas import ProjectCreate, ProjectPatch, ProjectRead
+from ..schemas import (
+    ProjectCreate,
+    ProjectPatch,
+    ProjectRead,
+    PullsResponse,
+)
 from ..services import github_pulls
 from ..services import projects as service
 from .deps import get_session
@@ -99,7 +104,7 @@ def delete_project(
 _ALLOWED_PULL_STATES = {"open", "closed", "all"}
 
 
-@router.get("/{slug}/pulls")
+@router.get("/{slug}/pulls", response_model=PullsResponse)
 def list_project_pulls(
     slug: str,
     state: str = "open",
@@ -110,8 +115,9 @@ def list_project_pulls(
 
     200 ``{"pulls": [...]}`` on success; 200 ``{"warning": ..., "pulls":
     []}`` when the project has no/invalid remote (no point shelling out);
-    503 ``gh_missing`` when the CLI isn't on PATH; 502 ``gh_failed`` for
-    runtime failures (auth, network, rate limit).
+    503 ``gh_missing`` when the CLI isn't on PATH; 504 ``gh_timeout`` if
+    the subprocess exceeds the per-call deadline; 502 ``gh_failed`` for
+    other runtime failures (auth, network, rate limit, parse error).
     """
 
     if state not in _ALLOWED_PULL_STATES:
@@ -140,9 +146,16 @@ def list_project_pulls(
             {"error": "gh_missing"},
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    except github_pulls.GhTimeout as exc:
+        return JSONResponse(
+            {"error": "gh_timeout", "detail": str(exc)[:500]},
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        )
     except github_pulls.GhCommandFailed as exc:
         return JSONResponse(
             {"error": "gh_failed", "detail": str(exc)[:500]},
             status_code=status.HTTP_502_BAD_GATEWAY,
         )
-    return JSONResponse({"pulls": pulls})
+    return JSONResponse(
+        {"pulls": [pull.model_dump(mode="json") for pull in pulls]},
+    )
