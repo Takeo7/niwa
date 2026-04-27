@@ -23,12 +23,13 @@ import shutil
 import subprocess
 from typing import Any
 
-from ..schemas.pulls import PullCheck, PullRead
+from ..schemas.pulls import MergeMethod, PullCheck, PullRead
 
 
 logger = logging.getLogger("niwa.github_pulls")
 
 _GH_TIMEOUT_S = 15
+_GH_MERGE_TIMEOUT_S = 30
 _GH_LIMIT = 30
 _NIWA_BRANCH_PREFIX = "niwa/task-"
 
@@ -53,6 +54,16 @@ class GhTimeout(RuntimeError):
 
 class GhCommandFailed(RuntimeError):
     """``gh pr list`` exited non-zero or returned invalid JSON; 502."""
+
+
+class PullNotMergeable(RuntimeError):
+    """``gh pr merge`` reported the PR cannot be merged; API maps to 409.
+
+    Triggered when stderr contains gh's ``not mergeable`` phrasing — covers
+    conflicts, failing required checks, missing reviews, etc. Distinct
+    from ``GhCommandFailed`` so the API layer can surface a 409 instead
+    of a 502 (the user can act on conflicts; auth/network they cannot).
+    """
 
 
 def parse_owner_repo(remote: str) -> tuple[str, str] | None:
@@ -178,7 +189,66 @@ def list_pulls(
     return [_to_pull_read(item) for item in items]
 
 
+# gh phrases that indicate the PR is not in a mergeable state. Matched
+# case-insensitively against stderr to avoid coupling to exact wording.
+_NOT_MERGEABLE_MARKERS = ("not mergeable", "is not mergeable", "merge conflict")
+# gh emits this when ``--auto`` is requested but the repo lacks the
+# branch-protection rules that auto-merge requires; we retry without it.
+_AUTO_UNAVAILABLE_MARKERS = (
+    "branch protection rule",
+    "auto-merge is not allowed",
+    "auto merge is not allowed",
+)
+
+
+def _run_gh_merge(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            argv, check=False, capture_output=True, text=True,
+            timeout=_GH_MERGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhTimeout(
+            f"gh pr merge timed out after {_GH_MERGE_TIMEOUT_S}s"
+        ) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GhCommandFailed(f"gh pr merge failed: {exc}") from exc
+
+
+def merge_pull(
+    *, owner: str, repo: str, number: int, method: MergeMethod = "squash"
+) -> None:
+    """Run ``gh pr merge`` for ``owner/repo#number`` (PR-V1-35).
+
+    Tries with ``--auto`` first; on failure caused by missing branch
+    protection (auto-merge not available), retries without ``--auto``.
+    """
+
+    if shutil.which("gh") is None:
+        raise GhUnavailable("gh CLI not installed")
+
+    base = [
+        "gh", "pr", "merge", str(number),
+        "--repo", f"{owner}/{repo}",
+        f"--{method}", "--delete-branch",
+    ]
+    proc = _run_gh_merge([*base, "--auto"])
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0 and any(
+        marker in stderr.lower() for marker in _AUTO_UNAVAILABLE_MARKERS
+    ):
+        proc = _run_gh_merge(base)
+        stderr = (proc.stderr or "").strip()
+    if proc.returncode == 0:
+        return
+    if any(marker in stderr.lower() for marker in _NOT_MERGEABLE_MARKERS):
+        raise PullNotMergeable(stderr[:500] or "pull request is not mergeable")
+    raise GhCommandFailed(
+        f"gh pr merge rc={proc.returncode} stderr={stderr[:500]}"
+    )
+
+
 __all__ = [
-    "GhCommandFailed", "GhTimeout", "GhUnavailable",
-    "collapse_check_state", "list_pulls", "parse_owner_repo",
+    "GhCommandFailed", "GhTimeout", "GhUnavailable", "PullNotMergeable",
+    "collapse_check_state", "list_pulls", "merge_pull", "parse_owner_repo",
 ]

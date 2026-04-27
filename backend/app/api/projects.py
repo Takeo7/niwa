@@ -20,6 +20,8 @@ from ..schemas import (
     ProjectCreate,
     ProjectPatch,
     ProjectRead,
+    PullMergePayload,
+    PullMergeResponse,
     PullsResponse,
 )
 from ..services import github_pulls
@@ -158,4 +160,71 @@ def list_project_pulls(
         )
     return JSONResponse(
         {"pulls": [pull.model_dump(mode="json") for pull in pulls]},
+    )
+
+
+@router.post(
+    "/{slug}/pulls/{number}/merge", response_model=PullMergeResponse,
+)
+def merge_project_pull(
+    slug: str,
+    number: int,
+    payload: PullMergePayload | None = None,
+    session: Session = Depends(get_session),
+) -> JSONResponse:
+    """Merge a GitHub pull via ``gh pr merge`` (PR-V1-35).
+
+    422 when the project's remote isn't a parseable github.com URL (the
+    listing endpoint returns ``invalid_remote`` warning for the same
+    case, but a merge call here implies the user is acting on a row that
+    must have come from gh — surface as a hard error). 404 if project
+    missing; 409 ``not_mergeable`` when gh refuses (conflicts, failing
+    checks); 503/504/502 mirror the listing error mapping.
+    """
+
+    try:
+        project = service.get_project(session, slug)
+    except service.ProjectNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="project not found",
+        )
+    if not project.git_remote:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="project has no git_remote",
+        )
+    parsed = github_pulls.parse_owner_repo(project.git_remote)
+    if parsed is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="project remote is not a github.com URL",
+        )
+    owner, repo = parsed
+    method = (payload or PullMergePayload()).method
+    try:
+        github_pulls.merge_pull(
+            owner=owner, repo=repo, number=number, method=method,
+        )
+    except github_pulls.GhUnavailable:
+        return JSONResponse(
+            {"error": "gh_missing"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    except github_pulls.GhTimeout as exc:
+        return JSONResponse(
+            {"error": "gh_timeout", "detail": str(exc)[:500]},
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        )
+    except github_pulls.PullNotMergeable as exc:
+        return JSONResponse(
+            {"error": "not_mergeable", "detail": str(exc)[:500]},
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except github_pulls.GhCommandFailed as exc:
+        return JSONResponse(
+            {"error": "gh_failed", "detail": str(exc)[:500]},
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+    return JSONResponse(
+        PullMergeResponse(merged=True, method=method).model_dump(mode="json"),
     )
