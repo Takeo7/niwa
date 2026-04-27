@@ -1,22 +1,37 @@
 # Niwa — Orchestrator state
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
-Tier 1 v1.1 cerrado. Tier 2: PR-V1-33 (task attachments) cerrado
-en 3 sub-PRs. PR-V1-34 (project pulls view) cerrado en split por
-capa (34a backend + 34b frontend). PR-V1-35 (PR merge button)
-pendiente para cerrar Tier 2.
+**Ciclo v1.1 cerrado** — Tier 1 (29-32) + Tier 2 (33, 34, 35).
+Próximo: smoke completo de todo v1.1 antes de retro post-ciclo.
 
 ```
-pr_merged: PR-V1-34b
-date: 2026-04-26
+pr_merged: PR-V1-35
+date: 2026-04-27
 week: v1.1
-next_pr: PR-V1-35
-week_status: v1.1-tier-2-pulls-complete
+next_pr: smoke-v1.1
+week_status: v1.1-cycle-complete
 blockers: []
 ```
 
 ## Historial
 
+- **2026-04-27** — PR-V1-35 (PR merge button) mergeado vía
+  squash (#147). Backend **193 passed** (+5: 2 originales del
+  primer push + 3 fix-up codex: idempotente already-merged,
+  parametrized failing-checks/missing-review/draft). Frontend
+  **18 passed** (+1). **LOC ~325** (cap S 100, 3.25× — cuarta
+  muestra `FOUND-20260426-loc-cap-pattern.md`, aceptado
+  conscientemente como cierre del ciclo). Sub-agente respetó
+  el gate "paras y consultas" (mejora vs 34a). Codex 2 majors
+  + 2 minors: M1 (--auto exits rc=0 enabling auto-merge ≠
+  merging) → drop --auto y simplificar service. M2 (already-
+  merged caía en 502) → idempotente. m1 (markers incompletos)
+  → 7 markers. m2 (autonomy_mode race) → safe default
+  acceptable. Endpoint POST `/api/projects/{slug}/pulls/{n}/merge`
+  con `PullNotMergeable` exception → 409 reusando patrón 34a.
+  Frontend: `MergeButton` dentro de `PullsTab`, lee
+  `autonomy_mode` vía `useProject`, confirma salvo dangerous.
+  **Cierra Tier 2 v1.1.**
 - **2026-04-26** — PR-V1-34b (Project pulls — frontend tab +
   PullsTab) mergeado vía squash (#146). Frontend **17 passed**
   (+2 nuevos). Backend 188 sin cambios. **543 LOC totales con
