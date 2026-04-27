@@ -33,6 +33,20 @@ Ejemplos:
   patrón "brief subestima scope" no es ruido — es sistemático en
   features cross-stack (backend service + endpoint + frontend +
   tests).
+- PR-V1-35: brief 100 (S) → ~263 LOC reales tras impl + tests
+  (sin codex). **Cuarta muestra**: 2.6× el cap. Sub-agente
+  detectó el overage y **paró antes de commitear** invocando
+  explícitamente este FOUND y el de spec-deviation
+  ("PARAS Y CONSULTAS"). Orquestador presentó al humano tres
+  opciones (A: aceptar overage / B: split / C: recortar scope).
+  Humano eligió A — overage aceptado consciente, último PR del
+  ciclo, feature cross-stack atómico (backend + frontend
+  acoplados). Mergeado bajo el hard-cap proyecto-level (400 LOC).
+  La mejora sobre las muestras 1-3 es la trazabilidad: el
+  sub-agente respetó el gate "paras y consultas" antes del
+  commit, no después de codex. Indica que la lección del
+  FOUND-spec-deviation se ha aprendido al menos para un sub-agente
+  bien briefed.
 
 ## Diagnóstico
 
