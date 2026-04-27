@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -61,18 +62,30 @@ def check_artifacts_in_cwd(cwd: Path | str, evidence: dict[str, Any]) -> bool:
         return False
     evidence["cwd_exists"] = True
     try:
+        # Force C locale so the "not a git repository" stderr substring
+        # match below is locale-independent. Spread first, overrides last.
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(cwd_path),
             check=True,
             capture_output=True,
             text=True,
+            env={**os.environ, "LANG": "C", "LC_ALL": "C", "LANGUAGE": "C"},
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         stderr = ""
         if isinstance(exc, subprocess.CalledProcessError):
             stderr = (exc.stderr or "").lower()
-        if "not a git repository" in stderr or isinstance(exc, FileNotFoundError):
+        # Locale-independent skip: if the cwd has no `.git` (worktree or
+        # gitdir file), any git failure means "not a repo here", regardless
+        # of stderr language. The English substring stays as a safety net
+        # for edge cases where `.git` exists but git still rejects.
+        not_a_repo = not (cwd_path / ".git").exists()
+        if (
+            not_a_repo
+            or "not a git repository" in stderr
+            or isinstance(exc, FileNotFoundError)
+        ):
             # Graceful skip: no git → no evidence to collect, but not a
             # hard failure. 11c will gate its own work on this flag.
             evidence["git_available"] = False
