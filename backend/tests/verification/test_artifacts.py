@@ -19,10 +19,27 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Base, Project, Run, RunEvent, Task
+from app.verification import artifacts as artifacts_mod
 from app.verification.artifacts import (
     check_artifacts_in_cwd,
     check_no_artifacts_outside_cwd,
 )
+
+
+def _has_locale(name: str) -> bool:
+    """True iff ``locale -a`` lists ``name`` (case-insensitive match)."""
+
+    try:
+        proc = subprocess.run(
+            ["locale", "-a"], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return False
+    target = name.lower().replace("-", "")
+    for line in proc.stdout.splitlines():
+        if line.strip().lower().replace("-", "") == target:
+            return True
+    return False
 
 
 @pytest.fixture()
@@ -84,6 +101,58 @@ def test_absolute_path_outside_cwd_fails(session: Session, git_project: Path) ->
     assert evidence["offending_paths"] == ["/tmp/leak.txt"]
     assert evidence["tool_use_writes_scanned"] == 1
     assert evidence["tool_use_writes_absolute"] == 1
+
+
+def test_check_artifacts_passes_lang_c_env_to_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract-on-env: the ``env`` kwarg passed to ``subprocess.run`` must
+    pin LANG/LC_ALL/LANGUAGE to ``C`` so stderr matching stays
+    locale-independent."""
+
+    captured: dict = {}
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(artifacts_mod.subprocess, "run", fake_run)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    check_artifacts_in_cwd(repo, {})
+
+    env = captured["env"]
+    assert env is not None
+    assert env["LANG"] == "C"
+    assert env["LC_ALL"] == "C"
+    assert env["LANGUAGE"] == "C"
+
+
+@pytest.mark.skipif(
+    not _has_locale("es_ES.UTF-8"),
+    reason="es_ES.UTF-8 locale not generated in this sandbox",
+)
+def test_check_artifacts_real_subprocess_under_localized_lang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wiring guard: the ``env`` override must propagate to the real
+    ``git status --porcelain`` invocation, not just the detection branch.
+    Without this, a future refactor that drops ``env=`` would still pass
+    the monkeypatched test above.
+    """
+
+    monkeypatch.setenv("LANG", "es_ES.UTF-8")
+    monkeypatch.setenv("LC_ALL", "es_ES.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "es")
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    evidence: dict = {}
+    assert check_artifacts_in_cwd(plain, evidence) is True
+    assert evidence.get("error_code") is None
+    assert evidence.get("git_available") is False
 
 
 def test_non_git_cwd_skips_e3_gracefully(tmp_path: Path) -> None:

@@ -68,6 +68,17 @@ make dev         # uvicorn :8000 + vite :5173
 make test        # pytest + vitest
 ```
 
+Fresh installs that skip the Makefile (e.g. minimal CI containers)
+should run the equivalent commands directly:
+
+```sh
+cd backend && pip install -e ".[dev]"
+cd frontend && npm install
+```
+
+The `[dev]` extras are required for the test suite (pytest, httpx,
+etc.); a bare `pip install -e .` will skip them.
+
 El backend bindea a `127.0.0.1` (SPEC §2: sin auth, acceso local). El
 frontend proxea `/api/*` al backend, así `fetch('/api/health')`
 funciona igual en dev y en build.

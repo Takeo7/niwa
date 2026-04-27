@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,6 +29,27 @@ def _stub_git_version(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_all_checks_ok(client, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_which(monkeypatch, {"claude": "/usr/local/bin/claude", "gh": "/usr/local/bin/gh"})
     _stub_git_version(monkeypatch)
+    # Isolate from any host ~/.niwa/config.toml that pins claude.cli to an
+    # absolute path (which would bypass the `which("claude")` stub above and
+    # break the literal path assertion below). `load_settings` is invoked per
+    # request (see app/config.py:63 — not cached), so monkeypatch.setattr is
+    # sufficient; no dependency_override needed.
+    from app.config import Settings
+    from app.api import readiness as readiness_mod
+
+    monkeypatch.setattr(
+        readiness_mod,
+        "load_settings",
+        lambda: Settings(
+            db_path=Path("/tmp/niwa-test.sqlite3"),
+            bind_host="127.0.0.1",
+            bind_port=8000,
+            claude_cli=None,
+            claude_timeout_s=1800,
+            executor_poll_interval_s=5,
+            config_source=None,
+        ),
+    )
 
     body = client.get("/api/readiness").json()
     assert body["db_ok"] and body["claude_cli_ok"] and body["git_ok"] and body["gh_ok"]

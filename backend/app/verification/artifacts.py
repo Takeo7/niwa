@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -61,12 +62,15 @@ def check_artifacts_in_cwd(cwd: Path | str, evidence: dict[str, Any]) -> bool:
         return False
     evidence["cwd_exists"] = True
     try:
+        # Force C locale so the "not a git repository" stderr substring
+        # match below is locale-independent. Spread first, overrides last.
         proc = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=str(cwd_path),
             check=True,
             capture_output=True,
             text=True,
+            env={**os.environ, "LANG": "C", "LC_ALL": "C", "LANGUAGE": "C"},
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         stderr = ""
