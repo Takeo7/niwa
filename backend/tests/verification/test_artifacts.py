@@ -103,40 +103,32 @@ def test_absolute_path_outside_cwd_fails(session: Session, git_project: Path) ->
     assert evidence["tool_use_writes_absolute"] == 1
 
 
-def test_non_git_cwd_skips_e3_under_localized_stderr(
+def test_check_artifacts_passes_lang_c_env_to_subprocess(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Skip-gracefully branch must not depend on English git stderr.
+    """Contract-on-env: the ``env`` kwarg passed to ``subprocess.run`` must
+    pin LANG/LC_ALL/LANGUAGE to ``C`` so stderr matching stays
+    locale-independent."""
 
-    Repro of the v1.1 smoke red: when ``git`` runs under a localized LANG,
-    stderr reads e.g. ``"fatal: no es un repositorio git ..."`` and the
-    English ``"not a git repository"`` substring check misses, so the
-    function falls through to ``error_code='no_artifacts'`` instead of the
-    graceful skip. Forcing ``LANG=C`` in the subprocess ``env`` is the
-    fix; this test guards the contract regardless of host locale by
-    monkeypatching ``subprocess.run`` directly.
-    """
+    captured: dict = {}
 
-    plain = tmp_path / "not-a-repo"
-    plain.mkdir()
-
-    def fake_run(cmd, *_a, **_k):  # type: ignore[no-untyped-def]
-        raise subprocess.CalledProcessError(
-            returncode=128,
-            cmd=cmd,
-            output="",
-            stderr=(
-                "fatal: no es un repositorio git "
-                "(ni ninguno de los directorios superiores): .git\n"
-            ),
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="", stderr=""
         )
 
     monkeypatch.setattr(artifacts_mod.subprocess, "run", fake_run)
 
-    evidence: dict = {}
-    assert check_artifacts_in_cwd(plain, evidence) is True
-    assert evidence.get("git_available") is False
-    assert evidence.get("error_code") is None
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    check_artifacts_in_cwd(repo, {})
+
+    env = captured["env"]
+    assert env is not None
+    assert env["LANG"] == "C"
+    assert env["LC_ALL"] == "C"
+    assert env["LANGUAGE"] == "C"
 
 
 @pytest.mark.skipif(
