@@ -189,15 +189,24 @@ def list_pulls(
     return [_to_pull_read(item) for item in items]
 
 
-# gh phrases that indicate the PR is not in a mergeable state. Matched
-# case-insensitively against stderr to avoid coupling to exact wording.
-_NOT_MERGEABLE_MARKERS = ("not mergeable", "is not mergeable", "merge conflict")
-# gh emits this when ``--auto`` is requested but the repo lacks the
-# branch-protection rules that auto-merge requires; we retry without it.
-_AUTO_UNAVAILABLE_MARKERS = (
-    "branch protection rule",
-    "auto-merge is not allowed",
-    "auto merge is not allowed",
+# gh phrases that indicate the PR is blocked from merging in a way the
+# user can act on (conflicts, failing checks, missing reviews, draft).
+# Matched case-insensitively against stderr to avoid coupling to exact
+# wording. Anything outside this set bubbles up as GhCommandFailed (502).
+_NOT_MERGEABLE_MARKERS = (
+    "not mergeable",
+    "is not mergeable",
+    "merge conflict",
+    "required status check",
+    "approving review",
+    "is in draft state",
+    "draft pull request",
+)
+# gh phrases that indicate the PR was already merged. Treat as success
+# so a double-click on the Merge button is idempotent rather than a 502.
+_ALREADY_MERGED_MARKERS = (
+    "already been merged",
+    "already merged",
 )
 
 
@@ -220,28 +229,33 @@ def merge_pull(
 ) -> None:
     """Run ``gh pr merge`` for ``owner/repo#number`` (PR-V1-35).
 
-    Tries with ``--auto`` first; on failure caused by missing branch
-    protection (auto-merge not available), retries without ``--auto``.
+    No ``--auto`` flag: the Merge button is a "merge now" action, not a
+    "queue when ready" action. ``--auto`` exits rc=0 having only enabled
+    auto-merge when the PR doesn't yet meet branch-protection
+    requirements, which would let the endpoint claim ``merged=true``
+    while the PR is still open. Without ``--auto``, gh either merges
+    immediately (rc=0) or refuses with a stderr explaining why
+    (failing checks, missing reviews, conflicts, etc.) — those map to
+    409 ``not_mergeable`` so the UI can show the user what to fix.
+    Repeated clicks resolve via ``_ALREADY_MERGED_MARKERS``.
     """
 
     if shutil.which("gh") is None:
         raise GhUnavailable("gh CLI not installed")
 
-    base = [
+    argv = [
         "gh", "pr", "merge", str(number),
         "--repo", f"{owner}/{repo}",
         f"--{method}", "--delete-branch",
     ]
-    proc = _run_gh_merge([*base, "--auto"])
-    stderr = (proc.stderr or "").strip()
-    if proc.returncode != 0 and any(
-        marker in stderr.lower() for marker in _AUTO_UNAVAILABLE_MARKERS
-    ):
-        proc = _run_gh_merge(base)
-        stderr = (proc.stderr or "").strip()
+    proc = _run_gh_merge(argv)
     if proc.returncode == 0:
         return
-    if any(marker in stderr.lower() for marker in _NOT_MERGEABLE_MARKERS):
+    stderr = (proc.stderr or "").strip()
+    stderr_lc = stderr.lower()
+    if any(marker in stderr_lc for marker in _ALREADY_MERGED_MARKERS):
+        return  # idempotent: the PR is in the desired state
+    if any(marker in stderr_lc for marker in _NOT_MERGEABLE_MARKERS):
         raise PullNotMergeable(stderr[:500] or "pull request is not mergeable")
     raise GhCommandFailed(
         f"gh pr merge rc={proc.returncode} stderr={stderr[:500]}"

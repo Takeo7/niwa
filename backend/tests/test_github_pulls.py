@@ -227,7 +227,11 @@ def test_merge_pull_calls_gh_with_squash(
     argv = calls[0]
     assert argv[:3] == ["gh", "pr", "merge"]
     assert "7" in argv and "--repo" in argv and "owner/repo" in argv
-    assert "--squash" in argv and "--delete-branch" in argv and "--auto" in argv
+    assert "--squash" in argv and "--delete-branch" in argv
+    # PR-V1-35 fix-up: --auto is intentionally absent. With --auto gh
+    # exits rc=0 having only enabled auto-merge, which would let the
+    # endpoint claim merged=true while the PR is still open.
+    assert "--auto" not in argv
 
 
 def test_merge_pull_409_when_not_mergeable(
@@ -242,3 +246,44 @@ def test_merge_pull_409_when_not_mergeable(
     assert response.status_code == 409, response.text
     body = response.json()
     assert body["error"] == "not_mergeable"
+
+
+def test_merge_pull_is_idempotent_when_already_merged(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Race between two clicks: gh refuses the second with rc!=0 and a
+    # stderr indicating the PR is already merged. Endpoint must surface
+    # success rather than a 502 gh_failed toast.
+    payload = {**PROJECT_PAYLOAD, "git_remote": "git@github.com:owner/repo.git"}
+    assert client.post("/api/projects", json=payload).status_code == 201
+    _gh_installed(monkeypatch)
+    _stub_gh(
+        monkeypatch, "", rc=1,
+        stderr="Pull request #7 has already been merged",
+    )
+
+    response = client.post("/api/projects/demo/pulls/7/merge")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"merged": True, "method": "squash"}
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Required status check 'ci' is failing",
+        "At least 1 approving review is required",
+        "Pull request is in draft state",
+    ],
+    ids=["failing-checks", "missing-review", "draft"],
+)
+def test_merge_pull_409_for_actionable_blockers(
+    client, monkeypatch: pytest.MonkeyPatch, stderr: str
+) -> None:
+    payload = {**PROJECT_PAYLOAD, "git_remote": "git@github.com:owner/repo.git"}
+    assert client.post("/api/projects", json=payload).status_code == 201
+    _gh_installed(monkeypatch)
+    _stub_gh(monkeypatch, "", rc=1, stderr=stderr)
+
+    response = client.post("/api/projects/demo/pulls/7/merge")
+    assert response.status_code == 409, response.text
+    assert response.json()["error"] == "not_mergeable"
