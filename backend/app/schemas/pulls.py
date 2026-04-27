@@ -70,4 +70,32 @@ class PullsResponse(BaseModel):
     warning: str | None = None
 
 
-__all__ = ["CheckState", "PullCheck", "PullRead", "PullsResponse"]
+MergeMethod = Literal["squash", "merge", "rebase"]
+
+
+class PullMergePayload(BaseModel):
+    """Body for ``POST /api/projects/{slug}/pulls/{number}/merge``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: MergeMethod = "squash"
+
+
+class PullMergeResponse(BaseModel):
+    """Successful merge response (PR-V1-35)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    merged: bool
+    method: MergeMethod
+
+
+__all__ = [
+    "CheckState",
+    "MergeMethod",
+    "PullCheck",
+    "PullMergePayload",
+    "PullMergeResponse",
+    "PullRead",
+    "PullsResponse",
+]

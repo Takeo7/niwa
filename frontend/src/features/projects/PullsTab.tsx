@@ -1,14 +1,17 @@
 import {
-  Alert, Anchor, Badge, Code, Group, Loader, Stack, Table, Text, Tooltip,
+  Alert, Anchor, Badge, Button, Code, Group, Loader, Stack, Table, Text,
+  Tooltip,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
   IconAlertCircle, IconCheck, IconCircle, IconMinus, IconX,
 } from "@tabler/icons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError } from "../../api";
 import {
-  listPulls, type PullCheckState, type PullRead, type PullsResponse,
+  listPulls, mergePull, useProject,
+  type PullCheckState, type PullRead, type PullsResponse,
 } from "./api";
 
 interface Props {
@@ -63,7 +66,35 @@ function errorDetail(err: unknown): string | null {
   return "detail" in body ? String(body.detail) : null;
 }
 
+function MergeButton({
+  slug, number, dangerous,
+}: { slug: string; number: number; dangerous: boolean }) {
+  const qc = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => mergePull(slug, number, "squash"),
+    onSuccess: () => {
+      notifications.show({ title: "PR merged", message: `#${number} squashed`, color: "green" });
+      qc.invalidateQueries({ queryKey: ["projects", slug, "pulls"] });
+    },
+    onError: (err: unknown) => {
+      const detail = errorDetail(err) ?? (err instanceof Error ? err.message : "merge failed");
+      notifications.show({ title: "Merge failed", message: detail, color: "red" });
+    },
+  });
+  const onClick = () => {
+    if (!dangerous && !window.confirm(`Merge #${number} with squash?`)) return;
+    mutation.mutate();
+  };
+  return (
+    <Button size="xs" onClick={onClick} loading={mutation.isPending}>
+      Merge
+    </Button>
+  );
+}
+
 export function PullsTab({ projectSlug, active }: Props) {
+  const project = useProject(projectSlug);
+  const dangerous = project.data?.autonomy_mode === "dangerous";
   const query = useQuery<PullsResponse>({
     queryKey: ["projects", projectSlug, "pulls", { state: "open", include_all: false }],
     queryFn: () => listPulls(projectSlug, { state: "open", include_all: false }),
@@ -151,9 +182,18 @@ export function PullsTab({ projectSlug, active }: Props) {
               <Text size="sm" c="dimmed">{formatDate(pr.created_at)}</Text>
             </Table.Td>
             <Table.Td align="right">
-              <Anchor href={pr.url} target="_blank" rel="noopener noreferrer" size="sm">
-                Open in GitHub
-              </Anchor>
+              <Group gap="xs" justify="flex-end" wrap="nowrap">
+                {pr.mergeable === "MERGEABLE" ? (
+                  <MergeButton
+                    slug={projectSlug}
+                    number={pr.number}
+                    dangerous={dangerous}
+                  />
+                ) : null}
+                <Anchor href={pr.url} target="_blank" rel="noopener noreferrer" size="sm">
+                  Open in GitHub
+                </Anchor>
+              </Group>
             </Table.Td>
           </Table.Tr>
         ))}

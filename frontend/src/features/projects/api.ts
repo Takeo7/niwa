@@ -42,6 +42,22 @@ export function listPulls(
   return apiFetch<PullsResponse>(`/projects/${slug}/pulls${qs ? `?${qs}` : ""}`);
 }
 
+export type MergeMethod = "squash" | "merge" | "rebase";
+
+export interface PullMergeResponse {
+  merged: boolean;
+  method: MergeMethod;
+}
+
+export function mergePull(
+  slug: string, number: number, method: MergeMethod = "squash",
+): Promise<PullMergeResponse> {
+  return apiFetch<PullMergeResponse>(
+    `/projects/${slug}/pulls/${number}/merge`,
+    { method: "POST", body: JSON.stringify({ method }) },
+  );
+}
+
 export function useProjects() {
   return useQuery<Project[]>({
     queryKey: PROJECTS_KEY,

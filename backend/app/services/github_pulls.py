@@ -23,12 +23,13 @@ import shutil
 import subprocess
 from typing import Any
 
-from ..schemas.pulls import PullCheck, PullRead
+from ..schemas.pulls import MergeMethod, PullCheck, PullRead
 
 
 logger = logging.getLogger("niwa.github_pulls")
 
 _GH_TIMEOUT_S = 15
+_GH_MERGE_TIMEOUT_S = 30
 _GH_LIMIT = 30
 _NIWA_BRANCH_PREFIX = "niwa/task-"
 
@@ -53,6 +54,16 @@ class GhTimeout(RuntimeError):
 
 class GhCommandFailed(RuntimeError):
     """``gh pr list`` exited non-zero or returned invalid JSON; 502."""
+
+
+class PullNotMergeable(RuntimeError):
+    """``gh pr merge`` reported the PR cannot be merged; API maps to 409.
+
+    Triggered when stderr contains gh's ``not mergeable`` phrasing — covers
+    conflicts, failing required checks, missing reviews, etc. Distinct
+    from ``GhCommandFailed`` so the API layer can surface a 409 instead
+    of a 502 (the user can act on conflicts; auth/network they cannot).
+    """
 
 
 def parse_owner_repo(remote: str) -> tuple[str, str] | None:
@@ -178,7 +189,80 @@ def list_pulls(
     return [_to_pull_read(item) for item in items]
 
 
+# gh phrases that indicate the PR is blocked from merging in a way the
+# user can act on (conflicts, failing checks, missing reviews, draft).
+# Matched case-insensitively against stderr to avoid coupling to exact
+# wording. Anything outside this set bubbles up as GhCommandFailed (502).
+_NOT_MERGEABLE_MARKERS = (
+    "not mergeable",
+    "is not mergeable",
+    "merge conflict",
+    "required status check",
+    "approving review",
+    "is in draft state",
+    "draft pull request",
+)
+# gh phrases that indicate the PR was already merged. Treat as success
+# so a double-click on the Merge button is idempotent rather than a 502.
+_ALREADY_MERGED_MARKERS = (
+    "already been merged",
+    "already merged",
+)
+
+
+def _run_gh_merge(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            argv, check=False, capture_output=True, text=True,
+            timeout=_GH_MERGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhTimeout(
+            f"gh pr merge timed out after {_GH_MERGE_TIMEOUT_S}s"
+        ) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GhCommandFailed(f"gh pr merge failed: {exc}") from exc
+
+
+def merge_pull(
+    *, owner: str, repo: str, number: int, method: MergeMethod = "squash"
+) -> None:
+    """Run ``gh pr merge`` for ``owner/repo#number`` (PR-V1-35).
+
+    No ``--auto`` flag: the Merge button is a "merge now" action, not a
+    "queue when ready" action. ``--auto`` exits rc=0 having only enabled
+    auto-merge when the PR doesn't yet meet branch-protection
+    requirements, which would let the endpoint claim ``merged=true``
+    while the PR is still open. Without ``--auto``, gh either merges
+    immediately (rc=0) or refuses with a stderr explaining why
+    (failing checks, missing reviews, conflicts, etc.) — those map to
+    409 ``not_mergeable`` so the UI can show the user what to fix.
+    Repeated clicks resolve via ``_ALREADY_MERGED_MARKERS``.
+    """
+
+    if shutil.which("gh") is None:
+        raise GhUnavailable("gh CLI not installed")
+
+    argv = [
+        "gh", "pr", "merge", str(number),
+        "--repo", f"{owner}/{repo}",
+        f"--{method}", "--delete-branch",
+    ]
+    proc = _run_gh_merge(argv)
+    if proc.returncode == 0:
+        return
+    stderr = (proc.stderr or "").strip()
+    stderr_lc = stderr.lower()
+    if any(marker in stderr_lc for marker in _ALREADY_MERGED_MARKERS):
+        return  # idempotent: the PR is in the desired state
+    if any(marker in stderr_lc for marker in _NOT_MERGEABLE_MARKERS):
+        raise PullNotMergeable(stderr[:500] or "pull request is not mergeable")
+    raise GhCommandFailed(
+        f"gh pr merge rc={proc.returncode} stderr={stderr[:500]}"
+    )
+
+
 __all__ = [
-    "GhCommandFailed", "GhTimeout", "GhUnavailable",
-    "collapse_check_state", "list_pulls", "parse_owner_repo",
+    "GhCommandFailed", "GhTimeout", "GhUnavailable", "PullNotMergeable",
+    "collapse_check_state", "list_pulls", "merge_pull", "parse_owner_repo",
 ]
