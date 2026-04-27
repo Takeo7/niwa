@@ -19,10 +19,27 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Base, Project, Run, RunEvent, Task
+from app.verification import artifacts as artifacts_mod
 from app.verification.artifacts import (
     check_artifacts_in_cwd,
     check_no_artifacts_outside_cwd,
 )
+
+
+def _has_locale(name: str) -> bool:
+    """True iff ``locale -a`` lists ``name`` (case-insensitive match)."""
+
+    try:
+        proc = subprocess.run(
+            ["locale", "-a"], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError:
+        return False
+    target = name.lower().replace("-", "")
+    for line in proc.stdout.splitlines():
+        if line.strip().lower().replace("-", "") == target:
+            return True
+    return False
 
 
 @pytest.fixture()
@@ -84,6 +101,66 @@ def test_absolute_path_outside_cwd_fails(session: Session, git_project: Path) ->
     assert evidence["offending_paths"] == ["/tmp/leak.txt"]
     assert evidence["tool_use_writes_scanned"] == 1
     assert evidence["tool_use_writes_absolute"] == 1
+
+
+def test_non_git_cwd_skips_e3_under_localized_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skip-gracefully branch must not depend on English git stderr.
+
+    Repro of the v1.1 smoke red: when ``git`` runs under a localized LANG,
+    stderr reads e.g. ``"fatal: no es un repositorio git ..."`` and the
+    English ``"not a git repository"`` substring check misses, so the
+    function falls through to ``error_code='no_artifacts'`` instead of the
+    graceful skip. Forcing ``LANG=C`` in the subprocess ``env`` is the
+    fix; this test guards the contract regardless of host locale by
+    monkeypatching ``subprocess.run`` directly.
+    """
+
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+
+    def fake_run(cmd, *_a, **_k):  # type: ignore[no-untyped-def]
+        raise subprocess.CalledProcessError(
+            returncode=128,
+            cmd=cmd,
+            output="",
+            stderr=(
+                "fatal: no es un repositorio git "
+                "(ni ninguno de los directorios superiores): .git\n"
+            ),
+        )
+
+    monkeypatch.setattr(artifacts_mod.subprocess, "run", fake_run)
+
+    evidence: dict = {}
+    assert check_artifacts_in_cwd(plain, evidence) is True
+    assert evidence.get("git_available") is False
+    assert evidence.get("error_code") is None
+
+
+@pytest.mark.skipif(
+    not _has_locale("es_ES.UTF-8"),
+    reason="es_ES.UTF-8 locale not generated in this sandbox",
+)
+def test_check_artifacts_real_subprocess_under_localized_lang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wiring guard: the ``env`` override must propagate to the real
+    ``git status --porcelain`` invocation, not just the detection branch.
+    Without this, a future refactor that drops ``env=`` would still pass
+    the monkeypatched test above.
+    """
+
+    monkeypatch.setenv("LANG", "es_ES.UTF-8")
+    monkeypatch.setenv("LC_ALL", "es_ES.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "es")
+    plain = tmp_path / "not-a-repo"
+    plain.mkdir()
+    evidence: dict = {}
+    assert check_artifacts_in_cwd(plain, evidence) is True
+    assert evidence.get("error_code") is None
+    assert evidence.get("git_available") is False
 
 
 def test_non_git_cwd_skips_e3_gracefully(tmp_path: Path) -> None:
