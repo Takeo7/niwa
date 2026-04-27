@@ -76,16 +76,7 @@ def check_artifacts_in_cwd(cwd: Path | str, evidence: dict[str, Any]) -> bool:
         stderr = ""
         if isinstance(exc, subprocess.CalledProcessError):
             stderr = (exc.stderr or "").lower()
-        # Locale-independent skip: if the cwd has no `.git` (worktree or
-        # gitdir file), any git failure means "not a repo here", regardless
-        # of stderr language. The English substring stays as a safety net
-        # for edge cases where `.git` exists but git still rejects.
-        not_a_repo = not (cwd_path / ".git").exists()
-        if (
-            not_a_repo
-            or "not a git repository" in stderr
-            or isinstance(exc, FileNotFoundError)
-        ):
+        if "not a git repository" in stderr or isinstance(exc, FileNotFoundError):
             # Graceful skip: no git → no evidence to collect, but not a
             # hard failure. 11c will gate its own work on this flag.
             evidence["git_available"] = False
