@@ -43,10 +43,15 @@ locale del subprocess es siempre inglés. Antes de meter CI
 ## Scope — archivos que toca
 
 - `backend/app/verification/artifacts.py` — pasar
-  `env={"LANG": "C", "LC_ALL": "C", **os.environ}` (en este
-  orden — el override va primero para que `os.environ.update` no
-  lo pise) a `subprocess.run`. Comentario inline explicando por
-  qué (1 línea, no obvio).
+  `env={**os.environ, "LANG": "C", "LC_ALL": "C", "LANGUAGE": "C"}`
+  a `subprocess.run`. **Orden obligatorio**: `os.environ` primero
+  (spread base), overrides después; el último `**` /  par clave-valor
+  pisa al anterior, así que la forma inversa
+  (`{"LANG": "C", ..., **os.environ}`) deja el bug intacto cuando el
+  proceso hereda `LANG=es_ES.UTF-8`. **`LANGUAGE`** se incluye
+  porque git en Linux respeta `LANGUAGE` por encima de `LANG` en
+  varias distros (Ubuntu de la pareja entre ellas). Comentario
+  inline de 1 línea explicando el porqué.
 - `backend/tests/test_readiness_api.py` — en
   `test_all_checks_ok` añadir `monkeypatch` de
   `app.api.readiness.load_settings` para devolver un `Settings`
@@ -54,7 +59,15 @@ locale del subprocess es siempre inglés. Antes de meter CI
   El resto de la suite no necesita el patch porque sólo
   `test_all_checks_ok` chequea `cli_details["path"] ==
   "/usr/local/bin/claude"` literalmente; los otros sólo miran
-  `claude_cli_ok` boolean.
+  `claude_cli_ok` boolean. **Decisión a verificar in situ**: si
+  `load_settings` resultase estar cacheada al startup (no es el
+  caso a día de hoy según `app/config.py:63`, pero el sub-agente
+  debe confirmar leyendo el endpoint), el `monkeypatch.setattr`
+  no surte efecto. En ese supuesto, conmutar a
+  `app.dependency_overrides[load_settings] = lambda: Settings(
+  claude_cli=None, ...)` sobre el `client.app`. Documentar la
+  decisión tomada (monkeypatch vs dependency_override) en el
+  cuerpo del commit.
 - `backend/tests/verification/test_artifacts.py` — añadir un
   test nuevo `test_non_git_cwd_skips_e3_under_localized_stderr`
   que monkeypatchea `subprocess.run` para devolver stderr
@@ -99,7 +112,40 @@ locale del subprocess es siempre inglés. Antes de meter CI
     `"fatal: no es un repositorio git (ni ninguno de los
     directorios superiores): .git\n"`; aserción de skip
     gracioso (`True`, `git_available=False`, sin `error_code`).
-    Documenta el contrato locale-independent.
+    Documenta el contrato locale-independent en la **lógica de
+    detección**.
+  - `backend/tests/verification/test_artifacts.py::test_check_artifacts_real_subprocess_under_localized_lang`
+    — ejerce el subprocess **real** con `LANG`/`LC_ALL`/`LANGUAGE`
+    forzados a un locale instalado (`es_ES.UTF-8` por defecto).
+    Garantiza que el override de `env` propaga end-to-end al
+    `git status --porcelain`, no sólo a la rama de detección. Skip
+    automático si el locale no está disponible en el sandbox vía
+    helper privado (`_has_locale("es_ES.UTF-8")` que parsea
+    `locale -a` o usa `subprocess.run(["locale","-a"])`). Patrón:
+
+    ```python
+    @pytest.mark.skipif(
+        not _has_locale("es_ES.UTF-8"),
+        reason="es_ES.UTF-8 locale not generated in this sandbox",
+    )
+    def test_check_artifacts_real_subprocess_under_localized_lang(
+        tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("LANG", "es_ES.UTF-8")
+        monkeypatch.setenv("LC_ALL", "es_ES.UTF-8")
+        monkeypatch.setenv("LANGUAGE", "es")
+        plain = tmp_path / "not-a-repo"
+        plain.mkdir()
+        evidence: dict = {}
+        assert check_artifacts_in_cwd(plain, evidence) is True
+        assert evidence.get("error_code") is None
+        assert evidence.get("git_available") is False
+    ```
+
+    El test con monkeypatch de `subprocess.run` cubre la
+    **lógica**; este otro cubre el **wiring del env**. Sin él,
+    un futuro refactor podría romper el override sin que la
+    suite se entere.
 - **Modificados:**
   - `backend/tests/test_readiness_api.py::test_all_checks_ok`
     — sólo añade `monkeypatch.setattr` sobre
@@ -115,10 +161,18 @@ locale del subprocess es siempre inglés. Antes de meter CI
 
 Lista verificable:
 
-- [ ] `cd backend && python -m pytest -q` reporta `195 passed`
-      (194 previos + 1 nuevo de regression-guard locale).
-- [ ] El reporte literal de pytest se incluye en el body del
-      PR — sin `✓` ni resúmenes humanos.
+- [ ] `cd backend && python -m pytest -q` reporta `196 passed`
+      (194 previos + 2 nuevos: locale-stderr monkeypatched +
+      real-subprocess locale-skipif). El segundo aparece como
+      `skipped` si el sandbox no tiene `es_ES.UTF-8` instalado.
+- [ ] El sub-agente ejecuta antes de codex, en este orden:
+      `LANG=es_ES.UTF-8 LC_ALL=es_ES.UTF-8 LANGUAGE=es cd backend && python -m pytest -q tests/verification/test_artifacts.py`
+      y `cd backend && python -m pytest -q tests/test_readiness_api.py`.
+      Pega el **output literal** de ambos comandos (incluyendo el
+      summary final `N passed/skipped/failed in Xs`) en el body
+      del PR. Sin esa evidencia, **no merge**.
+- [ ] El reporte literal del `pytest -q` completo se incluye
+      también en el body — sin `✓` ni resúmenes humanos.
 - [ ] El test de regression locale, ejecutado contra
       `artifacts.py` SIN el fix de `LANG=C`, falla por la
       misma razón que el repro manual ya documentado en este
@@ -141,24 +195,31 @@ Lista verificable:
   y consultas. Cuatro muestras en el ciclo v1.1
   (`FOUND-20260426-loc-cap-pattern.md`) — la disciplina aquí
   es no comerse el cap por silencio.
-- **`os.environ` puede traer `LANG`/`LC_ALL` ya seteados.** El
-  fix usa `{"LANG": "C", "LC_ALL": "C", **os.environ}`. **Ojo
-  al orden**: si se invierte (`{**os.environ, "LANG": "C"}`)
-  el override está bien, pero si se hace
-  `{"LANG": "C", "LC_ALL": "C"}` y luego `os.environ.update(...)`
-  el `os.environ` pisa al override. Validar que el test de
-  regression cubre el caso `LANG=es_ES.UTF-8` heredado de
-  `os.environ`. (Truco: en el test, `monkeypatch.setenv("LANG",
-  "es_ES.UTF-8")` antes del check, sin mockear subprocess —
-  pero como el sandbox no tiene git-i18n no se llega a stderr
-  localizado. Por eso la regression usa monkeypatch de
-  `subprocess.run` simulando stderr español. Captura el bug
-  sin depender de locales instalados.)
-- **`load_settings` cacheada.** Confirmar que no usa
-  `lru_cache` ni similar antes de monkeypatchear. Lectura
-  rápida del código (sí, `load_settings` no está cacheada — ver
-  `backend/app/config.py:63`). Si lo estuviera, el monkeypatch
-  fallaría silenciosamente.
+- **`os.environ` puede traer `LANG`/`LC_ALL`/`LANGUAGE` ya
+  seteados.** El fix usa
+  `{**os.environ, "LANG": "C", "LC_ALL": "C", "LANGUAGE": "C"}`.
+  **Orden importa**: el spread va primero (base), los overrides
+  últimos (ganan). La forma inversa
+  (`{"LANG": "C", ..., **os.environ}`) deja el bug intacto
+  cuando el padre exporta `LANG=es_ES.UTF-8`. **Doble cobertura
+  de test** garantiza el contrato:
+  1. Test con monkeypatch de `subprocess.run` ejerce la lógica
+     de detección (independiente de locales instalados, vale en
+     cualquier sandbox).
+  2. Test con `monkeypatch.setenv` + subprocess real ejerce el
+     wiring del `env` propagándose hasta git (skip-if-no-locale).
+  Sin el segundo, un futuro refactor que retire el `env=` no
+  rompería ningún test del primer tipo.
+- **`load_settings` cacheada.** Confirmar in-situ que el
+  endpoint llama `load_settings()` por request y no usa
+  `lru_cache`/cache-at-startup. Lectura rápida actual:
+  `app/config.py:63` no está cacheada y `app/api/readiness.py:44`
+  invoca `load_settings()` por request, así que el
+  `monkeypatch.setattr("app.api.readiness.load_settings", ...)`
+  funciona. Si en algún momento eso cambia, el sub-agente debe
+  conmutar a `app.dependency_overrides[load_settings]` con
+  cleanup en teardown — y dejarlo escrito en el cuerpo del
+  commit.
 - **Si Codex marca blocker non-trivial** — verifier es área
   crítica, sin excusa para skip de codex aunque sea S. Brief
   asume codex obligatorio; si codex marca algo y el fix-up
@@ -176,6 +237,15 @@ Lista verificable:
   verdes", pega el output exacto de `python -m pytest -q`. No
   reescribas a `✓` ni a `OK`. El gate del ciclo v1.1 fue
   precisamente "reportes sin evidencia literal mienten".
+- **Gate pre-codex obligatorio**: antes de invocar
+  `codex-reviewer`, ejecuta y pega en el body del PR el output
+  literal de:
+  - `LANG=es_ES.UTF-8 LC_ALL=es_ES.UTF-8 LANGUAGE=es python -m pytest -q tests/verification/test_artifacts.py`
+  - `python -m pytest -q tests/test_readiness_api.py`
+  Si el primero reporta `failed` (locale instalado y el fix mal
+  hecho), o si el segundo reporta `failed` (aislamiento mal
+  hecho), no procedes a codex — paras y reportas al
+  orquestador.
 - **Commits pequeños, imperativos, en inglés.**
 - Codex obligatorio: lanza `codex-reviewer` sobre el diff
   antes de abrir PR. El brief lo pide explícito porque toca
