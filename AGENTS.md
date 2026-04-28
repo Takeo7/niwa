@@ -33,6 +33,15 @@ One session = one PR.
    declared in the brief and your rough estimate. Wait for an
    explicit "go ahead" from the human before starting
    implementation.
+5. **Pre-flight: verify clean working tree before measuring
+   baseline.** Before running any test gate for evidence, ensure
+   `git status` reports a clean tree on the brief's branch
+   (`git stash -u` any unrelated WIP, check out the exact commit
+   SHA you intend to push). Outputs of `pytest -q` and `npm test`
+   reported in the PR body MUST be measured on the exact commit
+   pushed, never on a working tree contaminated with uncommitted
+   changes. Report the commit SHA you measured on alongside the
+   literal test output.
 
 ## Per-PR flow
 
@@ -54,6 +63,7 @@ One session = one PR.
      checkmarks).
    - Literal output of `npm test`.
    - LOC count vs the brief cap (see LOC counting below).
+   - Commit SHA the test outputs were measured on.
 8. Stop. The orchestrator reviews, the human approves merge.
 
 ## Hard rules (non-negotiable)
@@ -86,12 +96,16 @@ One session = one PR.
 For cap purposes, LOC = output of
 `git diff --stat origin/main...HEAD` insertions, **excluding
 lockfiles** (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
-`Cargo.lock`, etc.). Markdown counts. Tests count. Generated code
-that is checked in counts.
+`Cargo.lock`, etc.) **and excluding `docs/plans/`** (briefs and
+`FOUND-*` files are orchestrator metadata, not implementer
+deliverables — they do not consume your budget). Markdown
+elsewhere counts. Tests count. Generated code that is checked in
+counts.
 
 For PRs that are net-deletion (refactors), use `abs(deletions)`
 instead. PR body should show the actual `git diff --stat` invocation
-and its output.
+and its output, plus the per-bucket breakdown (deliverable LOC vs
+`docs/plans/` metadata vs total diff).
 
 ## Stop and ask the human when
 
