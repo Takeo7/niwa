@@ -53,6 +53,18 @@ Lista verificable:
 - <riesgo>: <mitigación>
 - Si ninguno: "ninguno".
 
+## Checklist procesal
+
+- **LOC budget:** <S=100-130 / S+=130-200 / M=200-300 /
+  L=300-400>; estimación pre-impl: <N> LOC.
+- **FOUND aplicables a este PR:** <lista cross-link explícita, o
+  "ninguno">. Mencionar FOUND aplicables mejora el comportamiento
+  del implementer y convierte hallazgos históricos en guardrails.
+- **Áreas críticas tocadas:** <sí/no>. Si sí, codex obligatorio.
+  Áreas: `executor/`, `verification/`, `finalize.py`, `adapters/`.
+- **Anclaje empírico:** código que el orquestador leyó/ejecutó
+  antes de escribir el brief: <rutas, comandos o evidencia concreta>.
+
 ## Notas para Claude Code
 
 - Si el scope real supera el declarado, PARA y reescribe el brief.

@@ -143,6 +143,79 @@ upgrade head`; la reversión es `alembic downgrade base`.
   componentes del router/fetch global. Ver "Tests frontend" más abajo
   para el detalle.
 
+## Reading order por workflow
+
+### Añadir un endpoint nuevo
+
+1. `docs/SPEC.md`
+2. `backend/app/services/projects.py`
+3. `backend/app/api/projects.py`
+4. `backend/app/schemas/project.py`
+5. `backend/tests/test_projects_api.py`
+
+### Tocar el verifier
+
+1. `docs/SPEC.md`
+2. `backend/app/verification/core.py`
+3. `backend/app/verification/artifacts.py`
+4. `backend/app/executor/core.py`
+5. `backend/tests/test_verification_integration.py`
+
+### Modificar el lifecycle de task
+
+1. `backend/app/models/task.py`
+2. `backend/app/models/task_event.py`
+3. `backend/app/services/tasks.py`
+4. `backend/app/executor/core.py`
+5. `backend/tests/test_executor.py`
+
+### Añadir una columna a una tabla
+
+1. `backend/app/models/project.py`
+2. `backend/app/schemas/project.py`
+3. `backend/migrations/env.py`
+4. `backend/migrations/versions/f98a50e87242_add_attachments_table.py`
+5. `backend/tests/test_models.py`
+
+### Tocar el adapter de Claude CLI
+
+1. `backend/app/adapters/claude_code.py`
+2. `backend/tests/fixtures/fake_claude_cli.py`
+3. `backend/tests/test_adapter.py`
+4. `backend/app/executor/core.py`
+5. `backend/tests/test_executor.py`
+
+### Añadir un componente frontend
+
+1. `frontend/src/App.tsx`
+2. `frontend/src/routes/ProjectsRoute.tsx`
+3. `frontend/src/features/projects/ProjectList.tsx`
+4. `frontend/src/features/projects/api.ts`
+5. `frontend/tests/ProjectList.test.tsx`
+
+## Ejemplos canónicos por tipo de pieza
+
+- **Servicio backend:** `backend/app/services/projects.py` captura funciones
+  puras sobre `Session` con excepciones de dominio, sin `HTTPException`.
+- **Router/endpoint con dependency injection:** `backend/app/api/projects.py`
+  muestra `APIRouter`, `Depends(get_session)` y mapeo de errores a HTTP.
+- **Modelo SQLAlchemy:** `backend/app/models/project.py` muestra
+  `Mapped[...]`, `mapped_column`, constraints y relationships.
+- **Schema Pydantic v2:** `backend/app/schemas/project.py` muestra
+  `BaseModel`, `ConfigDict`, `Field` y tipos `Literal`.
+- **Test de servicio sin TestClient:** `backend/tests/test_attachments_service.py`
+  prueba helpers con `Session` real y fixtures locales.
+- **Test de endpoint con TestClient:** `backend/tests/test_projects_api.py`
+  prueba HTTP con `client` y DB aislada por fixture.
+- **Migración Alembic:** `backend/migrations/versions/f98a50e87242_add_attachments_table.py`
+  muestra `upgrade`, `downgrade`, `op.create_table` e índices.
+- **Componente frontend con Mantine v7:** `frontend/src/features/projects/ProjectList.tsx`
+  combina Mantine, estado local, empty/error/loading states y navegación.
+- **Hook TanStack Query:** `frontend/src/features/projects/api.ts` muestra
+  `useQuery`, `useMutation`, `useQueryClient` e invalidación de cache.
+- **Test frontend con Vitest + RTL:** `frontend/tests/ProjectList.test.tsx`
+  usa `vi`, `renderWithProviders`, `screen` y `waitFor`.
+
 ## API
 
 Las rutas HTTP se montan bajo `/api` desde `app/api/__init__.py`. Cada
