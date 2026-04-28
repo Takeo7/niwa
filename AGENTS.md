@@ -20,7 +20,13 @@ One session = one PR.
 1. Read this `AGENTS.md` fully.
 2. Read the brief assigned to you in `docs/plans/PR-<NN>-<slug>.md`.
 3. Read any `FOUND-*` document referenced in the brief.
-4. Confirm understanding before touching code.
+4. **Confirm understanding before touching code.** Respond to the
+   human with: (a) the brief file path you read, (b) the
+   high-level approach you will take in 2-4 bullets, (c) any
+   ambiguity in the brief you need clarified, (d) the cap LOC
+   declared in the brief and your rough estimate. Wait for an
+   explicit "go ahead" from the human before starting
+   implementation.
 
 ## Per-PR flow
 
@@ -41,7 +47,7 @@ One session = one PR.
    - Literal output of `pytest -q` (not "OK", not summaries, not
      checkmarks).
    - Literal output of `npm test`.
-   - LOC count vs the brief cap.
+   - LOC count vs the brief cap (see LOC counting below).
 8. Stop. The orchestrator reviews, the human approves merge.
 
 ## Hard rules (non-negotiable)
@@ -68,6 +74,18 @@ One session = one PR.
    `python-multipart`. Frontend — whatever is already declared in
    `frontend/package.json` plus `@mantine/*` ecosystem peers.
    ANY other dependency: STOP and ask the human.
+
+## LOC counting
+
+For cap purposes, LOC = output of
+`git diff --stat origin/main...HEAD` insertions, **excluding
+lockfiles** (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
+`Cargo.lock`, etc.). Markdown counts. Tests count. Generated code
+that is checked in counts.
+
+For PRs that are net-deletion (refactors), use `abs(deletions)`
+instead. PR body should show the actual `git diff --stat` invocation
+and its output.
 
 ## Stop and ask the human when
 
@@ -106,6 +124,14 @@ v0.2-style "agent lies about completion" failure mode.
 
 This applies equally to `gh pr` outputs, `git status`, and any
 other subprocess result the brief asks you to surface.
+
+## Drift prevention
+
+If at any point you notice that this `AGENTS.md` and either
+`CLAUDE.md` or a referenced brief disagree, **STOP and report it
+to the human**. The orchestrator resolves the contradiction and
+updates both files in a follow-up PR before you continue. Do not
+guess which side wins.
 
 ## Naming clarification
 
