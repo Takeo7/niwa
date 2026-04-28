@@ -1,10 +1,16 @@
 # AGENTS.md — Niwa task implementer rules
 
 This file is read by external task implementers (Codex Desktop with
-GPT-5.5, or any agent invoked outside Claude Code). It translates
-the project rules from `CLAUDE.md` into implementer-facing form.
-`CLAUDE.md` remains the source of truth — if this document
-contradicts it, `CLAUDE.md` wins.
+GPT-5.5, or any agent invoked outside Claude Code).
+
+`CLAUDE.md` is the upstream source from which this file is
+translated; the two are kept in sync by the orchestrator. As an
+implementer you do NOT have `CLAUDE.md` loaded — do not try to
+apply it unilaterally. If at any point you notice that this file
+disagrees with a brief, with what the orchestrator tells you, or
+with `CLAUDE.md` (in the rare case you do see it), follow the
+**Drift prevention** rule below: stop and report. Do not guess
+which side wins.
 
 ## Who you are
 
@@ -127,11 +133,12 @@ other subprocess result the brief asks you to surface.
 
 ## Drift prevention
 
-If at any point you notice that this `AGENTS.md` and either
-`CLAUDE.md` or a referenced brief disagree, **STOP and report it
-to the human**. The orchestrator resolves the contradiction and
-updates both files in a follow-up PR before you continue. Do not
-guess which side wins.
+If you notice that this `AGENTS.md` disagrees with a brief, with
+what the orchestrator tells you, or with `CLAUDE.md` (in the rare
+case you have access to it), **STOP and report it to the human**.
+The orchestrator resolves the contradiction and updates this file
+in a follow-up PR before you continue. Do not guess which side
+wins. Do not silently apply one over the other.
 
 ## Naming clarification
 
