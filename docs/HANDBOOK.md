@@ -76,6 +76,9 @@ cd backend && pip install -e ".[dev]"
 cd frontend && npm install
 ```
 
+CI runs the same backend and frontend test gates on every PR and `main`
+push; see `.github/workflows/ci.yml`.
+
 The `[dev]` extras are required for the test suite (pytest, httpx,
 etc.); a bare `pip install -e .` will skip them.
 
