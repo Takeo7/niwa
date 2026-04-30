@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -43,8 +44,8 @@ def build_and_stage(
     if project.build_command:
         try:
             result = subprocess.run(
-                project.build_command,
-                shell=True,
+                shlex.split(project.build_command),
+                shell=False,
                 cwd=local_path,
                 capture_output=True,
                 text=True,

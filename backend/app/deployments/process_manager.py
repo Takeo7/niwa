@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import shlex
 import signal
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,8 +47,8 @@ def start_process(
 
     try:
         proc = subprocess.Popen(
-            project.start_command,
-            shell=True,
+            shlex.split(project.start_command),
+            shell=False,
             cwd=cwd,
             env=env,
             stdout=subprocess.DEVNULL,
@@ -85,6 +87,21 @@ def stop_process(session: Session, deployment: Deployment) -> None:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+
+    # Wait up to 5 s for graceful exit; escalate to SIGKILL if needed
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not is_process_alive(pid):
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except (ProcessLookupError, Exception):  # noqa: BLE001
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     deployment.status = "stopped"
     deployment.pid = None

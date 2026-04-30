@@ -33,7 +33,6 @@ def allocate_port(session: Session, *, project_id: int) -> int:
     in_use = set(
         session.query(Deployment.port)
         .filter(
-            Deployment.project_id != project_id,
             Deployment.status.in_(["starting", "healthy", "unhealthy"]),
             Deployment.port.isnot(None),
         )

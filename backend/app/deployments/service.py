@@ -51,11 +51,12 @@ def trigger_deploy(session: Session, project: Project) -> Deployment:
         start_process(session, deployment, project)
         session.refresh(deployment)
     else:
-        # For static, set healthy if artifact staged; serve is handled by the router
-        deployment.status = "healthy"
         deployment.url_local = f"/api/deploy/{project.slug}/"
         deployment.finished_at = datetime.now(timezone.utc)
         session.commit()
+        # Verify artifact exists and transition starting → healthy (or unhealthy)
+        check_health(session, deployment)
+        session.refresh(deployment)
 
     return deployment
 
@@ -88,17 +89,21 @@ def rollback_to(session: Session, project: Project, target_deployment: Deploymen
     )
     session.add(rollback)
     session.flush()
-
-    target_deployment.status = "rolled_back"
     session.commit()
 
     session.refresh(rollback)
     if rollback.deploy_type == "process":
         start_process(session, rollback, project)
+        session.refresh(rollback)
+        # Only mark target rolled_back if the new deployment started successfully
+        if rollback.status != "failed":
+            target_deployment.status = "rolled_back"
+            session.commit()
     else:
         rollback.status = "healthy"
         rollback.url_local = f"/api/deploy/{project.slug}/"
         rollback.finished_at = datetime.now(timezone.utc)
+        target_deployment.status = "rolled_back"
         session.commit()
 
     session.refresh(rollback)

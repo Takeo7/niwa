@@ -46,9 +46,13 @@ def _check_static(deployment: Deployment) -> bool:
     artifact = deployment.artifact_path
     if not artifact:
         return False
-    path = Path(artifact)
+    base = Path(artifact).resolve()
     healthcheck = deployment.healthcheck_path.lstrip("/") or "index.html"
-    target = path / healthcheck
+    target = (base / healthcheck).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return False
     return target.is_file()
 
 
