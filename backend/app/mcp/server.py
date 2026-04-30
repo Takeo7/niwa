@@ -30,7 +30,9 @@ from sqlalchemy.orm import Session
 
 from ..api.deps import get_session
 from ..auth.token_store import validate_token
+from ..services.audit import log_event
 from .tools import projects as proj_tools
+from .tools import pulls as pull_tools
 from .tools import tasks as task_tools
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -40,25 +42,23 @@ _VERSION = "1.0.0"
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
 
-def _get_mcp_token(request: Request, db: Session) -> set[str]:
-    """Return the scopes for the Bearer token, or all scopes if env token matches."""
+def _get_mcp_token(request: Request, db: Session) -> tuple[set[str], str]:
+    """Return (scopes, actor_id) for the Bearer token. actor_id = 'env' or token id str."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
 
     raw = auth[7:]
 
-    # Accept env-var master token (dev/bootstrap)
     env_token = os.environ.get("NIWA_MCP_TOKEN")
     if env_token and raw == env_token:
-        return {"read", "task:create", "task:write", "merge", "deploy", "admin"}
+        return ({"read", "task:create", "task:write", "merge", "deploy", "admin"}, "env")
 
-    # Validate DB token
     token = validate_token(db, raw)
     if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked token")
 
-    return set(token.scopes.split())
+    return (set(token.scopes.split()), str(token.id))
 
 
 def _require_scope(scopes: set[str], scope: str) -> None:
@@ -169,6 +169,32 @@ _TOOLS = [
             "required": ["task_id"],
         },
     },
+    {
+        "name": "pull_list",
+        "description": "List open pull requests for a project. Requires scope: read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_slug": {"type": "string"}},
+            "required": ["project_slug"],
+        },
+    },
+    {
+        "name": "pull_merge",
+        "description": "Merge a pull request. Requires scope: merge.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_slug": {"type": "string"},
+                "number": {"type": "integer"},
+                "method": {
+                    "type": "string",
+                    "enum": ["squash", "merge", "rebase"],
+                    "default": "squash",
+                },
+            },
+            "required": ["project_slug", "number"],
+        },
+    },
 ]
 
 
@@ -195,9 +221,10 @@ async def mcp_dispatch(
 
     # Auth — all methods except ping require a token
     scopes: set[str] = set()
+    actor_id: str | None = None
     if method != "ping":
         try:
-            scopes = _get_mcp_token(request, db)
+            scopes, actor_id = _get_mcp_token(request, db)
         except HTTPException as exc:
             return _err(rpc_id, -32001, exc.detail)
 
@@ -209,6 +236,24 @@ async def mcp_dispatch(
         return _err(rpc_id, -32602, f"Missing param: {exc}")
     except Exception as exc:  # noqa: BLE001
         return _err(rpc_id, -32000, str(exc))
+
+    # Audit log: write actions only (task_create, task_respond, task_cancel, task_retry)
+    write_actions = {
+        "task_create", "task_respond", "task_cancel", "task_retry", "pull_merge",
+    }
+    effective_method = method
+    if method == "tools/call":
+        effective_method = params.get("name") or params.get("tool") or ""
+    if effective_method in write_actions:
+        ip = request.client.host if request.client else None
+        log_event(
+            db,
+            actor_type="mcp",
+            actor_id=actor_id,
+            action=f"mcp.{effective_method}",
+            ip_address=ip,
+            payload={"params": params},
+        )
 
     return _ok(rpc_id, result)
 
@@ -261,5 +306,18 @@ def _dispatch(method: str, params: dict, scopes: set[str], db: Session) -> Any:
     if method == "task_retry":
         _require_scope(scopes, "task:write")
         return task_tools.task_retry(db, int(params["task_id"]))
+
+    if method == "pull_list":
+        _require_scope(scopes, "read")
+        return pull_tools.pull_list(db, params["project_slug"])
+
+    if method == "pull_merge":
+        _require_scope(scopes, "merge")
+        return pull_tools.pull_merge(
+            db,
+            params["project_slug"],
+            int(params["number"]),
+            params.get("method", "squash"),
+        )
 
     raise HTTPException(status_code=404, detail=f"Unknown method: {method}")

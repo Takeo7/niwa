@@ -18,6 +18,7 @@ export class ApiError extends Error {
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...init,
   });
   if (!response.ok) {
@@ -175,6 +176,113 @@ const IN_FLIGHT_STATUSES: readonly TaskStatus[] = [
 export function hasInFlightTask(tasks: Task[] | undefined): boolean {
   if (!tasks) return false;
   return tasks.some((t) => IN_FLIGHT_STATUSES.includes(t.status));
+}
+
+// ---- Auth wire types (mirror backend app/api/auth.py) ------------------
+
+export interface AuthStatus {
+  enabled: boolean;
+}
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  scopes: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface ApiTokenCreated extends ApiToken {
+  token: string;
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return apiFetch<AuthStatus>("/auth/status");
+}
+
+export function login(password: string): Promise<{ ok: boolean }> {
+  return apiFetch("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function logout(): Promise<{ ok: boolean }> {
+  return apiFetch("/auth/logout", { method: "POST" });
+}
+
+export function getMe(): Promise<{ authenticated: boolean }> {
+  return apiFetch("/auth/me");
+}
+
+export function listTokens(): Promise<ApiToken[]> {
+  return apiFetch<ApiToken[]>("/auth/tokens");
+}
+
+export function createTokenApi(name: string, scopes: string[]): Promise<ApiTokenCreated> {
+  return apiFetch<ApiTokenCreated>("/auth/tokens", {
+    method: "POST",
+    body: JSON.stringify({ name, scopes }),
+  });
+}
+
+export function revokeTokenApi(id: number): Promise<void> {
+  return apiFetch(`/auth/tokens/${id}`, { method: "DELETE" });
+}
+
+// ---- Audit ------------------------------------------------------------
+
+export interface AuditEvent {
+  id: number;
+  actor_type: string;
+  actor_id: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  payload_json: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export function listAuditEvents(params?: {
+  limit?: number;
+  offset?: number;
+  actor_type?: string;
+  action?: string;
+}): Promise<AuditEvent[]> {
+  const q = new URLSearchParams();
+  if (params?.limit) q.set("limit", String(params.limit));
+  if (params?.offset) q.set("offset", String(params.offset));
+  if (params?.actor_type) q.set("actor_type", params.actor_type);
+  if (params?.action) q.set("action", params.action);
+  const qs = q.toString();
+  return apiFetch<AuditEvent[]>(`/audit/events${qs ? `?${qs}` : ""}`);
+}
+
+// ---- Metrics ----------------------------------------------------------
+
+export interface Metrics {
+  total_projects: number;
+  total_tasks: number;
+  tasks_by_status: Record<string, number>;
+  active_runs: number;
+}
+
+export function getMetrics(): Promise<Metrics> {
+  return apiFetch<Metrics>("/metrics");
+}
+
+// ---- Ops --------------------------------------------------------------
+
+export interface KillSwitchResult {
+  cancelled_tasks: number;
+  queued_tasks_cancelled: number;
+  waiting_tasks_cancelled: number;
+  running_tasks_marked: number;
+}
+
+export function killSwitch(): Promise<KillSwitchResult> {
+  return apiFetch<KillSwitchResult>("/ops/kill-switch", { method: "POST" });
 }
 
 // ---- Readiness wire types (mirror backend app/api/readiness.py) --------

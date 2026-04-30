@@ -299,6 +299,55 @@ def cmd_dev_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    """Purge stale sessions, revoked tokens, and old audit/run/task rows."""
+    from app.config import load_settings
+    from app.db import SessionLocal, configure_engine
+    from app.services.cleanup import cleanup
+
+    configure_engine(load_settings().db_path)
+    db = SessionLocal()
+    try:
+        report = cleanup(
+            db,
+            audit_days=args.audit_days,
+            runs_days=args.runs_days,
+            tasks_days=args.tasks_days,
+            dry_run=args.dry_run,
+        )
+    finally:
+        db.close()
+
+    prefix = "[dry-run] " if args.dry_run else ""
+    sys.stdout.write(
+        f"{prefix}sessions={report.sessions_expired} "
+        f"tokens={report.tokens_revoked_purged} "
+        f"audit={report.audit_events_purged} "
+        f"runs={report.runs_purged} "
+        f"tasks={report.tasks_purged}\n"
+    )
+    return 0
+
+
+def cmd_set_password(args: argparse.Namespace) -> int:
+    """Set the admin password (creates ~/.niwa/auth/password.hash)."""
+    from getpass import getpass
+    from app.auth.hashing import hash_password
+    from app.auth.password_file import set_password_hash
+
+    pwd = args.password or getpass("New password: ")
+    if len(pwd) < 8:
+        sys.stderr.write("password must be at least 8 characters\n")
+        return 1
+    confirm = args.password or getpass("Confirm password: ")
+    if pwd != confirm:
+        sys.stderr.write("passwords do not match\n")
+        return 1
+    set_password_hash(hash_password(pwd))
+    sys.stdout.write("password set; auth is now enabled.\n")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="niwa-executor",
@@ -325,6 +374,15 @@ def _build_parser() -> argparse.ArgumentParser:
     dev_s.add_parser("start").add_argument("--detach", action="store_true")
     dev_s.add_parser("stop")
     dev_s.add_parser("status")
+    cleanup_p = sub.add_parser(
+        "cleanup", help="purge old sessions/tokens/audit/runs/tasks"
+    )
+    cleanup_p.add_argument("--audit-days", type=int, default=90)
+    cleanup_p.add_argument("--runs-days", type=int, default=30)
+    cleanup_p.add_argument("--tasks-days", type=int, default=30)
+    cleanup_p.add_argument("--dry-run", action="store_true")
+    setpw = sub.add_parser("set-password", help="set or change the admin password")
+    setpw.add_argument("--password", default=None, help="non-interactive use only")
     return parser
 
 
@@ -335,6 +393,8 @@ _DISPATCH = {
     "status": cmd_status,
     "logs": cmd_logs,
     "update": cmd_update,
+    "cleanup": cmd_cleanup,
+    "set-password": cmd_set_password,
 }
 
 _DEV_DISPATCH = {

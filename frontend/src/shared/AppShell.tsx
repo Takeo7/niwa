@@ -1,5 +1,5 @@
 import { AppShell as MantineAppShell, Container, Group, Title, UnstyledButton } from "@mantine/core";
-import { IconHelpCircle } from "@tabler/icons-react";
+import { IconHelpCircle, IconShieldLock } from "@tabler/icons-react";
 import { Link, Outlet } from "react-router-dom";
 
 // Minimal shell: fixed header with product name + Help link, main area
@@ -11,12 +11,20 @@ export function AppShell() {
         <Container size="lg" h="100%" style={{ display: "flex", alignItems: "center" }}>
           <Group justify="space-between" w="100%">
             <Title order={3}>Niwa v1</Title>
-            <UnstyledButton component={Link} to="/help" aria-label="Help">
-              <Group gap={4}>
-                <IconHelpCircle size={18} />
-                <span>Help</span>
-              </Group>
-            </UnstyledButton>
+            <Group gap="md">
+              <UnstyledButton component={Link} to="/admin" aria-label="Admin">
+                <Group gap={4}>
+                  <IconShieldLock size={18} />
+                  <span>Admin</span>
+                </Group>
+              </UnstyledButton>
+              <UnstyledButton component={Link} to="/help" aria-label="Help">
+                <Group gap={4}>
+                  <IconHelpCircle size={18} />
+                  <span>Help</span>
+                </Group>
+              </UnstyledButton>
+            </Group>
           </Group>
         </Container>
       </MantineAppShell.Header>

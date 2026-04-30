@@ -14,6 +14,7 @@ from ..auth.password_file import get_password_hash, is_auth_enabled, set_passwor
 from ..auth.session_store import create_session, delete_session
 from ..auth.token_store import create_token, list_tokens, revoke_token
 from ..models.api_token import VALID_SCOPES
+from ..services.audit import log_event
 from .deps import get_session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -68,13 +69,16 @@ def auth_status() -> dict:
 @router.post("/login")
 def login(
     body: LoginRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_session),
 ) -> dict:
     if not is_auth_enabled():
         raise HTTPException(status_code=400, detail="Auth is not enabled on this instance")
     stored = get_password_hash()
+    ip = request.client.host if request.client else None
     if not stored or not verify_password(body.password, stored):
+        log_event(db, actor_type="anon", action="login.failed", ip_address=ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = create_session(db)
     response.set_cookie(
@@ -85,6 +89,7 @@ def login(
         max_age=86400,
         path="/",
     )
+    log_event(db, actor_type="user", action="login.success", ip_address=ip)
     return {"ok": True}
 
 
@@ -98,6 +103,8 @@ def logout(
     if session_token:
         delete_session(db, session_token)
     response.delete_cookie("niwa_session", path="/")
+    ip = request.client.host if request.client else None
+    log_event(db, actor_type="user", action="logout", ip_address=ip)
     return {"ok": True}
 
 
@@ -134,6 +141,14 @@ def create_api_token(
     db: Session = Depends(get_session),
 ) -> TokenCreateResponse:
     raw, token = create_token(db, name=body.name, scopes=body.scopes)
+    log_event(
+        db,
+        actor_type="user",
+        action="token.create",
+        target_type="api_token",
+        target_id=token.id,
+        payload={"name": body.name, "scopes": body.scopes},
+    )
     return TokenCreateResponse(
         id=token.id,
         name=token.name,
@@ -152,3 +167,10 @@ def revoke_api_token(
     result = revoke_token(db, token_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Token not found or already revoked")
+    log_event(
+        db,
+        actor_type="user",
+        action="token.revoke",
+        target_type="api_token",
+        target_id=token_id,
+    )

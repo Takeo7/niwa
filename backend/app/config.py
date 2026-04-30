@@ -21,6 +21,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".niwa" / "config.toml"
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "niwa-v1.sqlite3"
 DEFAULT_CLAUDE_TIMEOUT_S = 1800
 DEFAULT_EXECUTOR_POLL_INTERVAL_S = 5
+DEFAULT_MAX_CONCURRENT_RUNS = 1
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ class Settings:
     ui_domain: str | None = None
     apps_domain: str | None = None
     public_scheme: str = "https"
+    # Phase 8 / QA-07 concurrency limit
+    max_concurrent_runs: int = DEFAULT_MAX_CONCURRENT_RUNS
 
 
 def _load_toml(path: Path) -> dict:
@@ -94,6 +97,9 @@ def load_settings(config_path: Path | None = None) -> Settings:
         claude_timeout_s=int(claude.get("timeout", DEFAULT_CLAUDE_TIMEOUT_S)),
         executor_poll_interval_s=int(
             executor.get("poll_interval_seconds", DEFAULT_EXECUTOR_POLL_INTERVAL_S)
+        ),
+        max_concurrent_runs=int(
+            executor.get("max_concurrent_runs", DEFAULT_MAX_CONCURRENT_RUNS)
         ),
         config_source=candidate if candidate.is_file() else None,
         base_domain=base_domain,
