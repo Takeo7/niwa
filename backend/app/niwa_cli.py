@@ -299,6 +299,14 @@ def cmd_dev_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from .ops.doctor import format_report, run_doctor
+
+    report = run_doctor()
+    sys.stdout.write(format_report(report, json_mode=getattr(args, "json", False)) + "\n")
+    return 0 if report.overall_ok else 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="niwa-executor",
@@ -325,6 +333,8 @@ def _build_parser() -> argparse.ArgumentParser:
     dev_s.add_parser("start").add_argument("--detach", action="store_true")
     dev_s.add_parser("stop")
     dev_s.add_parser("status")
+    doctor = sub.add_parser("doctor", help="check local environment health")
+    doctor.add_argument("--json", action="store_true", help="emit JSON output")
     return parser
 
 
@@ -335,6 +345,7 @@ _DISPATCH = {
     "status": cmd_status,
     "logs": cmd_logs,
     "update": cmd_update,
+    "doctor": cmd_doctor,
 }
 
 _DEV_DISPATCH = {

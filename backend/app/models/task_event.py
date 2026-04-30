@@ -28,6 +28,7 @@ TASK_EVENT_KINDS = (
     "message",
     "verification",
     "error",
+    "finalize_result",
 )
 
 

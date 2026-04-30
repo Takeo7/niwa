@@ -26,7 +26,9 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
-from .models import Project, Run, Task
+import json
+
+from .models import Project, Run, Task, TaskEvent
 
 
 logger = logging.getLogger("niwa.finalize")
@@ -86,7 +88,7 @@ def finalize_task(
 
     if pr_url:
         task.pr_url = pr_url
-        session.commit()
+        session.flush()
 
     # PR-V1-16: auto-merge when the project opted into dangerous mode.
     # Safe mode is a silent no-op (human merges by hand). We only attempt
@@ -107,13 +109,37 @@ def finalize_task(
         if pr_merged:
             logger.info("auto-merged PR for task_id=%s url=%s", task.id, pr_url)
 
-    return FinalizeResult(
+    result = FinalizeResult(
         committed=committed,
         pushed=pushed,
         pr_url=pr_url,
         pr_merged=pr_merged,
         commands_skipped=skipped,
     )
+    _persist_finalize_event(session, task, result)
+    return result
+
+
+def _persist_finalize_event(
+    session: Session, task: Task, result: FinalizeResult
+) -> None:
+    """Record finalize outcome as a TaskEvent for UI/API visibility."""
+    payload = {
+        "committed": result.committed,
+        "pushed": result.pushed,
+        "pr_url": result.pr_url,
+        "pr_merged": result.pr_merged,
+        "skipped": result.commands_skipped,
+    }
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="finalize_result",
+            message=None,
+            payload_json=json.dumps(payload),
+        )
+    )
+    session.commit()
 
 
 def _run_cmd(args: Sequence[str], cwd: str) -> tuple[int, str, str]:

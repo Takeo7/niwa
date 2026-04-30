@@ -2,15 +2,17 @@
 
 Estado operativo de Niwa post-MVP. `main` es la rama oficial.
 **Ciclo v1.1 cerrado** — Tier 1 (29-32) + Tier 2 (33, 34, 35).
-Próximo: smoke completo de todo v1.1 antes de retro post-ciclo.
+**Fase 0 en curso** — PR #153 (smoke automatizado) pendiente de merge.
 
 ```
 pr_merged: PR-V1-35
 date: 2026-04-27
 week: v1.1
-next_pr: smoke-v1.1
+next_pr: PR-SMOKE-01 (open: #153)
+current_phase: Phase-0 smoke automatizado
 week_status: v1.1-cycle-complete
 blockers: []
+smoke: make smoke → 8/8 PASS (fake, networkless)
 ```
 
 ## Historial

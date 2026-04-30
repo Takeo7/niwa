@@ -5,79 +5,79 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Layout actual (tras PR-V1-11c)
+## Estado actual (post-v1.1 / Phase 0)
+
+v1.1 cerrado (PR-V1-35). Rama `main`. Smoke automatizado: `make smoke`.
+Ver `docs/STATE.md` para historial completo.
+
+## Layout actual (post-PR-V1-25 + Phase 0)
 
 ```
-v1/
+niwa/                           ← raíz del repo (v1 promovido desde v1/)
 ├── backend/                    # FastAPI app (Python 3.11+)
 │   ├── app/
 │   │   ├── __init__.py         # __version__
 │   │   ├── main.py             # FastAPI factory, /api/health, api_router
 │   │   ├── config.py           # ~/.niwa/config.toml loader
 │   │   ├── db.py               # SQLAlchemy engine + Base + FK PRAGMA
-│   │   ├── models/             # ORM models (SPEC §3)
+│   │   ├── models/             # ORM models (Project, Task, Run, RunEvent,
+│   │   │                       # TaskEvent, Attachment)
 │   │   ├── schemas/            # Pydantic v2 wire shapes
 │   │   ├── services/           # pure functions over Session
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
 │   │   ├── executor/           # daemon (polling, pipeline, git workspace,
-│   │   │                       # CLI entrypoint)
-│   │   ├── verification/       # evidence-based run verifier (PR-V1-11a/11b/11c)
+│   │   │                       # CLI entrypoint __main__.py)
+│   │   ├── verification/       # evidence-based run verifier (E1–E5)
+│   │   ├── ops/                # niwa-executor subcommands (doctor)
+│   │   ├── triage.py           # LLM triage: execute vs split
+│   │   ├── finalize.py         # commit + push + gh pr create + dangerous merge
 │   │   └── api/                # HTTP routers + get_session dep
+│   │       ├── projects.py     # CRUD + pulls tab
+│   │       ├── tasks.py        # CRUD + runs + respond + attachments
+│   │       ├── deploy.py       # GET /api/deploy/{slug}/ static handler
+│   │       └── readiness.py    # GET /api/readiness (health snapshot)
 │   ├── alembic.ini
-│   ├── migrations/             # env.py con render_as_batch=True
-│   │   └── versions/           # initial_schema (9d205b6968c1)
-│   ├── tests/                  # pytest + TestClient
-│   │   └── fixtures/
-│   │       └── fake_claude_cli.py  # stream-json emitter (replaces real claude)
+│   ├── migrations/versions/    # initial_schema + add_attachments_table
+│   ├── tests/                  # pytest + TestClient (203+ tests)
+│   │   └── fixtures/fake_claude_cli.py
 │   └── pyproject.toml
 ├── frontend/                   # React 19 + Vite + Mantine v7
-│   ├── src/
-│   │   ├── main.tsx            # MantineProvider + Notifications +
-│   │   │                       # QueryClient + BrowserRouter
-│   │   ├── App.tsx             # <Routes> → / and /projects/:slug
-│   │   ├── api.ts              # apiFetch + wire types
-│   │   ├── shared/
-│   │   │   └── AppShell.tsx    # header + <Outlet/>
-│   │   ├── routes/             # route wrappers (ProjectsRoute,
-│   │   │                       # ProjectDetailRoute)
-│   │   └── features/
-│   │       ├── projects/       # list, create modal, detail, hooks
-│   │       └── tasks/          # list, create modal, hooks (+ polling)
-│   ├── tests/                  # vitest + @testing-library/react
-│   │   ├── setup.ts            # jsdom matchMedia polyfill
-│   │   ├── renderWithProviders.tsx
-│   │   ├── ProjectList.test.tsx
-│   │   └── TaskCreateModal.test.tsx
-│   ├── index.html
-│   ├── vite.config.ts          # proxy /api → :8000 + vitest config
-│   └── package.json
-├── data/                       # SQLite dev DB vive aquí
+│   ├── src/features/
+│   │   ├── projects/           # list, create modal, detail, pulls tab
+│   │   └── tasks/              # list, create, detail, attachments, merge button
+│   └── tests/                  # vitest + RTL (18+ tests)
+├── scripts/
+│   ├── smoke_v1_1.py           # harness E2E (make smoke)
+│   └── fake_gh.py              # fake gh CLI para smoke
 ├── docs/
-│   ├── SPEC.md                 # contrato del producto
+│   ├── SPEC.md                 # contrato MVP (histórico)
 │   ├── HANDBOOK.md             # este documento
-│   └── plans/                  # un brief por PR
-└── Makefile                    # install | dev | test | clean
+│   ├── STATE.md                # estado operativo
+│   └── plans/                  # briefs por PR
+├── .github/workflows/
+│   ├── ci.yml                  # pytest + vitest
+│   └── smoke.yml               # make smoke
+└── Makefile                    # install|dev|test|smoke|smoke-live|clean
 ```
 
 ## Arranque en dev
 
 ```sh
-cd v1
 make install     # pip install -e .[dev] + npm install
-make dev         # uvicorn :8000 + vite :5173
+make dev         # uvicorn :8000 + vite :5173 (paralelo)
 make test        # pytest + vitest
+make smoke       # smoke E2E sin credenciales
 ```
 
-Fresh installs that skip the Makefile (e.g. minimal CI containers)
-should run the equivalent commands directly:
+## niwa-executor subcomandos
 
-```sh
-cd backend && pip install -e ".[dev]"
-cd frontend && npm install
-```
-
-CI runs the same backend and frontend test gates on every PR and `main`
-push; see `.github/workflows/ci.yml`.
+| Comando | Descripción |
+|---|---|
+| `start / stop / restart / status` | Servicio systemd/launchd |
+| `logs [-f]` | tail del log |
+| `update` | pull + pip + alembic + restart |
+| `dev start/stop/status [--detach]` | Dev servers locales |
+| `doctor [--json]` | Health check del entorno local |
 
 The `[dev]` extras are required for the test suite (pytest, httpx,
 etc.); a bare `pip install -e .` will skip them.
