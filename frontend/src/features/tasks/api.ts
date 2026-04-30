@@ -10,6 +10,11 @@ import {
   type TaskCreatePayload,
 } from "../../api";
 
+export interface TaskUpdatePayload {
+  title?: string | null;
+  description?: string | null;
+}
+
 const API_BASE = "/api";
 
 const attachmentsKey = (taskId: number) =>
@@ -168,6 +173,58 @@ export function useRespondTask(taskId: number) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
+
+// Phase 3 — edit task (PATCH)
+export function useUpdateTask(taskId: number, slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, TaskUpdatePayload>({
+    mutationFn: (payload) =>
+      apiFetch<Task>(`/tasks/${taskId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+      qc.invalidateQueries({ queryKey: ["tasks", slug] });
+    },
+  });
+}
+
+// Phase 3 — cancel task
+export function useCancelTask(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, number>({
+    mutationFn: (taskId) =>
+      apiFetch<Task>(`/tasks/${taskId}/cancel`, { method: "POST" }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", slug] });
+    },
+  });
+}
+
+// Phase 3 — retry task
+export function useRetryTask(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, number>({
+    mutationFn: (taskId) =>
+      apiFetch<Task>(`/tasks/${taskId}/retry`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", slug] });
+    },
+  });
+}
+
+// Phase 3 — approve plan
+export function useApprovePlan(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, number>({
+    mutationFn: (taskId) =>
+      apiFetch<Task>(`/tasks/${taskId}/approve-plan`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", slug] });
     },
   });
 }

@@ -18,7 +18,7 @@ from .pulls import (
     PullsResponse,
 )
 from .run import RunRead
-from .task import TaskCreate, TaskRead, TaskRespondPayload
+from .task import TaskCreate, TaskRead, TaskRespondPayload, TaskUpdate
 
 __all__ = [
     "AttachmentRead",
@@ -36,4 +36,5 @@ __all__ = [
     "TaskCreate",
     "TaskRead",
     "TaskRespondPayload",
+    "TaskUpdate",
 ]

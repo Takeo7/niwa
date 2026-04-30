@@ -61,6 +61,9 @@ class ProjectPatch(BaseModel):
     local_path: str | None = Field(default=None, min_length=1)
     deploy_port: int | None = Field(default=None, ge=1024, le=65535)
     autonomy_mode: AutonomyMode | None = None
+    require_plan_approval: bool | None = None
+    auto_review: bool | None = None
+    max_review_iterations: int | None = Field(default=None, ge=1, le=10)
 
 
 class ProjectRead(BaseModel):
@@ -76,5 +79,8 @@ class ProjectRead(BaseModel):
     local_path: str
     deploy_port: int | None
     autonomy_mode: str
+    require_plan_approval: bool = False
+    auto_review: bool = False
+    max_review_iterations: int = 1
     created_at: datetime
     updated_at: datetime

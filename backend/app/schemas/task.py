@@ -26,6 +26,9 @@ TaskStatus = Literal[
     "inbox",
     "queued",
     "running",
+    "planning",
+    "waiting_approval",
+    "reviewing",
     "waiting_input",
     "done",
     "failed",
@@ -43,6 +46,15 @@ class TaskCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=10_000)
+
+
+class TaskUpdate(BaseModel):
+    """Payload for PATCH /api/tasks/{id} — only editable on inbox/queued tasks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
 
 

@@ -1,12 +1,15 @@
 import { useState } from "react";
 import {
-  Alert, Badge, Button, Divider, Group, Loader, Stack, Tabs, Text, Title,
+  Alert, Badge, Button, Divider, Group, Loader, Stack, Switch, Tabs, Text, Title,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
   IconAlertCircle, IconAlertTriangle, IconGitPullRequest,
-  IconListCheck, IconPlus,
+  IconListCheck, IconPlus, IconSettings,
 } from "@tabler/icons-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { apiFetch, type Project } from "../../api";
 import { TaskCreateModal } from "../tasks/TaskCreateModal";
 import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
@@ -14,7 +17,57 @@ import { PullsTab } from "./PullsTab";
 
 interface Props { slug: string }
 
-type TabValue = "tasks" | "pulls";
+type TabValue = "tasks" | "pulls" | "settings";
+
+function SettingsTab({ project }: { project: Project }) {
+  const qc = useQueryClient();
+  const patchMutation = useMutation({
+    mutationFn: (patch: Partial<Pick<Project, "require_plan_approval" | "auto_review" | "max_review_iterations">>) =>
+      apiFetch<Project>(`/projects/${project.slug}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project", project.slug] });
+      notifications.show({ message: "Settings saved", color: "green" });
+    },
+    onError: () => {
+      notifications.show({ message: "Failed to save settings", color: "red" });
+    },
+  });
+
+  return (
+    <Stack gap="md" maw={480}>
+      <Title order={4}>Project settings</Title>
+
+      <Stack gap="xs">
+        <Text fw={500} size="sm">Phase 2 pipeline</Text>
+        <Switch
+          label="Require plan approval before execution"
+          description="The executor will pause and wait for you to approve the plan."
+          checked={project.require_plan_approval}
+          onChange={(e) => patchMutation.mutate({ require_plan_approval: e.currentTarget.checked })}
+          disabled={patchMutation.isPending}
+        />
+        <Switch
+          label="Auto-review after execution"
+          description="Claude reviews the diff after each run and can request changes."
+          checked={project.auto_review}
+          onChange={(e) => patchMutation.mutate({ auto_review: e.currentTarget.checked })}
+          disabled={patchMutation.isPending}
+        />
+      </Stack>
+
+      <Stack gap="xs">
+        <Text fw={500} size="sm">General</Text>
+        <Text size="sm" c="dimmed">Local path: <code>{project.local_path}</code></Text>
+        <Text size="sm" c="dimmed">Kind: {project.kind}</Text>
+        {project.git_remote && <Text size="sm" c="dimmed">Remote: {project.git_remote}</Text>}
+        {project.deploy_port && <Text size="sm" c="dimmed">Deploy port: {project.deploy_port}</Text>}
+      </Stack>
+    </Stack>
+  );
+}
 
 export function ProjectDetail({ slug }: Props) {
   const query = useProject(slug);
@@ -36,8 +89,6 @@ export function ProjectDetail({ slug }: Props) {
   return (
     <Stack gap="md">
       {p.autonomy_mode === "dangerous" && (
-        // Loud red banner: PR-V1-16 auto-merges PRs without review when
-        // this flag is on; the small badge below isn't enough on its own.
         <Alert
           color="red"
           variant="filled"
@@ -56,6 +107,8 @@ export function ProjectDetail({ slug }: Props) {
         >
           {p.autonomy_mode}
         </Badge>
+        {p.require_plan_approval && <Badge variant="outline" color="orange">plan approval</Badge>}
+        {p.auto_review && <Badge variant="outline" color="violet">auto-review</Badge>}
         <Text c="dimmed" size="sm">/{p.slug}</Text>
       </Group>
 
@@ -72,6 +125,9 @@ export function ProjectDetail({ slug }: Props) {
           </Tabs.Tab>
           <Tabs.Tab value="pulls" leftSection={<IconGitPullRequest size={14} />}>
             Pull requests
+          </Tabs.Tab>
+          <Tabs.Tab value="settings" leftSection={<IconSettings size={14} />}>
+            Settings
           </Tabs.Tab>
         </Tabs.List>
 
@@ -92,6 +148,10 @@ export function ProjectDetail({ slug }: Props) {
 
         <Tabs.Panel value="pulls" pt="md">
           <PullsTab projectSlug={slug} active={tab === "pulls"} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="settings" pt="md">
+          <SettingsTab project={p} />
         </Tabs.Panel>
       </Tabs>
 

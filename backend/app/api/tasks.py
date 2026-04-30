@@ -15,11 +15,17 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespondPayload
+from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespondPayload, TaskUpdate
 from ..services import attachments as attachments_service
 from ..services import runs as runs_service
 from ..services import tasks as service
-from ..services.tasks import NoPendingPlan, TaskNotWaitingApproval
+from ..services.tasks import (
+    NoPendingPlan,
+    TaskNotCancellable,
+    TaskNotEditable,
+    TaskNotRetryable,
+    TaskNotWaitingApproval,
+)
 from .deps import get_session
 
 
@@ -138,6 +144,52 @@ def approve_plan(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task is not waiting for plan approval")
     except NoPendingPlan:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="no pending plan found")
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.patch("/{task_id}", response_model=TaskRead)
+def update_task(
+    task_id: int,
+    payload: TaskUpdate,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Edit title/description on a queued or inbox task (Phase 3 — UI-05)."""
+    try:
+        task = service.update_task(session, task_id, payload)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except TaskNotEditable:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task has already started; editing is not allowed")
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.post("/{task_id}/cancel", response_model=TaskRead)
+def cancel_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Cancel a queued or waiting task (Phase 3 — UI-07)."""
+    try:
+        task = service.cancel_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except TaskNotCancellable:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task cannot be cancelled in its current state")
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.post("/{task_id}/retry", response_model=TaskRead)
+def retry_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Re-queue a failed or cancelled task (Phase 3 — UI-08)."""
+    try:
+        task = service.retry_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except TaskNotRetryable:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="only failed or cancelled tasks can be retried")
     return TaskRead.model_validate(task)
 
 

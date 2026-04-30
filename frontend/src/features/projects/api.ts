@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiFetch, type Project, type ProjectCreatePayload } from "../../api";
+import { apiFetch, type Project, type ProjectCreatePayload, type SummaryResponse } from "../../api";
 
 const PROJECTS_KEY = ["projects"] as const;
 
@@ -70,6 +70,14 @@ export function useProject(slug: string | undefined) {
     queryKey: ["project", slug],
     queryFn: () => apiFetch<Project>(`/projects/${slug}`),
     enabled: Boolean(slug),
+  });
+}
+
+export function useSummary() {
+  return useQuery<SummaryResponse>({
+    queryKey: ["summary"],
+    queryFn: () => apiFetch<SummaryResponse>("/summary"),
+    refetchInterval: 10_000,
   });
 }
 

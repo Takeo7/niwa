@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Project, Task, TaskEvent, TaskPlan
-from ..schemas import TaskCreate
+from ..schemas import TaskCreate, TaskUpdate
 from .projects import ProjectNotFound, get_project
 
 
@@ -33,6 +33,18 @@ class TaskNotDeletable(Exception):
 
 class TaskNotWaitingInput(Exception):
     """Raised when ``respond`` targets a task whose status is not ``waiting_input``."""
+
+
+class TaskNotEditable(Exception):
+    """Raised when ``update_task`` targets a task that has already started."""
+
+
+class TaskNotCancellable(Exception):
+    """Raised when ``cancel_task`` targets a task in a non-cancellable state."""
+
+
+class TaskNotRetryable(Exception):
+    """Raised when ``retry_task`` targets a task that is not failed/cancelled."""
 
 
 class TaskNotWaitingApproval(Exception):
@@ -175,6 +187,83 @@ def respond_to_task(session: Session, task_id: int, response: str) -> Task:
     return task
 
 
+_EDITABLE_STATUSES: frozenset[str] = frozenset({"inbox", "queued"})
+_CANCELLABLE_STATUSES: frozenset[str] = frozenset({
+    "inbox", "queued", "planning", "waiting_approval", "waiting_input",
+})
+
+
+def update_task(session: Session, task_id: int, payload: TaskUpdate) -> Task:
+    """Edit title/description on a task that has not yet started (inbox/queued)."""
+    task = get_task(session, task_id)
+    if task.status not in _EDITABLE_STATUSES:
+        raise TaskNotEditable(task.status)
+
+    changed: list[str] = []
+    if payload.title is not None and payload.title != task.title:
+        task.title = payload.title
+        changed.append("title")
+    if payload.description is not None and payload.description != task.description:
+        task.description = payload.description
+        changed.append("description")
+
+    if changed:
+        session.add(TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps({"event": "task_edited", "fields": changed}),
+        ))
+        session.commit()
+        session.refresh(task)
+    return task
+
+
+def cancel_task(session: Session, task_id: int) -> Task:
+    """Cancel a task that is not yet running.
+
+    ``running`` tasks are not cancelled here — the executor must be notified
+    separately. This endpoint handles the non-running states only.
+    """
+    task = get_task(session, task_id)
+    if task.status not in _CANCELLABLE_STATUSES:
+        raise TaskNotCancellable(task.status)
+
+    from_status = task.status
+    task.status = "cancelled"
+    session.add(TaskEvent(
+        task_id=task.id,
+        kind="status_changed",
+        message=None,
+        payload_json=json.dumps({"from": from_status, "to": "cancelled", "actor": "user"}),
+    ))
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+def retry_task(session: Session, task_id: int) -> Task:
+    """Re-queue a failed or cancelled task for another execution attempt."""
+    task = get_task(session, task_id)
+    if task.status not in ("failed", "cancelled"):
+        raise TaskNotRetryable(task.status)
+
+    from_status = task.status
+    task.status = "queued"
+    task.completed_at = None
+    task.pending_question = None
+
+    session.add(TaskEvent(
+        task_id=task.id,
+        kind="status_changed",
+        message=None,
+        payload_json=json.dumps({"from": from_status, "to": "queued", "event": "retry"}),
+    ))
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 def approve_plan(session: Session, task_id: int) -> Task:
     """Approve a pending plan and re-queue the task for execution (Phase 2).
 
@@ -213,14 +302,20 @@ __all__ = [
     "ACTIVE_STATUSES",
     "NoPendingPlan",
     "ProjectNotFound",
+    "TaskNotCancellable",
     "TaskNotDeletable",
+    "TaskNotEditable",
     "TaskNotFound",
+    "TaskNotRetryable",
     "TaskNotWaitingApproval",
     "TaskNotWaitingInput",
     "approve_plan",
+    "cancel_task",
     "create_task",
     "delete_task",
     "get_task",
     "list_tasks_for_project",
     "respond_to_task",
+    "retry_task",
+    "update_task",
 ]

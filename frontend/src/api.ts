@@ -58,6 +58,9 @@ export interface Project {
   local_path: string;
   deploy_port: number | null;
   autonomy_mode: AutonomyMode;
+  require_plan_approval: boolean;
+  auto_review: boolean;
+  max_review_iterations: number;
   created_at: string;
   updated_at: string;
 }
@@ -78,6 +81,9 @@ export type TaskStatus =
   | "inbox"
   | "queued"
   | "running"
+  | "planning"
+  | "waiting_approval"
+  | "reviewing"
   | "waiting_input"
   | "done"
   | "failed"
@@ -158,23 +164,52 @@ export interface EosPayload {
 }
 
 // Active = driving toward a terminal state; delete is forbidden by backend.
-const ACTIVE_STATUSES: readonly TaskStatus[] = ["running", "waiting_input"];
+const ACTIVE_STATUSES: readonly TaskStatus[] = [
+  "running", "planning", "reviewing", "waiting_input", "waiting_approval",
+];
 
 export function isTaskActive(task: Task): boolean {
   return ACTIVE_STATUSES.includes(task.status);
 }
 
+export function isTaskCancellable(task: Task): boolean {
+  return ["inbox", "queued", "planning", "waiting_approval", "waiting_input"].includes(task.status);
+}
+
+export function isTaskRetryable(task: Task): boolean {
+  return task.status === "failed" || task.status === "cancelled";
+}
+
+export function isTaskEditable(task: Task): boolean {
+  return task.status === "inbox" || task.status === "queued";
+}
+
 // In-flight = worth polling for; covers `queued` waiting for the executor
 // and anything already running. Used to gate React Query's refetchInterval.
 const IN_FLIGHT_STATUSES: readonly TaskStatus[] = [
-  "queued",
-  "running",
-  "waiting_input",
+  "queued", "running", "planning", "reviewing", "waiting_input", "waiting_approval",
 ];
 
 export function hasInFlightTask(tasks: Task[] | undefined): boolean {
   if (!tasks) return false;
   return tasks.some((t) => IN_FLIGHT_STATUSES.includes(t.status));
+}
+
+// ---- Summary wire types ------------------------------------------------
+
+export interface SummaryResponse {
+  total_tasks: number;
+  queued: number;
+  running: number;
+  waiting_input: number;
+  waiting_approval: number;
+  done: number;
+  failed: number;
+  cancelled: number;
+}
+
+export function getSummary(): Promise<SummaryResponse> {
+  return apiFetch<SummaryResponse>("/summary");
 }
 
 // ---- Readiness wire types (mirror backend app/api/readiness.py) --------

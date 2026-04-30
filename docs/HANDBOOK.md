@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Estado actual (post-v1.1 / Phase 2)
+## Estado actual (post-v1.1 / Phase 3)
 
 v1.1 cerrado (PR-V1-35). Rama `main`. Smoke automatizado: `make smoke`.
 Ver `docs/STATE.md` para historial completo.
@@ -35,12 +35,13 @@ niwa/                           ← raíz del repo (v1 promovido desde v1/)
 │   │   ├── finalize.py         # commit + push + gh pr create + dangerous merge
 │   │   └── api/                # HTTP routers + get_session dep
 │   │       ├── projects.py     # CRUD + pulls tab
-│   │       ├── tasks.py        # CRUD + runs + respond + attachments + approve-plan
+│   │       ├── tasks.py        # CRUD + runs + respond + attachments + approve-plan + PATCH + cancel + retry
+│   │       └── summary.py      # GET /api/summary (cross-project stats)
 │   │       ├── deploy.py       # GET /api/deploy/{slug}/ static handler
 │   │       └── readiness.py    # GET /api/readiness (health snapshot)
 │   ├── alembic.ini
 │   ├── migrations/versions/    # initial_schema + add_attachments_table + finalize_result_event + phase2_pipeline
-│   ├── tests/                  # pytest + TestClient (225+ tests)
+│   ├── tests/                  # pytest + TestClient (243+ tests)
 │   │   └── fixtures/fake_claude_cli.py
 │   └── pyproject.toml
 ├── frontend/                   # React 19 + Vite + Mantine v7
@@ -252,8 +253,11 @@ recrear.
 | GET    | `/api/projects/{slug}/tasks`          | `200` + `list[TaskRead]`, orden `created_at` ASC con tie-breaker por `id`; `404` si el slug no existe |
 | POST   | `/api/projects/{slug}/tasks`          | `201` + `TaskRead` en `status="queued"`; `404` si el slug no existe; `422` si payload inválido |
 | GET    | `/api/tasks/{task_id}`                | `200` + `TaskRead`; `404` si no existe                                                  |
-| DELETE | `/api/tasks/{task_id}`                | `204` sin cuerpo; `404` si no existe; `409` si `status in (running, waiting_input, waiting_approval, planning, reviewing)` |
-| POST   | `/api/tasks/{task_id}/approve-plan`   | `200` + `TaskRead`; re-encola la tarea tras aprobar el plan; `409` si no está en `waiting_approval` o no hay plan pendiente |
+| DELETE | `/api/tasks/{task_id}`                | `204` sin cuerpo; `404` si no existe; `409` si status activo     |
+| PATCH  | `/api/tasks/{task_id}`                | `200` + `TaskRead`; edita title/description si status es inbox/queued; `409` si ya empezó |
+| POST   | `/api/tasks/{task_id}/cancel`         | `200` + `TaskRead`; cancela si status ∈ {inbox,queued,planning,waiting_approval,waiting_input}; `409` si running/done |
+| POST   | `/api/tasks/{task_id}/retry`          | `200` + `TaskRead`; re-encola si status ∈ {failed,cancelled}; `409` si otro estado |
+| POST   | `/api/tasks/{task_id}/approve-plan`   | `200` + `TaskRead`; aprueba plan y re-encola; `409` si no está en waiting_approval o no hay plan pendiente |
 
 Schemas en `app/schemas/task.py`. `TaskCreate` acepta solo `title`
 (1-200 chars) y `description` opcional (hasta 10 000 chars); todos los
@@ -268,6 +272,12 @@ y `run_events`.
 `GET /api/tasks/{id}` es deliberadamente global (no scoped a
 proyecto) — SPEC §7 muestra la URL con slug pero la API solo necesita
 el id, la UI se lleva el slug como contexto.
+
+### `summary`
+
+| Method | Path            | Return              |
+|--------|-----------------|---------------------|
+| GET    | `/api/summary`  | `200` + `SummaryResponse` — counts by status across all projects |
 
 ### `runs` (read-only)
 
