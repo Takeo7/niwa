@@ -11,6 +11,7 @@ from fastapi import APIRouter
 from .audit import router as audit_router
 from .auth import router as auth_router
 from .deploy import router as deploy_router
+from .deployments import router as deployments_router
 from .metrics import router as metrics_router
 from ..mcp.server import router as mcp_router
 from .ops import router as ops_router
@@ -29,6 +30,7 @@ api_router.include_router(project_tasks_router)
 api_router.include_router(tasks_router)
 api_router.include_router(runs_router)
 api_router.include_router(deploy_router)
+api_router.include_router(deployments_router)
 api_router.include_router(ops_router)
 api_router.include_router(readiness_router)
 

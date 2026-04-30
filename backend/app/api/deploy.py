@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..deployments.service import get_active_deployment
 from ..models import Project
 from .deps import get_session
 
@@ -33,16 +34,15 @@ from .deps import get_session
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
-def _resolve_target(local_path: str, path: str) -> Path | None:
+def _resolve_target(local_path: str, path: str, *, root: str | None = None) -> Path | None:
     """Return the file to serve, or ``None`` if the request must 404.
 
-    Kept as a module-level helper so the traversal guard is straightforward
-    to unit-test without spinning up the full ASGI stack. The function does
-    no I/O beyond ``Path.resolve`` + ``is_dir``/``is_file``; it never reads
-    file contents.
+    When ``root`` is given (e.g. an active deployment's artifact_path), it is
+    used as the base directory; otherwise we fall back to ``local_path/dist``
+    (the legacy MVP serving model).
     """
 
-    dist = (Path(local_path) / "dist").resolve()
+    dist = Path(root).resolve() if root else (Path(local_path) / "dist").resolve()
     # Empty path hits the SPA entry point. Any other path is resolved
     # *relative to* ``dist`` so a leading slash in the raw segment can't
     # escape into the absolute filesystem root.
@@ -69,7 +69,14 @@ def _serve(slug: str, path: str, session: Session) -> FileResponse:
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
         )
 
-    target = _resolve_target(project.local_path, path)
+    # Phase 4: prefer the active deployment's versioned artifact when present.
+    active = get_active_deployment(session, project.id)
+    root = (
+        active.artifact_path
+        if active and active.deploy_type == "static" and active.artifact_path
+        else None
+    )
+    target = _resolve_target(project.local_path, path, root=root)
     if target is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found"

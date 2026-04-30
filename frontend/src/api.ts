@@ -285,6 +285,49 @@ export function killSwitch(): Promise<KillSwitchResult> {
   return apiFetch<KillSwitchResult>("/ops/kill-switch", { method: "POST" });
 }
 
+// ---- Deployments (Phase 4) -------------------------------------------
+
+export type DeployType = "static" | "process";
+export type DeploymentStatus =
+  | "queued" | "building" | "starting" | "healthy" | "unhealthy"
+  | "failed" | "stopped" | "rolled_back";
+
+export interface Deployment {
+  id: number;
+  project_id: number;
+  task_id: number | null;
+  commit_sha: string | null;
+  deploy_type: DeployType;
+  status: DeploymentStatus;
+  artifact_path: string | null;
+  port: number | null;
+  url_local: string | null;
+  healthcheck_path: string;
+  build_log: string | null;
+  error: string | null;
+  pid: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  last_health_check: string | null;
+  created_at: string;
+}
+
+export function listDeployments(slug: string): Promise<Deployment[]> {
+  return apiFetch<Deployment[]>(`/projects/${slug}/deployments`);
+}
+
+export function triggerDeployment(slug: string): Promise<Deployment> {
+  return apiFetch<Deployment>(`/projects/${slug}/deployments`, { method: "POST" });
+}
+
+export function stopDeployment(id: number): Promise<Deployment> {
+  return apiFetch<Deployment>(`/deployments/${id}/stop`, { method: "POST" });
+}
+
+export function rollbackDeployment(id: number): Promise<Deployment> {
+  return apiFetch<Deployment>(`/deployments/${id}/rollback`, { method: "POST" });
+}
+
 // ---- Readiness wire types (mirror backend app/api/readiness.py) --------
 
 export interface ReadinessResponse {
