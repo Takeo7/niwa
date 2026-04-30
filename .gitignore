@@ -26,3 +26,4 @@ data/*.sqlite3-shm
 # Local env
 *.env
 !*.env.example
+.smoke/

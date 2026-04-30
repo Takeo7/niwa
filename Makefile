@@ -1,6 +1,6 @@
-.PHONY: install dev test clean
+.PHONY: install dev test smoke smoke-live clean
 
-# Niwa v1 dev harness. Four targets only per PR-V1-01 brief.
+# Niwa v1 dev harness.
 
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
@@ -18,6 +18,12 @@ dev:
 test:
 	cd $(BACKEND_DIR) && python3 -m pytest -q
 	cd $(FRONTEND_DIR) && npm test -- --run
+
+smoke:
+	python3 scripts/smoke_v1_1.py
+
+smoke-live:
+	python3 scripts/smoke_v1_1.py --live
 
 clean:
 	rm -rf $(BACKEND_DIR)/.pytest_cache $(BACKEND_DIR)/**/__pycache__ \
