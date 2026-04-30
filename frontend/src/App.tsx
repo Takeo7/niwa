@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./shared/AppShell";
+import { AdminRoute } from "./routes/AdminRoute";
 import { HelpRoute } from "./routes/HelpRoute";
 import { ProjectsRoute } from "./routes/ProjectsRoute";
 import { ProjectDetailRoute } from "./routes/ProjectDetailRoute";
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="projects/:slug" element={<ProjectDetailRoute />} />
         <Route path="projects/:slug/tasks/:id" element={<TaskDetailRoute />} />
         <Route path="system" element={<SystemRoute />} />
+        <Route path="admin" element={<AdminRoute />} />
         <Route path="help" element={<HelpRoute />} />
       </Route>
     </Routes>

@@ -163,6 +163,45 @@ def test_task_retry_after_cancel(client, monkeypatch: pytest.MonkeyPatch) -> Non
     assert retry["result"]["status"] == "queued"
 
 
+# ── pull tools (MCP-10/11) ─────────────────────────────────────────────────────
+
+
+def test_pull_list_includes_in_tools_list(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    resp = _call(client, "tools/list", token="tok")
+    names = {t["name"] for t in resp["result"]["tools"]}
+    assert "pull_list" in names
+    assert "pull_merge" in names
+
+
+def test_pull_list_requires_git_remote(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    client.post("/api/projects", json=PROJECT_PAYLOAD)  # no git_remote
+    resp = _call(client, "pull_list", {"project_slug": "demo"}, token="tok")
+    assert "error" in resp
+    assert "git_remote" in resp["error"]["message"].lower()
+
+
+def test_pull_list_404_when_project_missing(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    resp = _call(client, "pull_list", {"project_slug": "ghost"}, token="tok")
+    assert "error" in resp
+    assert "not found" in resp["error"]["message"].lower()
+
+
+def test_pull_merge_requires_merge_scope(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NIWA_MCP_TOKEN", raising=False)
+    from app.api.deps import get_session
+    from app.auth.token_store import create_token
+    db = next(client.app.dependency_overrides[get_session]())
+    raw, _ = create_token(db, "noscope", ["read"])  # no merge scope
+    client.post("/api/projects", json=PROJECT_PAYLOAD)
+    resp = _call(client, "pull_merge",
+                 {"project_slug": "demo", "number": 1}, token=raw)
+    assert "error" in resp
+    assert "merge" in resp["error"]["message"].lower()
+
+
 def test_unknown_method_returns_error(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "nonexistent_method", token="tok")
