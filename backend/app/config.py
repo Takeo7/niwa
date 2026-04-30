@@ -34,6 +34,11 @@ class Settings:
     claude_timeout_s: int
     executor_poll_interval_s: int
     config_source: Path | None
+    # Phase 5 / NET-03 domain config
+    base_domain: str | None = None
+    ui_domain: str | None = None
+    apps_domain: str | None = None
+    public_scheme: str = "https"
 
 
 def _load_toml(path: Path) -> dict:
@@ -75,6 +80,11 @@ def load_settings(config_path: Path | None = None) -> Settings:
 
     claude_cli_raw = claude.get("cli")
     claude_cli = str(claude_cli_raw) if claude_cli_raw else None
+    network = data.get("network", {}) if isinstance(data, dict) else {}
+
+    base_domain = network.get("base_domain") or None
+    ui_domain = network.get("ui_domain") or (f"niwa.{base_domain}" if base_domain else None)
+    apps_domain = network.get("apps_domain") or (f"apps.{base_domain}" if base_domain else None)
 
     return Settings(
         db_path=Path(db.get("path", DEFAULT_DB_PATH)).expanduser(),
@@ -86,4 +96,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
             executor.get("poll_interval_seconds", DEFAULT_EXECUTOR_POLL_INTERVAL_S)
         ),
         config_source=candidate if candidate.is_file() else None,
+        base_domain=base_domain,
+        ui_domain=ui_domain,
+        apps_domain=apps_domain,
+        public_scheme=str(network.get("public_scheme", "https")),
     )

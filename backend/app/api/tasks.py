@@ -153,6 +153,36 @@ def respond_to_task(
     return TaskRead.model_validate(task)
 
 
+@tasks_router.post("/{task_id}/cancel", response_model=TaskRead)
+def cancel_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Cancel a queued or waiting task (Phase 5 ops)."""
+    try:
+        task = service.cancel_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except service.TaskNotCancellable:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task cannot be cancelled")
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.post("/{task_id}/retry", response_model=TaskRead)
+def retry_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Re-queue a failed or cancelled task (Phase 5 ops)."""
+    try:
+        task = service.retry_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except service.TaskNotRetryable:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task cannot be retried")
+    return TaskRead.model_validate(task)
+
+
 # ---- Attachments (PR-V1-33) -------------------------------------------------
 
 

@@ -1,0 +1,22 @@
+POST task → 201
+parent task id=2
+executor run 1 exit=0
+STDERR: iwa-smoke-plcnycjt/fixture-repo argv=['gh', 'pr', 'create', '--title', 'Subtask B: second part', '--body', '(no description)\n\n---\nOpened by Niwa for task #4', '--head', 'niwa/task-4-subtask-b-second-part']
+2026-04-30 15:45:36,687 INFO niwa.executor finalize task_id=4 committed=True pushed=True pr_url=https://github.com/smoke/niwa/pull/3 skipped=[]
+2026-04-30 15:45:36,699 INFO niwa.executor ran adapter for task_id=4
+2026-04-30 15:45:36,700 INFO niwa.executor one-shot done: 3 task(s) processed
+
+executor run 2 exit=0
+STDERR: 2026-04-30 15:45:37,054 INFO niwa.executor one-shot done: 0 task(s) processed
+
+executor run 3 exit=0
+STDERR: 2026-04-30 15:45:37,398 INFO niwa.executor one-shot done: 0 task(s) processed
+
+executor run 4 exit=0
+STDERR: 2026-04-30 15:45:37,718 INFO niwa.executor one-shot done: 0 task(s) processed
+
+executor run 5 exit=0
+STDERR: 2026-04-30 15:45:38,041 INFO niwa.executor one-shot done: 0 task(s) processed
+
+GET tasks → 200
+subtasks found: 2

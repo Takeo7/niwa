@@ -1,0 +1,18 @@
+POST /api/projects/smoke-web/tasks → 201
+task id=1 status=queued
+executor exit=0
+STDOUT: 
+STDERR: 2026-04-30 15:45:35,804 INFO niwa.finalize cmd cwd=/tmp/niwa-smoke-plcnycjt/fixture-repo argv=['git', 'status', '--porcelain']
+2026-04-30 15:45:35,807 INFO niwa.finalize cmd cwd=/tmp/niwa-smoke-plcnycjt/fixture-repo argv=['git', 'add', '-A']
+2026-04-30 15:45:35,810 INFO niwa.finalize cmd cwd=/tmp/niwa-smoke-plcnycjt/fixture-repo argv=['git', '-c', 'user.email=niwa@localhost', '-c', 'user.name=Niwa', 'commit', '-m', 'niwa: Add greeting to README', '-m', "Append 'Hello smoke' to README.md\n\nNiwa task #1"]
+2026-04-30 15:45:35,815 INFO niwa.finalize cmd cwd=/tmp/niwa-smoke-plcnycjt/fixture-repo argv=['git', 'push', '-u', 'origin', 'niwa/task-1-add-greeting-to-readme']
+2026-04-30 15:45:35,834 INFO niwa.finalize cmd cwd=/tmp/niwa-smoke-plcnycjt/fixture-repo argv=['gh', 'pr', 'create', '--title', 'Add greeting to README', '--body', "Append 'Hello smoke' to README.md\n\n---\nOpened by Niwa for task #1", '--head', 'niwa/task-1-add-greeting-to-readme']
+2026-04-30 15:45:35,869 INFO niwa.executor finalize task_id=1 committed=True pushed=True pr_url=https://github.com/smoke/niwa/pull/1 skipped=[]
+2026-04-30 15:45:35,877 INFO niwa.executor ran adapter for task_id=1
+2026-04-30 15:45:35,877 INFO niwa.executor one-shot done: 1 task(s) processed
+
+GET /api/tasks/1 → 200 {"id":1,"project_id":1,"parent_task_id":null,"title":"Add greeting to README","description":"Append 'Hello smoke' to README.md","status":"done","branch_name":"niwa/task-1-add-greeting-to-readme","pr_u
+task final status: done
+git log: 0912399 niwa: Add greeting to README
+ddfdf56 chore: initial smoke fixture
+
