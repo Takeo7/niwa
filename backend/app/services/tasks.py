@@ -13,14 +13,14 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Project, Task, TaskEvent
+from ..models import Project, Task, TaskEvent, TaskPlan
 from ..schemas import TaskCreate
 from .projects import ProjectNotFound, get_project
 
 
 # Statuses that block ``DELETE`` — the executor still owns the lifecycle,
 # so the user must cancel explicitly before removing an active task.
-ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting_input"})
+ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting_input", "waiting_approval", "planning", "reviewing"})
 
 
 class TaskNotFound(Exception):
@@ -33,6 +33,14 @@ class TaskNotDeletable(Exception):
 
 class TaskNotWaitingInput(Exception):
     """Raised when ``respond`` targets a task whose status is not ``waiting_input``."""
+
+
+class TaskNotWaitingApproval(Exception):
+    """Raised when ``approve_plan`` targets a task not in ``waiting_approval``."""
+
+
+class NoPendingPlan(Exception):
+    """Raised when ``approve_plan`` finds no pending plan for the task."""
 
 
 def list_tasks_for_project(session: Session, slug: str) -> list[Task]:
@@ -167,12 +175,49 @@ def respond_to_task(session: Session, task_id: int, response: str) -> Task:
     return task
 
 
+def approve_plan(session: Session, task_id: int) -> Task:
+    """Approve a pending plan and re-queue the task for execution (Phase 2).
+
+    The task must be in ``waiting_approval`` with a ``pending`` plan row.
+    Marks the plan ``approved``, transitions task back to ``queued``.
+    """
+    task = get_task(session, task_id)
+    if task.status != "waiting_approval":
+        raise TaskNotWaitingApproval(task.status)
+
+    plan = session.scalars(
+        select(TaskPlan)
+        .where(TaskPlan.task_id == task_id, TaskPlan.status == "pending")
+        .order_by(TaskPlan.id.desc())
+        .limit(1)
+    ).first()
+    if plan is None:
+        raise NoPendingPlan(task_id)
+
+    plan.status = "approved"
+    from_status = task.status
+    task.status = "queued"
+
+    session.add(TaskEvent(
+        task_id=task.id,
+        kind="status_changed",
+        message=None,
+        payload_json=json.dumps({"from": from_status, "to": "queued", "plan_approved": True}),
+    ))
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 __all__ = [
     "ACTIVE_STATUSES",
+    "NoPendingPlan",
     "ProjectNotFound",
     "TaskNotDeletable",
     "TaskNotFound",
+    "TaskNotWaitingApproval",
     "TaskNotWaitingInput",
+    "approve_plan",
     "create_task",
     "delete_task",
     "get_task",

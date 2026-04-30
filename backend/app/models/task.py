@@ -27,11 +27,17 @@ TASK_STATUSES = (
     "inbox",
     "queued",
     "running",
+    "planning",
+    "waiting_approval",
+    "reviewing",
     "waiting_input",
     "done",
     "failed",
     "cancelled",
 )
+
+# Statuses the UI and API treat as "terminal" (no further progression).
+TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
 
 
 class Task(Base):
@@ -104,4 +110,16 @@ class Task(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="Attachment.id.asc()",
+    )
+    plans: Mapped[list["TaskPlan"]] = relationship(  # noqa: F821
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TaskPlan.id.asc()",
+    )
+    reviews: Mapped[list["TaskReview"]] = relationship(  # noqa: F821
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TaskReview.id.asc()",
     )

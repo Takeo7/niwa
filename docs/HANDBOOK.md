@@ -5,7 +5,7 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
-## Estado actual (post-v1.1 / Phase 0)
+## Estado actual (post-v1.1 / Phase 2)
 
 v1.1 cerrado (PR-V1-35). Rama `main`. Smoke automatizado: `make smoke`.
 Ver `docs/STATE.md` para historial completo.
@@ -21,7 +21,7 @@ niwa/                           ← raíz del repo (v1 promovido desde v1/)
 │   │   ├── config.py           # ~/.niwa/config.toml loader
 │   │   ├── db.py               # SQLAlchemy engine + Base + FK PRAGMA
 │   │   ├── models/             # ORM models (Project, Task, Run, RunEvent,
-│   │   │                       # TaskEvent, Attachment)
+│   │   │                       # TaskEvent, Attachment, TaskPlan, TaskReview)
 │   │   ├── schemas/            # Pydantic v2 wire shapes
 │   │   ├── services/           # pure functions over Session
 │   │   ├── adapters/           # Claude Code CLI wrapper (stream-json parser)
@@ -29,16 +29,18 @@ niwa/                           ← raíz del repo (v1 promovido desde v1/)
 │   │   │                       # CLI entrypoint __main__.py)
 │   │   ├── verification/       # evidence-based run verifier (E1–E5)
 │   │   ├── ops/                # niwa-executor subcommands (doctor)
+│   │   ├── planning/           # Phase 2: PlanningAdapter + save_plan
+│   │   ├── reviewing/          # Phase 2: ReviewAdapter + save_review
 │   │   ├── triage.py           # LLM triage: execute vs split
 │   │   ├── finalize.py         # commit + push + gh pr create + dangerous merge
 │   │   └── api/                # HTTP routers + get_session dep
 │   │       ├── projects.py     # CRUD + pulls tab
-│   │       ├── tasks.py        # CRUD + runs + respond + attachments
+│   │       ├── tasks.py        # CRUD + runs + respond + attachments + approve-plan
 │   │       ├── deploy.py       # GET /api/deploy/{slug}/ static handler
 │   │       └── readiness.py    # GET /api/readiness (health snapshot)
 │   ├── alembic.ini
-│   ├── migrations/versions/    # initial_schema + add_attachments_table
-│   ├── tests/                  # pytest + TestClient (203+ tests)
+│   ├── migrations/versions/    # initial_schema + add_attachments_table + finalize_result_event + phase2_pipeline
+│   ├── tests/                  # pytest + TestClient (225+ tests)
 │   │   └── fixtures/fake_claude_cli.py
 │   └── pyproject.toml
 ├── frontend/                   # React 19 + Vite + Mantine v7
@@ -109,10 +111,9 @@ una copia.
 FKs se ignoran silenciosamente y las CASCADE/RESTRICT declaradas no
 surten efecto.
 
-### Data model (SPEC §3)
+### Data model (SPEC §3 + Phase 2)
 
-Las cinco tablas viven en `app/models/` y se crean juntas en la
-migración `9d205b6968c1_initial_schema`:
+Las tablas base se crean en `9d205b6968c1_initial_schema`; las de Phase 2 en `b2c3d4e5f6a7`:
 
 - **`projects`** — repos sobre los que Niwa opera. Columnas clave:
   `slug` (único), `kind` (CHECK en `web-deployable|library|script`),
@@ -251,7 +252,8 @@ recrear.
 | GET    | `/api/projects/{slug}/tasks`          | `200` + `list[TaskRead]`, orden `created_at` ASC con tie-breaker por `id`; `404` si el slug no existe |
 | POST   | `/api/projects/{slug}/tasks`          | `201` + `TaskRead` en `status="queued"`; `404` si el slug no existe; `422` si payload inválido |
 | GET    | `/api/tasks/{task_id}`                | `200` + `TaskRead`; `404` si no existe                                                  |
-| DELETE | `/api/tasks/{task_id}`                | `204` sin cuerpo; `404` si no existe; `409` si `status in (running, waiting_input)`     |
+| DELETE | `/api/tasks/{task_id}`                | `204` sin cuerpo; `404` si no existe; `409` si `status in (running, waiting_input, waiting_approval, planning, reviewing)` |
+| POST   | `/api/tasks/{task_id}/approve-plan`   | `200` + `TaskRead`; re-encola la tarea tras aprobar el plan; `409` si no está en `waiting_approval` o no hay plan pendiente |
 
 Schemas en `app/schemas/task.py`. `TaskCreate` acepta solo `title`
 (1-200 chars) y `description` opcional (hasta 10 000 chars); todos los
@@ -446,6 +448,56 @@ el proceso y el operador lo relanza.
 con `datetime.now(timezone.utc)` desde `services/runs.py` — **no** con
 `func.now()`. SQLite `CURRENT_TIMESTAMP` es de granularidad 1 s y los
 tests (y el ordering futuro de runs) necesitan microsegundos.
+
+## Phase 2 Pipeline (planning + review)
+
+Extensión del executor para proyectos que activan planificación y/o revisión automática. Los campos de política se añaden a `projects` vía migración `b2c3d4e5f6a7`.
+
+### Campos de política en `projects`
+
+| Columna                  | Default | Efecto |
+|--------------------------|---------|--------|
+| `require_plan_approval`  | `0`     | Si `1`, el executor detiene la tarea en `waiting_approval` hasta que el usuario apruebe el plan vía `POST /api/tasks/{id}/approve-plan` |
+| `auto_review`            | `0`     | Si `1`, el executor lanza `ReviewAdapter` tras la ejecución |
+| `max_review_iterations`  | `1`     | Máximo de ciclos `request_changes → re-execute` |
+
+### Nuevas tablas
+
+- **`task_plans`** — plan generado por `PlanningAdapter` antes de la ejecución. Columnas clave: `task_id`, `status` (`pending|approved|rejected|planning_failed`), `summary`, `steps_json`, `acceptance_criteria_json`, `needs_user_approval`.
+- **`task_reviews`** — revisión del diff generada por `ReviewAdapter` tras la ejecución. Columnas clave: `task_id`, `iteration`, `decision` (`approve|request_changes|needs_input|fail`), `findings_json`, `diff_summary`.
+
+### Nuevos estados de task
+
+`planning` → tránsito durante la generación del plan.
+`waiting_approval` → plan generado; esperando aprobación del usuario.
+`reviewing` → tránsito durante la revisión del diff.
+
+### Pipeline ampliado
+
+```
+queued
+  → [triage: execute]
+  → [if require_plan_approval or auto_review] → planning (PlanningAdapter)
+      → [if require_plan_approval] → waiting_approval → (approve-plan API) → queued → ...
+  → running (ClaudeCodeAdapter)
+  → [if auto_review] → reviewing (ReviewAdapter)
+      → approve  → done
+      → needs_input → waiting_input
+      → fail  → failed
+      → request_changes → queued → ... (hasta max_review_iterations)
+  → done / failed
+```
+
+### Módulos
+
+- `app/planning/adapter.py` — `PlanningAdapter.generate(project, task)` → `PlanningResult`; `save_plan(session, task, result)` → `TaskPlan`. Env override: `NIWA_FAKE_PLAN_JSON`.
+- `app/reviewing/adapter.py` — `ReviewAdapter.review(cwd, task, plan)` → `ReviewResult`; `save_review(session, task, result, iteration)` → `TaskReview`. Env override: `NIWA_FAKE_REVIEW_JSON`. Recoge el diff con `git diff HEAD` (truncado a 20 000 chars).
+- `app/executor/core.py` — `_run_planning`, `_run_review_loop`, `_set_task_status` añadidos; `process_pending` los integra.
+- `app/services/tasks.py` — `approve_plan(session, task_id)` aprueba el plan pendiente y re-encola la tarea.
+
+### Tests
+
+`tests/test_phase2_pipeline.py` — 16 tests: unit de PlanningAdapter, ReviewAdapter, approve_plan service, y pipeline end-to-end con monkeypatch de fake env vars.
 
 ## Adapter Claude Code (PR-V1-07)
 

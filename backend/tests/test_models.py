@@ -205,7 +205,7 @@ EXPECTED_TABLES = {
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "a1b2c3d4e5f6"
+HEAD_REVISION = "b2c3d4e5f6a7"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:

@@ -28,6 +28,10 @@ from ..adapters import (
 )
 from ..finalize import finalize_task
 from ..models import Attachment, Project, Run, RunEvent, Task, TaskEvent
+from ..planning import PlanningAdapter
+from ..planning.adapter import save_plan
+from ..reviewing import ReviewAdapter
+from ..reviewing.adapter import save_review
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
@@ -288,12 +292,108 @@ def process_pending(session: Session) -> int:
             processed += 1
             continue
 
-        # ``run_adapter`` swallows adapter exceptions internally (see its
-        # try/except/finally), so nothing we handle here would ever fire.
+        # Phase 2 planning stage: generate a plan before execution when the
+        # project enables it. If approval is required the task parks in
+        # ``waiting_approval``; otherwise the plan is advisory only.
+        plan = None
+        if project is not None and (
+            getattr(project, "require_plan_approval", False)
+            or getattr(project, "auto_review", False)
+        ):
+            plan = _run_planning(session, task, project)
+            if plan is not None and getattr(project, "require_plan_approval", False):
+                if plan.status not in ("approved",):
+                    # Park until user approves via API
+                    _set_task_status(session, task, "waiting_approval")
+                    processed += 1
+                    continue
+
+        # ``run_adapter`` swallows adapter exceptions internally.
         run_adapter(session, task)
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
+
+        # Phase 2 review stage: inspect the diff after execution when
+        # auto_review is enabled and the task reached ``done``.
+        session.refresh(task)
+        if (
+            project is not None
+            and getattr(project, "auto_review", False)
+            and task.status == "done"
+        ):
+            _run_review_loop(session, task, project, plan)
     return processed
+
+
+def _run_planning(session: Session, task: Task, project: Project):
+    """Generate and persist a TaskPlan; returns the TaskPlan ORM object."""
+    adapter = PlanningAdapter()
+    result = adapter.generate(project, task)
+    plan = save_plan(session, task, result)
+    session.add(TaskEvent(
+        task_id=task.id,
+        kind="status_changed",
+        message=None,
+        payload_json=json.dumps({"from": "running", "to": "planning", "plan_id": plan.id}),
+    ))
+    session.commit()
+    logger.info("plan generated for task_id=%s plan_id=%s success=%s", task.id, plan.id, result.success)
+    return plan
+
+
+def _set_task_status(session: Session, task: Task, new_status: str) -> None:
+    from_status = task.status
+    task.status = new_status
+    session.add(TaskEvent(
+        task_id=task.id,
+        kind="status_changed",
+        message=None,
+        payload_json=json.dumps({"from": from_status, "to": new_status}),
+    ))
+    session.commit()
+
+
+def _run_review_loop(session: Session, task: Task, project: Project, plan) -> None:
+    """Run the post-execution review loop (Phase 2).
+
+    On ``request_changes`` the task is re-queued for another adapter run up
+    to ``project.max_review_iterations``.  On ``needs_input`` the task is
+    parked. On ``approve`` or ``fail`` we leave the task in its current state.
+    """
+    max_iter = getattr(project, "max_review_iterations", 1) or 1
+    cwd = project.local_path or "."
+
+    for iteration in range(max_iter):
+        _set_task_status(session, task, "reviewing")
+        adapter = ReviewAdapter()
+        result = adapter.review(cwd=cwd, task=task, plan=plan)
+        save_review(session, task, result, iteration=iteration)
+        logger.info(
+            "review iteration=%s task_id=%s decision=%s",
+            iteration, task.id, result.decision,
+        )
+
+        if result.decision == "approve":
+            _set_task_status(session, task, "done")
+            return
+        if result.decision == "needs_input":
+            task.pending_question = result.pending_question
+            session.commit()
+            _set_task_status(session, task, "waiting_input")
+            return
+        if result.decision == "fail":
+            _set_task_status(session, task, "failed")
+            return
+        # request_changes: re-run the adapter unless we've exhausted iterations
+        if iteration < max_iter - 1:
+            _set_task_status(session, task, "queued")
+            run_adapter(session, task)
+            session.refresh(task)
+            if task.status != "done":
+                return  # adapter failed; leave in its terminal state
+        else:
+            # Exceeded max iterations — fail the task
+            _set_task_status(session, task, "failed")
 
 
 def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None:

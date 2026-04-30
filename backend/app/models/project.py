@@ -38,6 +38,10 @@ class Project(Base):
     autonomy_mode: Mapped[str] = mapped_column(
         String, nullable=False, server_default="safe"
     )
+    # Phase 2 policy fields: default False preserves v1.1 behaviour.
+    require_plan_approval: Mapped[bool] = mapped_column(Integer, nullable=False, default=False)
+    auto_review: Mapped[bool] = mapped_column(Integer, nullable=False, default=False)
+    max_review_iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

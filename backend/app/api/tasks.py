@@ -19,6 +19,7 @@ from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespond
 from ..services import attachments as attachments_service
 from ..services import runs as runs_service
 from ..services import tasks as service
+from ..services.tasks import NoPendingPlan, TaskNotWaitingApproval
 from .deps import get_session
 
 
@@ -121,6 +122,23 @@ def delete_task(
             detail="task is active; cancel first",
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@tasks_router.post("/{task_id}/approve-plan", response_model=TaskRead)
+def approve_plan(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Approve a pending plan and re-queue the task for execution (Phase 2)."""
+    try:
+        task = service.approve_plan(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+    except TaskNotWaitingApproval:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="task is not waiting for plan approval")
+    except NoPendingPlan:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="no pending plan found")
+    return TaskRead.model_validate(task)
 
 
 @tasks_router.post("/{task_id}/respond", response_model=TaskRead)

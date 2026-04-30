@@ -12,6 +12,8 @@ from .attachment import Attachment
 from .project import Project
 from .task import Task
 from .task_event import TaskEvent
+from .task_plan import TaskPlan
+from .task_review import TaskReview
 from .run import Run
 from .run_event import RunEvent
 
@@ -21,6 +23,8 @@ __all__ = [
     "Project",
     "Task",
     "TaskEvent",
+    "TaskPlan",
+    "TaskReview",
     "Run",
     "RunEvent",
 ]
