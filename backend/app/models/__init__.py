@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from ..db import Base
 
+from .api_token import ApiToken
 from .attachment import Attachment
+from .audit_event import AuditEvent
+from .niwa_session import NiwaSession
 from .project import Project
 from .task import Task
 from .task_event import TaskEvent
@@ -17,7 +20,10 @@ from .run_event import RunEvent
 
 __all__ = [
     "Base",
+    "ApiToken",
     "Attachment",
+    "AuditEvent",
+    "NiwaSession",
     "Project",
     "Task",
     "TaskEvent",

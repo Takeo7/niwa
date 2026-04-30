@@ -2093,11 +2093,103 @@ los ficheros siguen en
 consulta humana — añadir `.niwa/` al `.gitignore` del
 proyecto evita ensuciar el working tree del próximo task.
 
+## Phase 5 — Auth + Domain (NET-01..04)
+
+### Auth (NET-01/02)
+
+`backend/app/auth/` módulo:
+- `hashing.py` — PBKDF2-HMAC-SHA256 (stdlib, salt aleatoria, 260k iteraciones)
+- `password_file.py` — hash en `~/.niwa/auth/password.hash`; auth deshabilitada si no existe
+- `session_store.py` — tabla `sessions` (token_hash, expires_at); TTL 24h; HttpOnly cookie `niwa_session`
+- `token_store.py` — tabla `api_tokens` (name, token_hash, scopes, created_at, last_used_at, revoked_at)
+- `deps.py` — `require_auth` y `require_scope(scope)` como dependencias FastAPI; bypass si auth deshabilitada
+
+Scopes: `read`, `task:create`, `task:write`, `merge`, `deploy`, `admin`.
+
+Endpoints `backend/app/api/auth.py`:
+```
+GET  /api/auth/status           → {enabled: bool}
+POST /api/auth/login            → set HttpOnly cookie
+POST /api/auth/logout           → clear cookie
+GET  /api/auth/me               → {authenticated: true}
+POST /api/auth/set-password     → change password
+GET  /api/auth/tokens           → list active tokens
+POST /api/auth/tokens           → create token (returns raw once)
+DELETE /api/auth/tokens/{id}    → revoke token
+```
+
+Migrations: `d1e2f3a4b5c6_auth_sessions_tokens.py`
+
+### Domain Config + Caddy (NET-03/04)
+
+Nuevos campos en `Settings`:
+- `base_domain`, `ui_domain`, `apps_domain`, `public_scheme`
+- Configurables en `[network]` section del TOML
+
+`backend/app/network/caddy.py`:
+- `render_caddyfile(ui_domain, apps_domain, backend_port, routes, ...)` → str
+- `ProjectRoute(slug, deploy_type, port, public_enabled)`
+- `write_caddyfile(content, path)` → escribe a `~/.niwa/caddy/Caddyfile`
+- Soporta `tls_email` (ACME) y `local_tls` (caddy internal)
+
+Tests: `tests/test_caddy.py` (7 casos snapshot), `tests/test_auth.py` (18 casos)
+
+### Task Cancel/Retry API (Phase 5 ops)
+
+Nuevos endpoints en `tasks_router`:
+```
+POST /api/tasks/{id}/cancel  → TaskRead (status=cancelled)
+POST /api/tasks/{id}/retry   → TaskRead (status=queued)
+```
+
+Nuevas excepciones en `services/tasks.py`: `TaskNotCancellable`, `TaskNotRetryable`.
+
+## Phase 6 — Security (SEC-01..03)
+
+`docs/SECURITY.md` — threat model con 8 amenazas, matriz riesgo/impacto, checklist producción.
+
+`backend/app/security/redaction.py`:
+- `redact(text)` — aplica ~7 patrones regex para limpiar GitHub tokens, sk-ant, niwa_, Bearer, AWS, URL con credenciales, key=value con secrets
+
+`backend/app/models/audit_event.py` + `backend/app/services/audit.py`:
+- Tabla `audit_events`: actor_type, actor_id, action, target_type/id, payload_json, ip_address, created_at
+- `log_event(db, actor_type, action, ...)` y `list_events(db, limit, offset, ...)`
+
+Migración: `e2f3a4b5c6d7_audit_events.py`
+
+Tests: `tests/test_security.py` (10 casos: redacción + audit log)
+
+## Phase 7 — MCP Server (MCP-02..08)
+
+`backend/app/mcp/server.py` — servidor JSON-RPC 2.0 sobre HTTP:
+- Endpoint: `POST /api/mcp`
+- Auth: Bearer token (DB token o `NIWA_MCP_TOKEN` env var)
+- Tools: ping, tools/list, tools/call, project_list, project_get, task_list, task_create, task_status, task_respond, task_cancel, task_retry
+- Scope enforcement por tool
+
+`backend/app/mcp/tools/projects.py` — project_list, project_get
+`backend/app/mcp/tools/tasks.py` — task_list, task_create, task_status, task_respond, task_cancel, task_retry
+
+`docs/integrations/OPENCLAW.md` — guía de integración para OpenClaw y otros clientes MCP.
+
+Tests: `tests/test_mcp.py` (17 casos: auth, scope denial, project/task tools, error handling)
+
+## Phase 8 — Observabilidad (QA-06)
+
+`backend/app/api/metrics.py`:
+- `GET /api/metrics` → `{total_projects, total_tasks, tasks_by_status, active_runs}`
+
+Tests: `tests/test_metrics.py` (6 casos)
+
 ## Próximos PRs (SPEC §9)
 
 - Semana 5 (restante): instalación en la máquina de la pareja.
 - Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-22:
   detectar expiración de sesión en el CLI con fallback a prompt
   compuesto; UI para cancelar un `waiting_input` largo.
+- Phase 5 pendiente: UI login, NET-05 wildcard routing, NET-06..11 TLS/VPS/tunnel
+- Phase 6 pendiente: SEC-04..11 workspace isolation, process limits, kill switch, backup
+- Phase 7 pendiente: MCP resources/prompts (MCP-12), pull/deploy tools (MCP-10/11)
+- Phase 8 pendiente: QA-01..05, QA-07..12
 
 Ver `docs/plans/` para los briefs conforme se escriben.

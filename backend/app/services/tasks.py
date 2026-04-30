@@ -35,6 +35,14 @@ class TaskNotWaitingInput(Exception):
     """Raised when ``respond`` targets a task whose status is not ``waiting_input``."""
 
 
+class TaskNotCancellable(Exception):
+    """Raised when a task is in a terminal or running state that prevents cancel."""
+
+
+class TaskNotRetryable(Exception):
+    """Raised when a task is not in a failed/cancelled state."""
+
+
 def list_tasks_for_project(session: Session, slug: str) -> list[Task]:
     """Return every task for ``slug`` ordered by creation time.
 
@@ -167,15 +175,63 @@ def respond_to_task(session: Session, task_id: int, response: str) -> Task:
     return task
 
 
+_CANCELLABLE = frozenset({"inbox", "queued", "waiting_input"})
+_RETRYABLE = frozenset({"failed", "cancelled"})
+
+
+def cancel_task(session: Session, task_id: int) -> Task:
+    """Cancel a task that has not yet reached a terminal or running state."""
+    task = get_task(session, task_id)
+    if task.status not in _CANCELLABLE:
+        raise TaskNotCancellable(task.status)
+    from_status = task.status
+    task.status = "cancelled"
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "cancelled"}),
+        )
+    )
+    session.commit()
+    session.refresh(task)
+    return task
+
+
+def retry_task(session: Session, task_id: int) -> Task:
+    """Re-queue a failed or cancelled task."""
+    task = get_task(session, task_id)
+    if task.status not in _RETRYABLE:
+        raise TaskNotRetryable(task.status)
+    from_status = task.status
+    task.status = "queued"
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "queued"}),
+        )
+    )
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 __all__ = [
     "ACTIVE_STATUSES",
     "ProjectNotFound",
+    "TaskNotCancellable",
     "TaskNotDeletable",
     "TaskNotFound",
+    "TaskNotRetryable",
     "TaskNotWaitingInput",
+    "cancel_task",
     "create_task",
     "delete_task",
     "get_task",
     "list_tasks_for_project",
     "respond_to_task",
+    "retry_task",
 ]

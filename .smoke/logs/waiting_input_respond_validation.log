@@ -1,0 +1,3 @@
+POST task → 201
+POST /respond on queued task → 409
+respond correctly rejected on non-waiting_input task

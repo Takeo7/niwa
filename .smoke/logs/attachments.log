@@ -1,0 +1,4 @@
+POST task → 201
+POST attachment → 201
+GET attachments → 200
+attachment: filename=smoke.txt content_type=text/plain

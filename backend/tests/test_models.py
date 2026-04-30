@@ -202,10 +202,14 @@ EXPECTED_TABLES = {
     # with whatever ``alembic upgrade head`` materializes so the smoke
     # test catches table-name drift.
     "attachments",
+    # Phase 5/6 added auth + audit tables
+    "sessions",
+    "api_tokens",
+    "audit_events",
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "f98a50e87242"
+HEAD_REVISION = "e2f3a4b5c6d7"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:
