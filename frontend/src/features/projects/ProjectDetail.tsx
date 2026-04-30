@@ -5,7 +5,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import {
   IconAlertCircle, IconAlertTriangle, IconGitPullRequest,
-  IconListCheck, IconPlus, IconSettings,
+  IconListCheck, IconPlus, IconRocket, IconSettings,
 } from "@tabler/icons-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -14,10 +14,11 @@ import { TaskCreateModal } from "../tasks/TaskCreateModal";
 import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
 import { PullsTab } from "./PullsTab";
+import { DeploysTab } from "../deployments/DeploysTab";
 
 interface Props { slug: string }
 
-type TabValue = "tasks" | "pulls" | "settings";
+type TabValue = "tasks" | "pulls" | "deploys" | "settings";
 
 function SettingsTab({ project }: { project: Project }) {
   const qc = useQueryClient();
@@ -126,6 +127,9 @@ export function ProjectDetail({ slug }: Props) {
           <Tabs.Tab value="pulls" leftSection={<IconGitPullRequest size={14} />}>
             Pull requests
           </Tabs.Tab>
+          <Tabs.Tab value="deploys" leftSection={<IconRocket size={14} />}>
+            Deploys
+          </Tabs.Tab>
           <Tabs.Tab value="settings" leftSection={<IconSettings size={14} />}>
             Settings
           </Tabs.Tab>
@@ -148,6 +152,10 @@ export function ProjectDetail({ slug }: Props) {
 
         <Tabs.Panel value="pulls" pt="md">
           <PullsTab projectSlug={slug} active={tab === "pulls"} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="deploys" pt="md">
+          <DeploysTab slug={slug} active={tab === "deploys"} />
         </Tabs.Panel>
 
         <Tabs.Panel value="settings" pt="md">

@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..deployments.service import get_active_deployment
 from ..models import Project
 from .deps import get_session
 
@@ -33,7 +34,7 @@ from .deps import get_session
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
-def _resolve_target(local_path: str, path: str) -> Path | None:
+def _resolve_target_in(artifact_root: str, path: str) -> Path | None:
     """Return the file to serve, or ``None`` if the request must 404.
 
     Kept as a module-level helper so the traversal guard is straightforward
@@ -42,7 +43,7 @@ def _resolve_target(local_path: str, path: str) -> Path | None:
     file contents.
     """
 
-    dist = (Path(local_path) / "dist").resolve()
+    dist = Path(artifact_root).resolve()
     # Empty path hits the SPA entry point. Any other path is resolved
     # *relative to* ``dist`` so a leading slash in the raw segment can't
     # escape into the absolute filesystem root.
@@ -60,6 +61,12 @@ def _resolve_target(local_path: str, path: str) -> Path | None:
     return target
 
 
+def _resolve_target(local_path: str, path: str) -> Path | None:
+    """Legacy: look in <local_path>/dist/. Used when no versioned deployment exists."""
+    dist_root = str(Path(local_path) / "dist")
+    return _resolve_target_in(dist_root, path)
+
+
 def _serve(slug: str, path: str, session: Session) -> FileResponse:
     project = session.execute(
         select(Project).where(Project.slug == slug)
@@ -69,7 +76,14 @@ def _serve(slug: str, path: str, session: Session) -> FileResponse:
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
         )
 
-    target = _resolve_target(project.local_path, path)
+    # Phase 4: prefer the active versioned deployment artifact; fall back to
+    # the legacy dist/ path for backwards compatibility.
+    active = get_active_deployment(session, project.id)
+    if active is not None and active.artifact_path:
+        target = _resolve_target_in(active.artifact_path, path)
+    else:
+        target = _resolve_target(project.local_path, path)
+
     if target is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found"

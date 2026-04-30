@@ -2155,11 +2155,96 @@ los ficheros siguen en
 consulta humana — añadir `.niwa/` al `.gitignore` del
 proyecto evita ensuciar el working tree del próximo task.
 
+## Deploy local serio (Phase 4)
+
+Infraestructura de despliegue versionada con artefactos inmutables,
+healthchecks, stop y rollback. Reemplaza el handler estático de
+PR-V1-17 cuando hay un deployment activo para el proyecto.
+
+### Modelo `Deployment`
+
+Tabla `deployments` con columnas: `id`, `project_id`, `task_id`,
+`commit_sha`, `deploy_type` (static|process), `status`
+(queued→building→starting→healthy|unhealthy|failed|stopped|rolled_back),
+`artifact_path`, `port`, `url_local`, `healthcheck_path`, `build_log`,
+`error`, `pid`, `started_at`, `finished_at`, `last_health_check`,
+`created_at`.
+
+Migración Alembic: `c3d4e5f6a7b8_phase4_deployments.py`.
+
+### Campos nuevos en `Project`
+
+`build_command`, `start_command`, `dist_dir` (default `"dist"`),
+`healthcheck_path` (default `"/"`), `deploy_type` (default `"static"`).
+
+### Módulos backend (`app/deployments/`)
+
+- **`ports.py`** — `allocate_port(session, project_id)`: porta libre
+  en rango 41000-41999, saltando puertos ya asignados en DB o abiertos
+  en el OS via `socket`.
+- **`runner.py`** — `build_and_stage(session, deployment, project)`:
+  ejecuta `build_command` (timeout 300 s), copia `dist_dir` a
+  `$NIWA_HOME/deployments/{slug}/{deploy_id}/`.
+- **`process_manager.py`** — `start_process()`, `stop_process()`,
+  `is_process_alive()`.
+- **`health.py`** — `check_health(session, d)`: para static, comprueba
+  que `artifact_path/` exista; para process, GET a
+  `http://localhost:{port}{healthcheck_path}`.
+- **`service.py`** — `trigger_deploy()`, `stop_deployment()`,
+  `rollback_to()`, `get_active_deployment()`.
+
+### API (`app/api/deployments.py`)
+
+```
+GET  /api/projects/{slug}/deployments       → list[DeploymentRead]
+POST /api/projects/{slug}/deployments       → DeploymentRead (201)
+GET  /api/deployments/{id}                  → DeploymentRead
+POST /api/deployments/{id}/stop             → DeploymentRead
+POST /api/deployments/{id}/rollback         → DeploymentRead
+POST /api/deployments/{id}/healthcheck      → DeploymentRead
+```
+
+### Handler estático actualizado (`app/api/deploy.py`)
+
+Si hay deployment activo para el slug, sirve desde `artifact_path/`;
+si no, fallback a `dist/` legacy. Traversal guard en ambas ramas.
+
+### Almacenamiento de artefactos
+
+`$NIWA_HOME/deployments/{slug}/{deploy_id}/` donde `NIWA_HOME`
+por defecto es `~/.niwa`. Cada deploy es inmutable.
+
+### Frontend (`features/deployments/DeploysTab.tsx`)
+
+Tabla con columnas: #, Commit, Type, Status, URL, Created, Acciones.
+- Badge de color según status.
+- Botón Stop visible solo en `status=healthy`.
+- Botón Rollback visible en `stopped|failed` con `artifact_path`.
+- Deploy button dispara `POST /api/projects/{slug}/deployments`.
+- Polling cada 5 s cuando el tab está activo.
+
+Integrado en `ProjectDetail.tsx` como tab "Deploys" (icono rocket).
+
+### Tests
+
+`backend/tests/test_phase4_deployments.py` (13 casos): modelo,
+trigger_deploy static happy path, trigger_deploy sin dist/,
+stop_deployment, get_active_deployment, allocate_port, healthcheck
+static healthy/unhealthy, API list/get/stop/409 ya parado.
+
+`frontend/tests/DeploysTab.test.tsx` (7 casos): empty state,
+render de filas, botón Stop solo en healthy, Rollback en stopped,
+URL link, indicador de error, Deploy button POST.
+
 ## Próximos PRs (SPEC §9)
 
-- Semana 5 (restante): instalación en la máquina de la pareja.
-- Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-22:
-  detectar expiración de sesión en el CLI con fallback a prompt
-  compuesto; UI para cancelar un `waiting_input` largo.
+- Phase 5: Domain/subdomains/TLS (auth tokens, Caddy generator,
+  wildcard routing, VPS/tunnel modes).
+- Phase 6: Security/isolation (threat model, audit log, kill switch,
+  backups).
+- Phase 7: MCP server for OpenClaw (project/task tools, PR/deploy
+  tools, resources/prompts).
+- Phase 8: QA/robustness/packaging (integration tests, CI matrix,
+  frontend E2E, observability, releases).
 
 Ver `docs/plans/` para los briefs conforme se escriben.

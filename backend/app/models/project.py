@@ -42,6 +42,12 @@ class Project(Base):
     require_plan_approval: Mapped[bool] = mapped_column(Integer, nullable=False, default=False)
     auto_review: Mapped[bool] = mapped_column(Integer, nullable=False, default=False)
     max_review_iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Phase 4 deploy settings
+    build_command: Mapped[str | None] = mapped_column(String, nullable=True)
+    start_command: Mapped[str | None] = mapped_column(String, nullable=True)
+    dist_dir: Mapped[str] = mapped_column(String, nullable=False, default="dist")
+    healthcheck_path: Mapped[str] = mapped_column(String, nullable=False, default="/")
+    deploy_type: Mapped[str] = mapped_column(String, nullable=False, default="static")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

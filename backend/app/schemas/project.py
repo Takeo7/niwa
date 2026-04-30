@@ -64,6 +64,11 @@ class ProjectPatch(BaseModel):
     require_plan_approval: bool | None = None
     auto_review: bool | None = None
     max_review_iterations: int | None = Field(default=None, ge=1, le=10)
+    build_command: str | None = None
+    start_command: str | None = None
+    dist_dir: str | None = Field(default=None, min_length=1)
+    healthcheck_path: str | None = None
+    deploy_type: Literal["static", "process"] | None = None
 
 
 class ProjectRead(BaseModel):
@@ -82,5 +87,10 @@ class ProjectRead(BaseModel):
     require_plan_approval: bool = False
     auto_review: bool = False
     max_review_iterations: int = 1
+    build_command: str | None = None
+    start_command: str | None = None
+    dist_dir: str = "dist"
+    healthcheck_path: str = "/"
+    deploy_type: str = "static"
     created_at: datetime
     updated_at: datetime
