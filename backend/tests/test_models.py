@@ -198,18 +198,16 @@ def test_run_event_fk(session: Session) -> None:
 
 EXPECTED_TABLES = {
     "projects", "tasks", "task_events", "runs", "run_events",
-    # PR-V1-33 added the attachments table — keep this set in lock-step
-    # with whatever ``alembic upgrade head`` materializes so the smoke
-    # test catches table-name drift.
     "attachments",
-    # Phase 5/6 added auth + audit tables
     "sessions",
     "api_tokens",
     "audit_events",
+    # Phase 4 added the deployments table
+    "deployments",
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "e2f3a4b5c6d7"
+HEAD_REVISION = "f3a4b5c6d7e8"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:

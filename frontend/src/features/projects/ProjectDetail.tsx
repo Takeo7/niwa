@@ -4,17 +4,18 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle, IconAlertTriangle, IconGitPullRequest,
-  IconListCheck, IconPlus,
+  IconListCheck, IconPlus, IconRocket,
 } from "@tabler/icons-react";
 
 import { TaskCreateModal } from "../tasks/TaskCreateModal";
 import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
 import { PullsTab } from "./PullsTab";
+import { DeploysTab } from "./DeploysTab";
 
 interface Props { slug: string }
 
-type TabValue = "tasks" | "pulls";
+type TabValue = "tasks" | "pulls" | "deploys";
 
 export function ProjectDetail({ slug }: Props) {
   const query = useProject(slug);
@@ -73,6 +74,9 @@ export function ProjectDetail({ slug }: Props) {
           <Tabs.Tab value="pulls" leftSection={<IconGitPullRequest size={14} />}>
             Pull requests
           </Tabs.Tab>
+          <Tabs.Tab value="deploys" leftSection={<IconRocket size={14} />}>
+            Deploys
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="tasks" pt="md">
@@ -92,6 +96,10 @@ export function ProjectDetail({ slug }: Props) {
 
         <Tabs.Panel value="pulls" pt="md">
           <PullsTab projectSlug={slug} active={tab === "pulls"} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="deploys" pt="md">
+          <DeploysTab projectSlug={slug} active={tab === "deploys"} />
         </Tabs.Panel>
       </Tabs>
 

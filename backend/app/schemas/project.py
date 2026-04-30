@@ -24,15 +24,11 @@ SLUG_PATTERN = r"^[a-z0-9-]+$"
 
 ProjectKind = Literal["web-deployable", "library", "script"]
 AutonomyMode = Literal["safe", "dangerous"]
+DeployType = Literal["static", "process"]
 
 
 class ProjectCreate(BaseModel):
-    """Payload for creating a project.
-
-    ``slug`` is lowercase alphanumerics plus dashes, 3-40 chars. ``local_path``
-    is expected to be an absolute path but we defer the filesystem check to
-    later PRs — the executor needs the path to exist, the API does not.
-    """
+    """Payload for creating a project."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -43,15 +39,16 @@ class ProjectCreate(BaseModel):
     local_path: str = Field(min_length=1)
     deploy_port: int | None = Field(default=None, ge=1024, le=65535)
     autonomy_mode: AutonomyMode = "safe"
+    # Phase 4 deployment configuration
+    deploy_type: DeployType = "static"
+    build_command: str | None = None
+    dist_dir: str | None = None
+    start_command: str | None = None
+    healthcheck_path: str | None = None
 
 
 class ProjectPatch(BaseModel):
-    """Partial update payload.
-
-    ``slug`` is intentionally not present. ``extra="forbid"`` turns any attempt
-    to patch it (or any other unknown field) into a ``422`` before it reaches
-    the service layer.
-    """
+    """Partial update payload."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +58,11 @@ class ProjectPatch(BaseModel):
     local_path: str | None = Field(default=None, min_length=1)
     deploy_port: int | None = Field(default=None, ge=1024, le=65535)
     autonomy_mode: AutonomyMode | None = None
+    deploy_type: DeployType | None = None
+    build_command: str | None = None
+    dist_dir: str | None = None
+    start_command: str | None = None
+    healthcheck_path: str | None = None
 
 
 class ProjectRead(BaseModel):
@@ -76,5 +78,10 @@ class ProjectRead(BaseModel):
     local_path: str
     deploy_port: int | None
     autonomy_mode: str
+    deploy_type: str
+    build_command: str | None
+    dist_dir: str | None
+    start_command: str | None
+    healthcheck_path: str | None
     created_at: datetime
     updated_at: datetime

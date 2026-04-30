@@ -11,6 +11,7 @@ from ..db import Base
 from .api_token import ApiToken
 from .attachment import Attachment
 from .audit_event import AuditEvent
+from .deployment import Deployment
 from .niwa_session import NiwaSession
 from .project import Project
 from .task import Task
@@ -23,6 +24,7 @@ __all__ = [
     "ApiToken",
     "Attachment",
     "AuditEvent",
+    "Deployment",
     "NiwaSession",
     "Project",
     "Task",

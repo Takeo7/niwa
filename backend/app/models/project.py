@@ -26,6 +26,10 @@ class Project(Base):
             "autonomy_mode IN ('safe', 'dangerous')",
             name="ck_projects_autonomy_mode",
         ),
+        CheckConstraint(
+            "deploy_type IN ('static', 'process')",
+            name="ck_projects_deploy_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -38,6 +42,14 @@ class Project(Base):
     autonomy_mode: Mapped[str] = mapped_column(
         String, nullable=False, server_default="safe"
     )
+    # Phase 4 — versioned deployments (DEPLOY-01..09)
+    deploy_type: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="static"
+    )
+    build_command: Mapped[str | None] = mapped_column(String, nullable=True)
+    dist_dir: Mapped[str | None] = mapped_column(String, nullable=True)
+    start_command: Mapped[str | None] = mapped_column(String, nullable=True)
+    healthcheck_path: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
