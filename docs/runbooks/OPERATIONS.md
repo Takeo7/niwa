@@ -1,6 +1,6 @@
 # Niwa Operations Runbook
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 Day-to-day operations for a running Niwa instance.
 
@@ -12,6 +12,7 @@ niwa-executor stop       # stop + unload
 niwa-executor restart    # reload service file + restart
 niwa-executor status     # current state
 niwa-executor logs -f    # tail ~/.niwa/logs/executor.log
+niwa-executor doctor     # local config/db/permission checks
 ```
 
 ## Updates
@@ -46,7 +47,9 @@ If a task is stuck or runaway:
 1. UI: `Admin → Ops → Kill switch` (requires login).
 2. API: `POST /api/ops/kill-switch` with auth.
 
-This cancels every queued, waiting_input, and running task. The audit log records the action.
+This cancels every queued, waiting_input, and running task. If a running run has
+a recorded PID, Niwa sends SIGTERM to its process group. The audit log records
+the action.
 
 ## Monitoring
 
@@ -67,19 +70,21 @@ Critical files:
 - `~/.niwa/auth/password.hash` — admin password
 - `~/.niwa/config.toml` — runtime config
 
-A simple nightly backup:
+Create a local backup archive:
 
 ```bash
-cp data/niwa-v1.sqlite3 backups/niwa-$(date +%F).sqlite3
-tar czf backups/niwa-home-$(date +%F).tgz ~/.niwa
+niwa-executor backup
+niwa-executor backup --output /safe/path/niwa-backup.tar.gz
 ```
+
+The archive includes the SQLite DB, a manifest, and a redacted config snapshot.
+It does not include project repositories.
 
 ## Restore
 
 1. Stop the executor: `niwa-executor stop`
-2. Replace `data/niwa-v1.sqlite3` with the backup
-3. Restore `~/.niwa/auth/` and `~/.niwa/config.toml`
-4. Start: `niwa-executor start`
+2. Restore the DB: `niwa-executor restore /safe/path/niwa-backup.tar.gz --yes`
+3. Start: `niwa-executor start`
 
 DB schema migrations are forward-only; do not restore a backup older than the current schema without first downgrading via `alembic downgrade`.
 

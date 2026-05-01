@@ -33,6 +33,8 @@ runs_router = APIRouter(prefix="/runs", tags=["runs"])
 # Tail cadence: sleep 200 ms between polls, emit a heartbeat every ~15 s.
 _POLL_INTERVAL_S = 0.2
 _HEARTBEAT_EVERY_ITERATIONS = 75  # 75 * 200 ms = 15 s.
+_TERMINAL_DRAIN_QUIET_POLLS = 2
+_TERMINAL_DRAIN_MAX_POLLS = 10
 
 
 @contextmanager
@@ -89,15 +91,31 @@ async def _event_stream(
             return
 
         if snapshot.status in svc.TERMINAL_RUN_STATUSES:
-            # Drain events that landed between snapshot load and the
-            # terminal check so none is lost.
-            tail = await asyncio.to_thread(
-                _load_events, request, run_id, last_id
-            )
-            for event in tail:
-                yield svc.format_sse_event(event)
-                if event.id > last_id:
-                    last_id = event.id
+            # Terminal status and final event commits can become visible
+            # on adjacent polls. Wait for a short quiet window before
+            # closing so the stream does not race past the final event.
+            quiet_polls = 0
+            drain_polls = 0
+            while (
+                quiet_polls < _TERMINAL_DRAIN_QUIET_POLLS
+                and drain_polls < _TERMINAL_DRAIN_MAX_POLLS
+            ):
+                drain_polls += 1
+                tail = await asyncio.to_thread(
+                    _load_events, request, run_id, last_id
+                )
+                if not tail:
+                    quiet_polls += 1
+                    if quiet_polls < _TERMINAL_DRAIN_QUIET_POLLS:
+                        await asyncio.sleep(_POLL_INTERVAL_S)
+                    continue
+
+                quiet_polls = 0
+                for event in tail:
+                    yield svc.format_sse_event(event)
+                    if event.id > last_id:
+                        last_id = event.id
+
             yield svc.format_sse_eos(snapshot)
             return
 

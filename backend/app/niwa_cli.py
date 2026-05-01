@@ -13,13 +13,17 @@ Subcommands: ``start | stop | restart | status | logs | update``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
 import signal
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import app as _app_pkg
@@ -330,6 +334,94 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from app.config import load_settings
+
+    settings = load_settings()
+    warnings: list[str] = []
+    sys.stdout.write(f"NIWA_HOME={NIWA_HOME}\n")
+    sys.stdout.write(f"config={settings.config_source or 'not found'}\n")
+    sys.stdout.write(f"db={settings.db_path}\n")
+    if NIWA_HOME.exists():
+        mode = NIWA_HOME.stat().st_mode & 0o777
+        sys.stdout.write(f"home_mode={oct(mode)}\n")
+        if mode & 0o077:
+            warnings.append(f"insecure NIWA_HOME permissions: {oct(mode)}")
+    else:
+        warnings.append("NIWA_HOME does not exist")
+    if not settings.db_path.parent.exists():
+        warnings.append(f"db parent missing: {settings.db_path.parent}")
+    for warning in warnings:
+        sys.stdout.write(f"WARN {warning}\n")
+    if not warnings:
+        sys.stdout.write("OK\n")
+    return 1 if warnings and args.strict else 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    from app.config import load_settings
+    from app.security.redaction import redact
+
+    settings = load_settings()
+    backup_dir = NIWA_HOME / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    default_name = (
+        "niwa-backup-"
+        + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        + ".tar.gz"
+    )
+    target = Path(args.output).expanduser() if args.output else backup_dir / default_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "db_path": str(settings.db_path),
+        "config_source": str(settings.config_source) if settings.config_source else None,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        if settings.db_path.exists():
+            shutil.copy2(settings.db_path, root / "niwa.sqlite3")
+        if settings.config_source and settings.config_source.exists():
+            redacted = redact(settings.config_source.read_text(encoding="utf-8"))
+            (root / "config.redacted.toml").write_text(redacted, encoding="utf-8")
+        with tarfile.open(target, "w:gz") as archive:
+            for item in sorted(root.iterdir()):
+                archive.add(item, arcname=item.name)
+    sys.stdout.write(f"backup written {target}\n")
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    if not args.yes:
+        sys.stderr.write("restore requires --yes\n")
+        return 1
+    target_db = Path(args.db_path).expanduser() if args.db_path else None
+    if target_db is None:
+        from app.config import load_settings
+
+        target_db = load_settings().db_path
+    target_db.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(Path(args.archive).expanduser(), "r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers()}
+        db_member = members.get("niwa.sqlite3")
+        if db_member is None:
+            sys.stderr.write("backup archive has no niwa.sqlite3\n")
+            return 1
+        with archive.extractfile(db_member) as src:
+            if src is None:
+                sys.stderr.write("could not read niwa.sqlite3 from archive\n")
+                return 1
+            with target_db.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+    sys.stdout.write(f"db restored {target_db}\n")
+    return 0
+
+
 def cmd_set_password(args: argparse.Namespace) -> int:
     """Set the admin password (creates ~/.niwa/auth/password.hash)."""
     from getpass import getpass
@@ -454,6 +546,14 @@ def _build_parser() -> argparse.ArgumentParser:
     cleanup_p.add_argument("--runs-days", type=int, default=30)
     cleanup_p.add_argument("--tasks-days", type=int, default=30)
     cleanup_p.add_argument("--dry-run", action="store_true")
+    doctor = sub.add_parser("doctor", help="check local Niwa operational health")
+    doctor.add_argument("--strict", action="store_true")
+    backup = sub.add_parser("backup", help="create a local Niwa DB/config backup")
+    backup.add_argument("--output", default=None)
+    restore = sub.add_parser("restore", help="restore a local Niwa DB backup")
+    restore.add_argument("archive")
+    restore.add_argument("--db-path", default=None)
+    restore.add_argument("--yes", action="store_true")
     setpw = sub.add_parser("set-password", help="set or change the admin password")
     setpw.add_argument("--password", default=None, help="non-interactive use only")
     proxy = sub.add_parser("proxy", help="render or validate the Caddy proxy config")
@@ -478,6 +578,9 @@ _DISPATCH = {
     "logs": cmd_logs,
     "update": cmd_update,
     "cleanup": cmd_cleanup,
+    "doctor": cmd_doctor,
+    "backup": cmd_backup,
+    "restore": cmd_restore,
     "set-password": cmd_set_password,
 }
 
