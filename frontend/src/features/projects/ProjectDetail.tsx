@@ -4,7 +4,7 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle, IconAlertTriangle, IconGitPullRequest,
-  IconListCheck, IconPlus, IconRocket,
+  IconListCheck, IconPlus, IconRocket, IconSettings,
 } from "@tabler/icons-react";
 
 import { TaskCreateModal } from "../tasks/TaskCreateModal";
@@ -12,10 +12,11 @@ import { TaskList } from "../tasks/TaskList";
 import { useProject } from "./api";
 import { PullsTab } from "./PullsTab";
 import { DeploysTab } from "./DeploysTab";
+import { ProjectSettingsTab } from "./ProjectSettingsTab";
 
 interface Props { slug: string }
 
-type TabValue = "tasks" | "pulls" | "deploys";
+type TabValue = "tasks" | "pulls" | "deploys" | "settings";
 
 export function ProjectDetail({ slug }: Props) {
   const query = useProject(slug);
@@ -51,6 +52,12 @@ export function ProjectDetail({ slug }: Props) {
       <Title order={2}>{p.name}</Title>
       <Group gap="xs">
         <Badge variant="light">{p.kind}</Badge>
+        <Badge variant="light" color={p.public_enabled ? "blue" : "gray"}>
+          {p.public_enabled ? "public" : "private"}
+        </Badge>
+        <Badge variant="light" color="violet">
+          {p.deploy_trigger}
+        </Badge>
         <Badge
           variant="light"
           color={p.autonomy_mode === "dangerous" ? "red" : "green"}
@@ -77,6 +84,9 @@ export function ProjectDetail({ slug }: Props) {
           <Tabs.Tab value="deploys" leftSection={<IconRocket size={14} />}>
             Deploys
           </Tabs.Tab>
+          <Tabs.Tab value="settings" leftSection={<IconSettings size={14} />}>
+            Settings
+          </Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="tasks" pt="md">
@@ -100,6 +110,10 @@ export function ProjectDetail({ slug }: Props) {
 
         <Tabs.Panel value="deploys" pt="md">
           <DeploysTab projectSlug={slug} active={tab === "deploys"} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="settings" pt="md">
+          <ProjectSettingsTab project={p} />
         </Tabs.Panel>
       </Tabs>
 

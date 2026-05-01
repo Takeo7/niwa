@@ -49,6 +49,7 @@ export function getHealth(): Promise<HealthResponse> {
 
 export type ProjectKind = "web-deployable" | "library" | "script";
 export type AutonomyMode = "safe" | "dangerous";
+export type DeployType = "static" | "process";
 export type DeployTrigger = "manual" | "on_done" | "on_merge";
 
 export interface Project {
@@ -60,6 +61,11 @@ export interface Project {
   local_path: string;
   deploy_port: number | null;
   autonomy_mode: AutonomyMode;
+  deploy_type: DeployType;
+  build_command: string | null;
+  dist_dir: string | null;
+  start_command: string | null;
+  healthcheck_path: string | null;
   deploy_trigger: DeployTrigger;
   public_enabled: boolean;
   created_at: string;
@@ -74,6 +80,27 @@ export interface ProjectCreatePayload {
   git_remote?: string | null;
   deploy_port?: number | null;
   autonomy_mode?: AutonomyMode;
+  deploy_type?: DeployType;
+  build_command?: string | null;
+  dist_dir?: string | null;
+  start_command?: string | null;
+  healthcheck_path?: string | null;
+  deploy_trigger?: DeployTrigger;
+  public_enabled?: boolean;
+}
+
+export interface ProjectPatchPayload {
+  name?: string;
+  kind?: ProjectKind;
+  git_remote?: string | null;
+  local_path?: string;
+  deploy_port?: number | null;
+  autonomy_mode?: AutonomyMode;
+  deploy_type?: DeployType;
+  build_command?: string | null;
+  dist_dir?: string | null;
+  start_command?: string | null;
+  healthcheck_path?: string | null;
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
 }
@@ -337,7 +364,6 @@ export function killSwitch(): Promise<KillSwitchResult> {
 
 // ---- Deployments (Phase 4) -------------------------------------------
 
-export type DeployType = "static" | "process";
 export type DeploymentStatus =
   | "queued" | "building" | "starting" | "healthy" | "unhealthy"
   | "failed" | "stopped" | "rolled_back";
