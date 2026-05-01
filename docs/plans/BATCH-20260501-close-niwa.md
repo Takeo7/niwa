@@ -31,6 +31,11 @@ until the human gives one explicit `go ahead` for this batch plan.
   metrics, pulls, and static deploy serving with scopes; fixed AdminPanel to
   verify `/auth/me` before rendering admin content when auth is enabled; added
   backend scope tests and an AdminPanel auth-gate test.
+- 2026-05-01: WS-03 first slice implemented locally on stacked branch
+  `codex/pipeline-plan-review`: added `TaskPlan`/`TaskReview` models,
+  migration, schemas, task API read endpoints, fake JSON planner before
+  execution, fake JSON reviewer after verification and before finalize, and
+  TaskDetail plan/review display.
 
 ## Current repo state
 

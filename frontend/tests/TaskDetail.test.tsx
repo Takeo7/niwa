@@ -28,6 +28,9 @@ function stubFetchForTask(task: Task, respondCapture?: vi.Mock): void {
       if (url.endsWith(`/tasks/${task.id}/runs`)) {
         return { ok: true, status: 200, json: async () => [] } as Response;
       }
+      if (url.endsWith(`/tasks/${task.id}/plan`) || url.endsWith(`/tasks/${task.id}/review`)) {
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) } as Response;
+      }
       if (url.endsWith(`/tasks/${task.id}`)) {
         return { ok: true, status: 200, json: async () => task } as Response;
       }

@@ -229,7 +229,7 @@ def test_adapter_skips_malformed_json_lines(
         session.query(RunEvent)
         .filter(
             RunEvent.run_id == run.id,
-            RunEvent.event_type.notin_(["started", "completed"]),
+            RunEvent.event_type.notin_(["started", "completed", "review"]),
         )
         .all()
     )

@@ -25,6 +25,12 @@ interface Props {
 const STATUS_COLOR: Record<TaskStatus, string> = {
   inbox: "gray",
   queued: "blue",
+  triaging: "cyan",
+  planning: "indigo",
+  waiting_approval: "yellow",
+  executing: "cyan",
+  verifying: "violet",
+  reviewing: "grape",
   running: "cyan",
   waiting_input: "yellow",
   done: "green",

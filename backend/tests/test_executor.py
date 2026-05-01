@@ -29,7 +29,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.executor.core import claim_next_task, process_pending
 from app.executor.git_workspace import build_branch_name
-from app.models import Base, Project, Run, RunEvent, Task, TaskEvent
+from app.models import (
+    Base,
+    Project,
+    Run,
+    RunEvent,
+    Task,
+    TaskEvent,
+    TaskPlan,
+    TaskReview,
+)
 
 
 FAKE_CLI_PATH = (
@@ -174,6 +183,12 @@ def test_process_pending_single_task(
     assert run.outcome == "verified"
     assert run.model == "claude-code"
     assert run.finished_at is not None
+    plan = session.query(TaskPlan).filter(TaskPlan.task_id == task.id).one()
+    assert plan.planner == "fake-json"
+    assert plan.steps
+    review = session.query(TaskReview).filter(TaskReview.task_id == task.id).one()
+    assert review.run_id == run.id
+    assert review.decision == "approved"
 
 
 def test_process_pending_multiple_tasks(

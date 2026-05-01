@@ -7,6 +7,7 @@ the public names so callers can write ``from app.schemas import ProjectRead``.
 from __future__ import annotations
 
 from .attachment import AttachmentRead
+from .pipeline import TaskPlanRead, TaskReviewRead
 from .project import ProjectCreate, ProjectPatch, ProjectRead
 from .pulls import (
     CheckState,
@@ -34,6 +35,8 @@ __all__ = [
     "PullsResponse",
     "RunRead",
     "TaskCreate",
+    "TaskPlanRead",
     "TaskRead",
+    "TaskReviewRead",
     "TaskRespondPayload",
 ]

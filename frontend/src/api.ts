@@ -78,6 +78,12 @@ export interface ProjectCreatePayload {
 export type TaskStatus =
   | "inbox"
   | "queued"
+  | "triaging"
+  | "planning"
+  | "waiting_approval"
+  | "executing"
+  | "verifying"
+  | "reviewing"
   | "running"
   | "waiting_input"
   | "done"
@@ -102,6 +108,30 @@ export interface Task {
 export interface TaskCreatePayload {
   title: string;
   description?: string | null;
+}
+
+export interface TaskPlan {
+  id: number;
+  task_id: number;
+  status: "ready";
+  summary: string;
+  steps: string[];
+  risks: string[];
+  planner: string;
+  raw_json: string;
+  created_at: string;
+}
+
+export interface TaskReview {
+  id: number;
+  task_id: number;
+  run_id: number | null;
+  decision: "approved" | "request_changes";
+  summary: string;
+  findings: string[];
+  reviewer: string;
+  raw_json: string;
+  created_at: string;
 }
 
 // ---- Attachments wire types (mirror backend app/schemas/attachment.py) -
@@ -159,7 +189,16 @@ export interface EosPayload {
 }
 
 // Active = driving toward a terminal state; delete is forbidden by backend.
-const ACTIVE_STATUSES: readonly TaskStatus[] = ["running", "waiting_input"];
+const ACTIVE_STATUSES: readonly TaskStatus[] = [
+  "triaging",
+  "planning",
+  "waiting_approval",
+  "executing",
+  "verifying",
+  "reviewing",
+  "running",
+  "waiting_input",
+];
 
 export function isTaskActive(task: Task): boolean {
   return ACTIVE_STATUSES.includes(task.status);
@@ -169,6 +208,12 @@ export function isTaskActive(task: Task): boolean {
 // and anything already running. Used to gate React Query's refetchInterval.
 const IN_FLIGHT_STATUSES: readonly TaskStatus[] = [
   "queued",
+  "triaging",
+  "planning",
+  "waiting_approval",
+  "executing",
+  "verifying",
+  "reviewing",
   "running",
   "waiting_input",
 ];
