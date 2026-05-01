@@ -1,4 +1,0 @@
-GET /api/deploy/smoke-web/ → 200
-<!doctype html><html><body>smoke-fixture</body></html>
-
-GET /api/deploy/smoke-web/assets/app.js → 200

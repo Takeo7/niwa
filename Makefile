@@ -1,12 +1,13 @@
-.PHONY: install dev test clean
+.PHONY: install dev test smoke clean
 
-# Niwa v1 dev harness. Four targets only per PR-V1-01 brief.
+# Niwa v1 dev harness.
 
 BACKEND_DIR := backend
 FRONTEND_DIR := frontend
+PYTHON ?= $(shell if [ -x "$$HOME/.niwa/venv/bin/python" ]; then echo "$$HOME/.niwa/venv/bin/python"; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3.11 >/dev/null 2>&1; then command -v python3.11; else command -v python3; fi)
 
 install:
-	cd $(BACKEND_DIR) && python3 -m pip install -e .[dev]
+	cd $(BACKEND_DIR) && $(PYTHON) -m pip install -e .[dev]
 	cd $(FRONTEND_DIR) && npm install
 
 dev:
@@ -16,10 +17,14 @@ dev:
 		kill %1 2>/dev/null || true
 
 test:
-	cd $(BACKEND_DIR) && python3 -m pytest -q
+	cd $(BACKEND_DIR) && $(PYTHON) -m pytest -q
 	cd $(FRONTEND_DIR) && npm test -- --run
+
+smoke:
+	$(PYTHON) scripts/smoke_v1_1.py
 
 clean:
 	rm -rf $(BACKEND_DIR)/.pytest_cache $(BACKEND_DIR)/**/__pycache__ \
 		$(BACKEND_DIR)/*.egg-info \
-		$(FRONTEND_DIR)/node_modules $(FRONTEND_DIR)/dist
+		$(FRONTEND_DIR)/node_modules $(FRONTEND_DIR)/dist \
+		.smoke

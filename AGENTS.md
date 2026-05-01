@@ -21,6 +21,101 @@ the briefs and the human approves them. You implement.
 
 One session = one PR.
 
+## Batch Orchestrator Mode
+
+The default mode is Implementer Mode: one session = one PR.
+
+A human may explicitly activate Batch Orchestrator Mode by saying:
+
+> RUN BATCH ORCHESTRATOR MODE
+
+When this mode is active, the agent is not acting as a single-PR
+implementer. It is acting as a temporary orchestrator/implementer for a
+larger recovery or completion plan.
+
+Batch Orchestrator Mode overrides these Implementer Mode rules:
+
+- The agent may work on more than one PR in the same session.
+- The agent may create or update briefs under `docs/plans/`.
+- The agent may create a batch plan.
+- The agent may split work into multiple workstreams.
+- The agent may use subagents, worktrees, or independent branches when
+  the tool supports them.
+- The agent may touch multiple product areas in one session when required
+  by the approved batch plan.
+- The agent may open multiple PRs, or one integration PR, depending on the
+  approved batch strategy.
+
+Batch Orchestrator Mode does NOT override these hard safety rules:
+
+- No destructive ops.
+- No `git push --force`.
+- No `--no-verify`.
+- No merging its own PRs unless the human explicitly instructs it.
+- No new dependencies outside the pre-approved dependency list without
+  asking the human.
+- Do not ignore failing tests.
+- Do not claim work is done without literal evidence.
+- Do not silently expand scope beyond the approved batch plan.
+- If a change requires secrets, production credentials, paid services, or
+  external infrastructure, stop and ask.
+
+Batch Orchestrator startup:
+
+1. Read `AGENTS.md`, `README.md`, `docs/STATE.md`,
+   `docs/HANDBOOK.md`, and the approved roadmap/closure documents if
+   present.
+2. Inspect the current repository state.
+3. Create `docs/plans/BATCH-<YYYYMMDD>-<slug>.md` describing:
+   - objective,
+   - workstreams,
+   - order of execution,
+   - expected files touched,
+   - tests/gates,
+   - risks,
+   - rollback strategy,
+   - PR strategy.
+4. Present the batch plan to the human and wait for one explicit:
+   `go ahead`.
+5. After approval, implement the batch plan.
+
+Batch implementation rules:
+
+- Prefer workstreams that can be tested independently.
+- Commit after each coherent workstream.
+- Keep commit messages imperative and in English.
+- Keep a running status log in the batch plan file.
+- Document literal test output.
+- Do not declare completion without literal evidence.
+- If using multiple PRs, each PR body must include:
+  - files changed,
+  - tests run,
+  - literal output of gates,
+  - known remaining work.
+- If using one integration PR, the PR body must include:
+  - the batch plan link,
+  - per-workstream summary,
+  - literal output of final gates,
+  - known risks and follow-up items.
+
+Required gates before final delivery:
+
+- `cd backend && pytest -q`
+- `cd frontend && npm test`
+- `make smoke`, if the batch adds or modifies smoke support
+- any additional gates declared in the batch plan
+
+Critical areas still require extra care:
+
+- `backend/app/executor/`
+- `backend/app/verification/`
+- `backend/app/finalize.py`
+- `backend/app/adapters/`
+
+In Batch Orchestrator Mode, touching critical areas is allowed only if
+the batch plan explicitly names them and the human approves the plan
+before code changes begin.
+
 ## Bootstrap (when you start)
 
 1. Read this `AGENTS.md` fully.
@@ -68,8 +163,9 @@ One session = one PR.
 
 ## Hard rules (non-negotiable)
 
-1. **One session = one PR.** Once the PR is opened, stop. Do not
-   start the next PR.
+1. **One session = one PR in Implementer Mode.** Once the PR is
+   opened, stop. Do not start the next PR. The only exception is an
+   explicitly activated Batch Orchestrator Mode.
 2. **PR ≤ 400 LOC** (project hard cap). The brief may declare a
    smaller cap. Calibrated bands from ciclo v1.1: S = 100-130 LOC,
    S+ = 130-200, M = 200-300, L = 300-400. If actual LOC will
