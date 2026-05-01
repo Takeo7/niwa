@@ -194,6 +194,7 @@ export interface Run {
   started_at: string;
   finished_at: string | null;
   exit_code: number | null;
+  pid: number | null;
   outcome: string | null;
   session_handle: string | null;
   artifact_root: string;

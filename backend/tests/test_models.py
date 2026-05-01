@@ -176,6 +176,7 @@ def test_run_status_default(session: Session) -> None:
     session.commit()
     session.refresh(run)
     assert run.status == "queued"
+    assert run.pid is None
 
 
 def test_run_event_fk(session: Session) -> None:
@@ -211,7 +212,7 @@ EXPECTED_TABLES = {
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "c6d7e8f9a0b1"
+HEAD_REVISION = "d7e8f9a0b1c2"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:

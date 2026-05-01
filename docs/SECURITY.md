@@ -1,6 +1,6 @@
 # Niwa Security Model
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## Overview
 
@@ -50,7 +50,7 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 ### T5 — Runaway process (deploy)
 **Scenario:** Process deployment starts a long-running process that doesn't stop.  
 **Impact:** Port exhaustion, resource drain.  
-**Mitigations:** `stop_process` sends SIGTERM then SIGKILL after 5s; port allocator checks OS-bound ports.  
+**Mitigations:** `stop_process` sends SIGTERM then SIGKILL after 5s; port allocator checks OS-bound ports; the ops kill switch marks active runs cancelled and sends SIGTERM to recorded run process groups when available.  
 **Gap:** No global max-process limit yet (Phase 8, QA-07).
 
 ### T6 — Public endpoint exposure

@@ -38,6 +38,7 @@ from ..models import (
     TaskPlan,
     TaskReview,
 )
+from ..security.redaction import redact
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
@@ -137,7 +138,7 @@ def run_adapter(session: Session, task: Task) -> Run:
             RunEvent(
                 run_id=run.id,
                 event_type="error",
-                payload_json=json.dumps(
+                payload_json=_event_payload(
                     {"reason": f"git_setup_failed: {str(exc)[:400]}"}
                 ),
             )
@@ -185,6 +186,7 @@ def run_adapter(session: Session, task: Task) -> Run:
     try:
         try:
             for event in adapter.iter_events():
+                _record_run_pid(session, run, adapter.pid)
                 _write_event(session, run, event)
             adapter.wait()
             adapter_outcome = adapter.outcome or "cli_ok"
@@ -197,7 +199,7 @@ def run_adapter(session: Session, task: Task) -> Run:
                 RunEvent(
                     run_id=run.id,
                     event_type="error",
-                    payload_json=json.dumps({"reason": str(exc)[:500]}),
+                    payload_json=_event_payload({"reason": str(exc)[:500]}),
                 )
             )
             session.commit()
@@ -451,11 +453,11 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
     )
     session.add(
         RunEvent(
-            run_id=run.id,
-            event_type="review",
-            payload_json=json.dumps(payload, sort_keys=True),
+                run_id=run.id,
+                event_type="review",
+                payload_json=_event_payload(payload, sort_keys=True),
+            )
         )
-    )
     session.commit()
     session.refresh(review)
     return review
@@ -518,7 +520,7 @@ def _finalize_triage_failure(
         RunEvent(
             run_id=run.id,
             event_type="error",
-            payload_json=json.dumps({"reason": reason[:500]}),
+            payload_json=_event_payload({"reason": reason[:500]}),
         )
     )
     session.add(RunEvent(run_id=run.id, event_type="failed", payload_json=None))
@@ -611,12 +613,23 @@ def _build_prompt(task: Task, attachments: list[Attachment] | None = None) -> st
     return "\n\n".join(parts) if parts else "Complete the assigned task."
 
 
+def _event_payload(payload: object, *, sort_keys: bool = False) -> str:
+    return redact(json.dumps(payload, sort_keys=sort_keys))
+
+
+def _record_run_pid(session: Session, run: Run, pid: int | None) -> None:
+    if pid is None or run.pid == pid:
+        return
+    run.pid = pid
+    session.commit()
+
+
 def _write_event(session: Session, run: Run, event: AdapterEvent) -> None:
     session.add(
         RunEvent(
             run_id=run.id,
             event_type=event.kind,
-            payload_json=json.dumps(event.payload),
+            payload_json=_event_payload(event.payload),
         )
     )
     session.commit()

@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from app.adapters import AdapterEvent
+from app.executor.core import _write_event
+from app.models import Project, Run, RunEvent, Task
 from app.security.redaction import redact
 from app.services.audit import list_events, log_event
 
@@ -57,6 +62,41 @@ def test_redact_preserves_key_name_in_key_value() -> None:
     result = redact(text)
     assert "[REDACTED]" in result
     assert "token" in result.lower()
+
+
+def test_run_event_payloads_are_redacted_before_persisting(client) -> None:
+    from app.api.deps import get_session
+
+    db = next(client.app.dependency_overrides[get_session]())
+    project = Project(
+        slug="demo",
+        name="Demo",
+        kind="library",
+        local_path="/tmp/demo",
+    )
+    db.add(project)
+    db.commit()
+    task = Task(project_id=project.id, title="t", description="")
+    db.add(task)
+    db.commit()
+    run = Run(task_id=task.id, status="running", model="claude-code", artifact_root="/tmp/demo")
+    db.add(run)
+    db.commit()
+
+    _write_event(
+        db,
+        run,
+        AdapterEvent(
+            kind="assistant",
+            payload={"text": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz12345"},
+            raw_line="{}",
+        ),
+    )
+
+    event = db.query(RunEvent).filter(RunEvent.run_id == run.id).one()
+    payload = json.loads(event.payload_json or "{}")
+    assert "abcdefghijklmnopqrstuvwxyz" not in payload["text"]
+    assert "[REDACTED]" in payload["text"]
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────────

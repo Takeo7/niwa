@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import signal
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth.deps import require_auth
-from ..models import Task
+from ..models import Run, RunEvent, Task
 from ..services.audit import log_event
 from .deps import get_session
 
@@ -19,6 +23,32 @@ class KillSwitchResult(BaseModel):
     waiting_tasks_cancelled: int
     queued_tasks_cancelled: int
     running_tasks_marked: int
+    running_processes_signalled: int
+
+
+RUNNING_TASK_STATUSES = (
+    "triaging",
+    "planning",
+    "waiting_approval",
+    "executing",
+    "verifying",
+    "reviewing",
+    "running",
+)
+
+
+def _signal_process(pid: int) -> bool:
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except ProcessLookupError:
+            return False
 
 
 @router.post(
@@ -34,7 +64,24 @@ def kill_switch(request: Request, db: Session = Depends(get_session)) -> KillSwi
     """
     queued = db.query(Task).filter(Task.status == "queued").all()
     waiting = db.query(Task).filter(Task.status == "waiting_input").all()
-    running = db.query(Task).filter(Task.status == "running").all()
+    running = db.query(Task).filter(Task.status.in_(RUNNING_TASK_STATUSES)).all()
+    running_ids = [t.id for t in running]
+    active_runs = (
+        db.query(Run)
+        .filter(Run.task_id.in_(running_ids), Run.status == "running")
+        .all()
+        if running_ids
+        else []
+    )
+    signalled = 0
+    now = datetime.now(timezone.utc)
+    for run in active_runs:
+        if run.pid is not None and _signal_process(run.pid):
+            signalled += 1
+        run.status = "cancelled"
+        run.finished_at = now
+        run.outcome = "kill_switch"
+        db.add(RunEvent(run_id=run.id, event_type="cancelled", payload_json=None))
 
     for t in queued + waiting + running:
         t.status = "cancelled"
@@ -51,6 +98,7 @@ def kill_switch(request: Request, db: Session = Depends(get_session)) -> KillSwi
             "queued": len(queued),
             "waiting_input": len(waiting),
             "running": len(running),
+            "running_processes_signalled": signalled,
         },
     )
 
@@ -59,4 +107,5 @@ def kill_switch(request: Request, db: Session = Depends(get_session)) -> KillSwi
         queued_tasks_cancelled=len(queued),
         waiting_tasks_cancelled=len(waiting),
         running_tasks_marked=len(running),
+        running_processes_signalled=signalled,
     )
