@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from ..auth.deps import require_scope
 from ..models import Project, Run, Task
 from .deps import get_session
 
@@ -24,7 +25,11 @@ class MetricsResponse(BaseModel):
     active_runs: int
 
 
-@router.get("", response_model=MetricsResponse)
+@router.get(
+    "",
+    response_model=MetricsResponse,
+    dependencies=[Depends(require_scope("read"))],
+)
 def get_metrics(db: Session = Depends(get_session)) -> MetricsResponse:
     total_projects = db.scalar(select(func.count(Project.id))) or 0
     total_tasks = db.scalar(select(func.count(Task.id))) or 0

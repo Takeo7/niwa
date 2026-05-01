@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from ..auth.deps import require_scope
 from ..deployments.health import check_health
 from ..deployments.service import rollback_to, stop_deployment, trigger_deploy
 from ..models import Deployment, Project
@@ -40,7 +41,11 @@ class DeploymentRead(BaseModel):
     created_at: datetime
 
 
-@router.get("/projects/{slug}/deployments", response_model=list[DeploymentRead])
+@router.get(
+    "/projects/{slug}/deployments",
+    response_model=list[DeploymentRead],
+    dependencies=[Depends(require_scope("read"))],
+)
 def list_deployments(
     slug: str,
     session: Session = Depends(get_session),
@@ -58,7 +63,11 @@ def list_deployments(
     return [DeploymentRead.model_validate(r) for r in rows]
 
 
-@router.get("/deployments/{deployment_id}", response_model=DeploymentRead)
+@router.get(
+    "/deployments/{deployment_id}",
+    response_model=DeploymentRead,
+    dependencies=[Depends(require_scope("read"))],
+)
 def get_deployment(
     deployment_id: int,
     session: Session = Depends(get_session),
@@ -73,6 +82,7 @@ def get_deployment(
     "/projects/{slug}/deployments",
     response_model=DeploymentRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("deploy"))],
 )
 def create_deployment(
     slug: str,
@@ -86,7 +96,11 @@ def create_deployment(
     return DeploymentRead.model_validate(deployment)
 
 
-@router.post("/deployments/{deployment_id}/stop", response_model=DeploymentRead)
+@router.post(
+    "/deployments/{deployment_id}/stop",
+    response_model=DeploymentRead,
+    dependencies=[Depends(require_scope("deploy"))],
+)
 def stop_deploy(
     deployment_id: int,
     session: Session = Depends(get_session),
@@ -102,7 +116,11 @@ def stop_deploy(
     return DeploymentRead.model_validate(d)
 
 
-@router.post("/deployments/{deployment_id}/rollback", response_model=DeploymentRead)
+@router.post(
+    "/deployments/{deployment_id}/rollback",
+    response_model=DeploymentRead,
+    dependencies=[Depends(require_scope("deploy"))],
+)
 def do_rollback(
     deployment_id: int,
     session: Session = Depends(get_session),
@@ -123,7 +141,9 @@ def do_rollback(
 
 
 @router.post(
-    "/deployments/{deployment_id}/healthcheck", response_model=DeploymentRead
+    "/deployments/{deployment_id}/healthcheck",
+    response_model=DeploymentRead,
+    dependencies=[Depends(require_scope("deploy"))],
 )
 def run_healthcheck(
     deployment_id: int,

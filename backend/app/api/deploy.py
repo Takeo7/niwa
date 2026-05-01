@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..auth.deps import require_scope
 from ..deployments.service import get_active_deployment
 from ..models import Project
 from .deps import get_session
@@ -87,6 +88,7 @@ def _serve(slug: str, path: str, session: Session) -> FileResponse:
 @router.get("/{slug}/")
 def serve_deploy_root(
     slug: str,
+    _auth=Depends(require_scope("read")),
     session: Session = Depends(get_session),
 ) -> FileResponse:
     """SPA entry point: ``/api/deploy/{slug}/`` → ``dist/index.html``."""
@@ -98,6 +100,7 @@ def serve_deploy_root(
 def serve_deploy(
     slug: str,
     path: str,
+    _auth=Depends(require_scope("read")),
     session: Session = Depends(get_session),
 ) -> FileResponse:
     """Serve any file under ``<local_path>/dist/`` for a web-deployable project."""

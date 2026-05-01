@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from ..auth.deps import require_scope
 from ..services import run_events as svc
 from .deps import get_session
 
@@ -107,7 +108,10 @@ async def _event_stream(
             heartbeat_counter = 0
 
 
-@runs_router.get("/{run_id}/events")
+@runs_router.get(
+    "/{run_id}/events",
+    dependencies=[Depends(require_scope("read"))],
+)
 async def stream_run_events(
     run_id: int,
     request: Request,

@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
+from ..auth.deps import require_scope
 from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespondPayload
 from ..services import attachments as attachments_service
 from ..services import runs as runs_service
@@ -32,7 +33,11 @@ project_tasks_router = APIRouter(
 tasks_router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@project_tasks_router.get("", response_model=list[TaskRead])
+@project_tasks_router.get(
+    "",
+    response_model=list[TaskRead],
+    dependencies=[Depends(require_scope("read"))],
+)
 def list_tasks(
     slug: str,
     session: Session = Depends(get_session),
@@ -51,6 +56,7 @@ def list_tasks(
     "",
     response_model=TaskRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("task:create"))],
 )
 def create_task(
     slug: str,
@@ -67,7 +73,11 @@ def create_task(
     return TaskRead.model_validate(task)
 
 
-@tasks_router.get("/{task_id}", response_model=TaskRead)
+@tasks_router.get(
+    "/{task_id}",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("read"))],
+)
 def get_task(
     task_id: int,
     session: Session = Depends(get_session),
@@ -82,7 +92,11 @@ def get_task(
     return TaskRead.model_validate(task)
 
 
-@tasks_router.get("/{task_id}/runs", response_model=list[RunRead])
+@tasks_router.get(
+    "/{task_id}/runs",
+    response_model=list[RunRead],
+    dependencies=[Depends(require_scope("read"))],
+)
 def list_runs_for_task(
     task_id: int,
     session: Session = Depends(get_session),
@@ -103,7 +117,11 @@ def list_runs_for_task(
     return [RunRead.model_validate(row) for row in rows]
 
 
-@tasks_router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@tasks_router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scope("task:write"))],
+)
 def delete_task(
     task_id: int,
     session: Session = Depends(get_session),
@@ -123,7 +141,11 @@ def delete_task(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@tasks_router.post("/{task_id}/respond", response_model=TaskRead)
+@tasks_router.post(
+    "/{task_id}/respond",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("task:write"))],
+)
 def respond_to_task(
     task_id: int,
     payload: TaskRespondPayload,
@@ -153,7 +175,11 @@ def respond_to_task(
     return TaskRead.model_validate(task)
 
 
-@tasks_router.post("/{task_id}/cancel", response_model=TaskRead)
+@tasks_router.post(
+    "/{task_id}/cancel",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("task:write"))],
+)
 def cancel_task(
     task_id: int,
     session: Session = Depends(get_session),
@@ -168,7 +194,11 @@ def cancel_task(
     return TaskRead.model_validate(task)
 
 
-@tasks_router.post("/{task_id}/retry", response_model=TaskRead)
+@tasks_router.post(
+    "/{task_id}/retry",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("task:write"))],
+)
 def retry_task(
     task_id: int,
     session: Session = Depends(get_session),
@@ -189,6 +219,7 @@ def retry_task(
 @tasks_router.get(
     "/{task_id}/attachments",
     response_model=list[AttachmentRead],
+    dependencies=[Depends(require_scope("read"))],
 )
 def list_attachments(
     task_id: int,
@@ -208,6 +239,7 @@ def list_attachments(
     "/{task_id}/attachments",
     response_model=AttachmentRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("task:write"))],
 )
 def create_attachment(
     task_id: int,
@@ -243,6 +275,7 @@ def create_attachment(
 @tasks_router.delete(
     "/{task_id}/attachments/{attachment_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scope("task:write"))],
 )
 def delete_attachment(
     task_id: int,

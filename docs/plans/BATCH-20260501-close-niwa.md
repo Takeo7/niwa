@@ -26,6 +26,11 @@ until the human gives one explicit `go ahead` for this batch plan.
   `scripts/smoke_v1_1.py`, `scripts/fake_gh_cli.py`, `.smoke/` ignore,
   CI Node 22/smoke step, and removed tracked `.smoke/` artifacts from git.
   Local `make smoke` passed with fake Claude/fake gh in an isolated sandbox.
+- 2026-05-01: WS-02 implemented locally on stacked branch
+  `codex/auth-global-scopes`: protected projects, tasks, runs, deployments,
+  metrics, pulls, and static deploy serving with scopes; fixed AdminPanel to
+  verify `/auth/me` before rendering admin content when auth is enabled; added
+  backend scope tests and an AdminPanel auth-gate test.
 
 ## Current repo state
 
