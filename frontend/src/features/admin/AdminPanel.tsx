@@ -21,6 +21,7 @@ import {
   Metrics,
   createTokenApi,
   getAuthStatus,
+  getMe,
   getMetrics,
   killSwitch,
   listAuditEvents,
@@ -34,12 +35,37 @@ const ALL_SCOPES = ["read", "task:create", "task:write", "merge", "deploy", "adm
 
 export function AdminPanel() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
-  const [authed, setAuthed] = useState<boolean>(true);
+  const [authed, setAuthed] = useState<boolean>(false);
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
-    getAuthStatus().then(setAuthStatus).catch(() => setAuthStatus({ enabled: false }));
+    let active = true;
+    async function loadAuth() {
+      try {
+        const status = await getAuthStatus();
+        if (!active) return;
+        setAuthStatus(status);
+        if (!status.enabled) {
+          setAuthed(true);
+          return;
+        }
+        try {
+          await getMe();
+          if (active) setAuthed(true);
+        } catch {
+          if (active) setAuthed(false);
+        }
+      } catch {
+        if (!active) return;
+        setAuthStatus({ enabled: false });
+        setAuthed(true);
+      }
+    }
+    loadAuth();
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (authStatus === null) return <div>Loading…</div>;

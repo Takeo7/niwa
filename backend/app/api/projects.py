@@ -24,6 +24,7 @@ from ..schemas import (
     PullMergeResponse,
     PullsResponse,
 )
+from ..auth.deps import require_scope
 from ..services import github_pulls
 from ..services import projects as service
 from .deps import get_session
@@ -32,7 +33,11 @@ from .deps import get_session
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.get("", response_model=list[ProjectRead])
+@router.get(
+    "",
+    response_model=list[ProjectRead],
+    dependencies=[Depends(require_scope("read"))],
+)
 def list_projects(session: Session = Depends(get_session)) -> list[ProjectRead]:
     rows = service.list_projects(session)
     return [ProjectRead.model_validate(row) for row in rows]
@@ -42,6 +47,7 @@ def list_projects(session: Session = Depends(get_session)) -> list[ProjectRead]:
     "",
     response_model=ProjectRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("admin"))],
 )
 def create_project(
     payload: ProjectCreate,
@@ -57,7 +63,11 @@ def create_project(
     return ProjectRead.model_validate(project)
 
 
-@router.get("/{slug}", response_model=ProjectRead)
+@router.get(
+    "/{slug}",
+    response_model=ProjectRead,
+    dependencies=[Depends(require_scope("read"))],
+)
 def get_project(
     slug: str,
     session: Session = Depends(get_session),
@@ -72,7 +82,11 @@ def get_project(
     return ProjectRead.model_validate(project)
 
 
-@router.patch("/{slug}", response_model=ProjectRead)
+@router.patch(
+    "/{slug}",
+    response_model=ProjectRead,
+    dependencies=[Depends(require_scope("admin"))],
+)
 def patch_project(
     slug: str,
     payload: ProjectPatch,
@@ -88,7 +102,11 @@ def patch_project(
     return ProjectRead.model_validate(project)
 
 
-@router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{slug}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scope("admin"))],
+)
 def delete_project(
     slug: str,
     session: Session = Depends(get_session),
@@ -106,7 +124,11 @@ def delete_project(
 _ALLOWED_PULL_STATES = {"open", "closed", "all"}
 
 
-@router.get("/{slug}/pulls", response_model=PullsResponse)
+@router.get(
+    "/{slug}/pulls",
+    response_model=PullsResponse,
+    dependencies=[Depends(require_scope("read"))],
+)
 def list_project_pulls(
     slug: str,
     state: str = "open",
@@ -164,7 +186,9 @@ def list_project_pulls(
 
 
 @router.post(
-    "/{slug}/pulls/{number}/merge", response_model=PullMergeResponse,
+    "/{slug}/pulls/{number}/merge",
+    response_model=PullMergeResponse,
+    dependencies=[Depends(require_scope("merge"))],
 )
 def merge_project_pull(
     slug: str,
