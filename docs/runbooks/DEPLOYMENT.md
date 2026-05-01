@@ -1,13 +1,13 @@
 # Niwa Deployment Runbook
 
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 This runbook covers production deployment of Niwa, including TLS, public exposure, and tunnel modes (NET-06/07/08).
 
 ## Prerequisites
 
 - Linux host with `systemd --user` (or macOS with `launchctl`)
-- Python 3.11+, Node.js 20+
+- Python 3.12, Node.js 22
 - `gh` CLI installed and authenticated
 - A domain you control (for VPS mode) **or** Cloudflare/Tailscale account (for tunnel mode)
 - Caddy 2.x installed
@@ -45,24 +45,9 @@ This creates `~/.niwa/auth/password.hash` and enables auth on all routes.
 
 ### 3. Generate Caddyfile
 
-The backend renders Caddyfile via `app.network.caddy.render_caddyfile()`. To write it to disk:
-
-```python
-from app.network.caddy import render_caddyfile, write_caddyfile, ProjectRoute
-from app.config import load_settings
-
-s = load_settings()
-content = render_caddyfile(
-    ui_domain=s.ui_domain,
-    apps_domain=s.apps_domain,
-    backend_port=8000,
-    routes=[
-        ProjectRoute(slug="my-app", deploy_type="static", public_enabled=True),
-        ProjectRoute(slug="api", deploy_type="process", port=41001, public_enabled=True),
-    ],
-    tls_email="admin@example.com",
-)
-write_caddyfile(content)
+```bash
+niwa-executor proxy render --tls-email admin@example.com
+niwa-executor proxy validate --tls-email admin@example.com
 ```
 
 Caddy file lands at `~/.niwa/caddy/Caddyfile`. Caddy must be configured to read from there.

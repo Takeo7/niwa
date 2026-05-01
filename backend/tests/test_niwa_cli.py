@@ -14,6 +14,7 @@ import importlib
 import os
 import signal
 import subprocess
+import tarfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -360,3 +361,56 @@ def test_proxy_validate_requires_caddy_binary(tmp_path, monkeypatch, capsys):
         ]
     ) == 127
     assert "caddy binary not found" in capsys.readouterr().err
+
+
+# ---- Batch WS-10: doctor + backup/restore ----
+
+
+def test_doctor_warns_on_insecure_niwa_home_permissions(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    tmp_path.chmod(0o755)
+    cli = _load_cli(monkeypatch, tmp_path)
+
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "WARN insecure NIWA_HOME permissions" in out
+
+    assert cli.main(["doctor", "--strict"]) == 1
+
+
+def test_backup_and_restore_db_with_redacted_config(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    db_path = tmp_path / "niwa.sqlite3"
+    db_path.write_bytes(b"sqlite-bytes")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+[db]
+path = "{db_path}"
+
+[auth]
+token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(config))
+    backup = tmp_path / "backup.tar.gz"
+
+    assert cli.main(["backup", "--output", str(backup)]) == 0
+    assert f"backup written {backup}" in capsys.readouterr().out
+
+    with tarfile.open(backup, "r:gz") as archive:
+        names = archive.getnames()
+        assert "niwa.sqlite3" in names
+        redacted = archive.extractfile("config.redacted.toml")
+        assert redacted is not None
+        content = redacted.read().decode("utf-8")
+        assert "ghp_" not in content
+        assert "[REDACTED]" in content
+
+    restored = tmp_path / "restored.sqlite3"
+    assert cli.main(["restore", str(backup), "--db-path", str(restored), "--yes"]) == 0
+    assert restored.read_bytes() == b"sqlite-bytes"

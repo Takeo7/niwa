@@ -72,6 +72,14 @@ until the human gives one explicit `go ahead` for this batch plan.
   `cd frontend && npm test`, and `make smoke`.
 - 2026-05-01: WS-08 postcommit gate exposed an SSE terminal-drain regression;
   fixed the stream loop to drain new events before checking terminal state.
+- 2026-05-01: WS-09/10 implemented locally on stacked branch
+  `codex/qa-docs-operability`: added `niwa-executor doctor`, deterministic
+  backup/restore commands, tests, and runbook updates for operations/deploy.
+- 2026-05-01: WS-09/10 full backend gate exposed a remaining terminal SSE race;
+  added a bounded quiet-window drain before `eos`.
+- 2026-05-01: WS-09/10 final gates passed locally: `cd backend && pytest -q`
+  with `PATH="$HOME/.niwa/venv/bin:$PATH"`, `cd frontend && npm test -- --run`,
+  and `make smoke`. Literal output is recorded in the WS-09/10 PR body.
 
 ## Current repo state
 
