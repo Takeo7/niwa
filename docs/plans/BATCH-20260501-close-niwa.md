@@ -50,6 +50,12 @@ until the human gives one explicit `go ahead` for this batch plan.
   added `niwa-executor proxy render|validate`.
 - 2026-05-01: WS-05 precommit gates passed: `cd backend && pytest -q`,
   `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-06 implemented locally on stacked branch
+  `codex/mcp-openclaw-tools`: added MCP `task_attach`, `deploy_trigger`, and
+  `deployment_status`, normalized JSON-RPC error codes, redacted attachment
+  content from MCP audit payloads, and updated the OpenClaw integration guide.
+- 2026-05-01: WS-06 precommit gates passed: `cd backend && pytest -q`,
+  `cd frontend && npm test`, and `make smoke`.
 
 ## Current repo state
 

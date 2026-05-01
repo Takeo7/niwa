@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 import pytest
+
+from app.api.deps import get_session
+from app.models import AuditEvent
 
 
 PROJECT_PAYLOAD = {
@@ -24,6 +27,20 @@ def _call(client, method: str, params: dict = {}, *, token: str | None = None) -
         json={**_RPC, "method": method, "params": params},
         headers=headers,
     ).json()
+
+
+def _web_project_payload(tmp_path: Path, slug: str = "demo") -> dict:
+    root = tmp_path / slug
+    (root / "dist").mkdir(parents=True)
+    (root / "dist" / "index.html").write_text("ok\n", encoding="utf-8")
+    return {
+        **PROJECT_PAYLOAD,
+        "slug": slug,
+        "name": slug.title(),
+        "local_path": str(root),
+        "deploy_type": "static",
+        "dist_dir": "dist",
+    }
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -87,7 +104,10 @@ def test_tools_list(client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "ping" in names
     assert "project_list" in names
     assert "task_create" in names
+    assert "task_attach" in names
     assert "task_respond" in names
+    assert "deploy_trigger" in names
+    assert "deployment_status" in names
 
 
 # ── project tools ─────────────────────────────────────────────────────────────
@@ -132,6 +152,42 @@ def test_task_create_and_status(client, monkeypatch: pytest.MonkeyPatch) -> None
     assert status_resp["result"]["status"] in ("queued", "inbox")
 
 
+def test_task_attach_uses_attachment_service_and_redacts_audit_payload(
+    client,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    client.post("/api/projects", json=_web_project_payload(tmp_path))
+    task = _call(
+        client,
+        "task_create",
+        {"project_slug": "demo", "title": "Attach spec"},
+        token="tok",
+    )["result"]
+
+    resp = _call(
+        client,
+        "task_attach",
+        {
+            "task_id": task["id"],
+            "filename": "spec.md",
+            "content": "secret-body",
+            "content_type": "text/markdown",
+        },
+        token="tok",
+    )
+
+    assert resp["result"]["filename"] == "spec.md"
+    expected = tmp_path / "demo" / ".niwa" / "attachments" / f"task-{task['id']}" / "spec.md"
+    assert expected.read_text(encoding="utf-8") == "secret-body"
+
+    db = next(client.app.dependency_overrides[get_session]())
+    event = db.query(AuditEvent).filter(AuditEvent.action == "mcp.task_attach").one()
+    assert "secret-body" not in (event.payload_json or "")
+    assert "REDACTED_ATTACHMENT_CONTENT" in (event.payload_json or "")
+
+
 def test_task_list_for_project(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     client.post("/api/projects", json=PROJECT_PAYLOAD)
@@ -174,6 +230,56 @@ def test_pull_list_includes_in_tools_list(client, monkeypatch: pytest.MonkeyPatc
     assert "pull_merge" in names
 
 
+def test_deploy_trigger_and_status_tools(
+    client,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    client.post("/api/projects", json=_web_project_payload(tmp_path))
+
+    deployed = _call(
+        client,
+        "deploy_trigger",
+        {"project_slug": "demo"},
+        token="tok",
+    )["result"]
+
+    assert deployed["status"] == "healthy"
+    by_id = _call(
+        client,
+        "deployment_status",
+        {"deployment_id": deployed["id"]},
+        token="tok",
+    )
+    assert by_id["result"]["id"] == deployed["id"]
+    by_project = _call(
+        client,
+        "deployment_status",
+        {"project_slug": "demo"},
+        token="tok",
+    )
+    assert by_project["result"]["id"] == deployed["id"]
+
+
+def test_deploy_trigger_requires_deploy_scope(
+    client,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NIWA_MCP_TOKEN", raising=False)
+    from app.auth.token_store import create_token
+
+    db = next(client.app.dependency_overrides[get_session]())
+    raw, _ = create_token(db, "readonly", ["read"])
+    client.post("/api/projects", json=_web_project_payload(tmp_path))
+
+    resp = _call(client, "deploy_trigger", {"project_slug": "demo"}, token=raw)
+    assert "error" in resp
+    assert resp["error"]["code"] == -32003
+    assert "deploy" in resp["error"]["message"]
+
+
 def test_pull_list_requires_git_remote(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     client.post("/api/projects", json=PROJECT_PAYLOAD)  # no git_remote
@@ -206,6 +312,7 @@ def test_unknown_method_returns_error(client, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "nonexistent_method", token="tok")
     assert "error" in resp
+    assert resp["error"]["code"] == -32601
 
 
 def test_missing_required_param_returns_error(client, monkeypatch: pytest.MonkeyPatch) -> None:

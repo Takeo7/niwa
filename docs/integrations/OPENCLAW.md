@@ -39,10 +39,11 @@ All tools (except `ping`) require a Bearer token.
 | `task:create` | task_create, task_attach |
 | `task:write` | task_respond, task_cancel, task_retry |
 | `merge` | (future) pull_merge |
-| `deploy` | (future) deploy_trigger |
+| `deploy` | deploy_trigger |
 | `admin` | All scopes |
 
-Recommended scopes for OpenClaw: `read task:create task:write`
+Recommended scopes for OpenClaw task management: `read task:create task:write`.
+Add `deploy` only for clients that should be allowed to publish a project.
 
 ## MCP Configuration
 
@@ -104,6 +105,25 @@ For a remote Niwa instance, replace `localhost:8000` with your domain (e.g. `htt
 
 Returns: `{id, title, status, branch_name, pr_url, pending_question, ...}`
 
+**`task_attach`** — Attach text or base64 content to a queued task. Scope:
+`task:create`.
+```json
+{
+  "method": "task_attach",
+  "params": {
+    "task_id": 42,
+    "filename": "spec.md",
+    "content_type": "text/markdown",
+    "encoding": "text",
+    "content": "# Requirements\n..."
+  }
+}
+```
+
+For binary content, set `"encoding": "base64"`. Niwa stores attachments
+through its attachment service; MCP clients never receive direct filesystem
+write access.
+
 **`task_respond`** — Unblock a waiting_input task. Scope: `task:write`.
 ```json
 {
@@ -123,6 +143,22 @@ Returns: `{id, title, status, branch_name, pr_url, pending_question, ...}`
 **`task_retry`** — Re-queue a failed/cancelled task. Scope: `task:write`.
 ```json
 {"method": "task_retry", "params": {"task_id": 42}}
+```
+
+### Deployment Tools
+
+**`deploy_trigger`** — Trigger a deployment for a project. Scope: `deploy`.
+```json
+{"method": "deploy_trigger", "params": {"project_slug": "my-project"}}
+```
+
+**`deployment_status`** — Fetch a deployment by id, or the latest deployment
+for a project. Scope: `read`.
+```json
+{"method": "deployment_status", "params": {"deployment_id": 12}}
+```
+```json
+{"method": "deployment_status", "params": {"project_slug": "my-project"}}
 ```
 
 ## Recommended Workflow
@@ -157,4 +193,15 @@ Returns: `{id, title, status, branch_name, pr_url, pending_question, ...}`
 
 **`-32001` JSON-RPC error**: Auth failure (same as 401 in HTTP terms).
 
-**`-32603` Internal error**: Check Niwa server logs.
+**`-32601` JSON-RPC error**: Unknown method.
+
+**`-32602` JSON-RPC error**: Invalid or missing parameters.
+
+**`-32003` JSON-RPC error**: Scope/authz failure.
+
+**`-32004` JSON-RPC error**: Project, task, or deployment not found.
+
+**`-32009` JSON-RPC error**: State conflict, for example responding to a task
+that is not waiting for input.
+
+**`-32000` JSON-RPC error**: Internal error. Check Niwa server logs.
