@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -348,6 +349,78 @@ def cmd_set_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _proxy_settings(args: argparse.Namespace):
+    from app.config import load_settings
+
+    settings = load_settings()
+    ui_domain = args.ui_domain or settings.ui_domain
+    apps_domain = args.apps_domain or settings.apps_domain
+    backend_port = args.backend_port or settings.bind_port
+    if not ui_domain or not apps_domain:
+        sys.stderr.write(
+            "proxy config requires ui_domain and apps_domain; set "
+            "[network] base_domain or pass --ui-domain/--apps-domain\n"
+        )
+        return None
+    return settings, ui_domain, apps_domain, backend_port
+
+
+def _render_proxy(args: argparse.Namespace) -> tuple[int, Path | None]:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.network.caddy import (
+        render_caddyfile,
+        routes_from_session,
+        write_caddyfile,
+    )
+
+    resolved = _proxy_settings(args)
+    if resolved is None:
+        return 1, None
+    settings, ui_domain, apps_domain, backend_port = resolved
+    if settings.db_path.exists():
+        engine = create_engine(f"sqlite:///{settings.db_path}", future=True)
+        SessionLocal = sessionmaker(bind=engine, future=True)
+        with SessionLocal() as session:
+            routes = routes_from_session(session)
+        engine.dispose()
+    else:
+        routes = []
+    content = render_caddyfile(
+        ui_domain=ui_domain,
+        apps_domain=apps_domain,
+        backend_port=backend_port,
+        routes=routes,
+        tls_email=args.tls_email,
+        local_tls=args.local_tls,
+    )
+    target = write_caddyfile(content, Path(args.output) if args.output else None)
+    if getattr(args, "print", False):
+        sys.stdout.write(content)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
+    else:
+        sys.stdout.write(f"wrote {target}\n")
+    return 0, target
+
+
+def cmd_proxy_render(args: argparse.Namespace) -> int:
+    rc, _target = _render_proxy(args)
+    return rc
+
+
+def cmd_proxy_validate(args: argparse.Namespace) -> int:
+    caddy = shutil.which("caddy")
+    if caddy is None:
+        sys.stderr.write("caddy binary not found; install Caddy to validate\n")
+        return 127
+    rc, target = _render_proxy(args)
+    if rc != 0 or target is None:
+        return rc
+    return _run([caddy, "validate", "--config", str(target)])
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="niwa-executor",
@@ -383,6 +456,17 @@ def _build_parser() -> argparse.ArgumentParser:
     cleanup_p.add_argument("--dry-run", action="store_true")
     setpw = sub.add_parser("set-password", help="set or change the admin password")
     setpw.add_argument("--password", default=None, help="non-interactive use only")
+    proxy = sub.add_parser("proxy", help="render or validate the Caddy proxy config")
+    proxy_s = proxy.add_subparsers(dest="proxy_cmd", required=True)
+    for name in ("render", "validate"):
+        p = proxy_s.add_parser(name)
+        p.add_argument("--ui-domain", default=None)
+        p.add_argument("--apps-domain", default=None)
+        p.add_argument("--backend-port", type=int, default=None)
+        p.add_argument("--tls-email", default=None)
+        p.add_argument("--local-tls", action="store_true")
+        p.add_argument("--output", default=None)
+        p.add_argument("--print", action="store_true")
     return parser
 
 
@@ -409,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.subcommand == "dev":
         return _DEV_DISPATCH[args.dev_cmd](args)
+    if args.subcommand == "proxy":
+        if args.proxy_cmd == "render":
+            return cmd_proxy_render(args)
+        if args.proxy_cmd == "validate":
+            return cmd_proxy_validate(args)
     handler = _DISPATCH[args.subcommand]
     return handler(args)
 

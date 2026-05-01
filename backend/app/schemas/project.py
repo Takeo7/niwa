@@ -47,6 +47,7 @@ class ProjectCreate(BaseModel):
     start_command: str | None = None
     healthcheck_path: str | None = None
     deploy_trigger: DeployTrigger = "manual"
+    public_enabled: bool = False
 
 
 class ProjectPatch(BaseModel):
@@ -66,6 +67,7 @@ class ProjectPatch(BaseModel):
     start_command: str | None = None
     healthcheck_path: str | None = None
     deploy_trigger: DeployTrigger | None = None
+    public_enabled: bool | None = None
 
 
 class ProjectRead(BaseModel):
@@ -87,5 +89,6 @@ class ProjectRead(BaseModel):
     start_command: str | None
     healthcheck_path: str | None
     deploy_trigger: str
+    public_enabled: bool
     created_at: datetime
     updated_at: datetime

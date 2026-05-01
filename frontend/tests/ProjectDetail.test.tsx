@@ -35,6 +35,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     deploy_port: null,
     autonomy_mode: "safe",
     deploy_trigger: "manual",
+    public_enabled: false,
     created_at: "2026-04-20T00:00:00Z",
     updated_at: "2026-04-20T00:00:00Z",
     ...overrides,

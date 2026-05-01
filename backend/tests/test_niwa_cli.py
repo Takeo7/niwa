@@ -314,3 +314,49 @@ def test_dev_status_reports_alive_or_dead(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "uvicorn: alive" in out and "111" in out
     assert "vite:" in out and "dead" in out
+
+
+# ---- Batch WS-05: proxy render/validate ----
+
+
+def test_proxy_render_writes_caddyfile(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    config = tmp_path / "config.toml"
+    db_path = tmp_path / "missing.sqlite3"
+    config.write_text(
+        f"""
+[db]
+path = "{db_path}"
+
+[network]
+ui_domain = "niwa.example.com"
+apps_domain = "apps.example.com"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(config))
+    output = tmp_path / "Caddyfile"
+
+    assert cli.main(["proxy", "render", "--output", str(output)]) == 0
+
+    rendered = output.read_text(encoding="utf-8")
+    assert "niwa.example.com" in rendered
+    assert "reverse_proxy localhost:8000" in rendered
+    assert f"wrote {output}" in capsys.readouterr().out
+
+
+def test_proxy_validate_requires_caddy_binary(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    assert cli.main(
+        [
+            "proxy",
+            "validate",
+            "--ui-domain",
+            "niwa.example.com",
+            "--apps-domain",
+            "apps.example.com",
+        ]
+    ) == 127
+    assert "caddy binary not found" in capsys.readouterr().err

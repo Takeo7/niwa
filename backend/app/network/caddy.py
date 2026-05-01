@@ -19,13 +19,53 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from sqlalchemy.orm import Session
+
+from ..deployments.service import get_active_deployment
+from ..models import Project
+
 
 @dataclass
 class ProjectRoute:
     slug: str
     deploy_type: Literal["static", "process"]
     port: int | None = None
-    public_enabled: bool = True
+    public_enabled: bool = False
+
+
+def routes_from_session(session: Session) -> list[ProjectRoute]:
+    """Build Caddy routes for projects explicitly marked public."""
+
+    projects = (
+        session.query(Project)
+        .filter(
+            Project.kind == "web-deployable",
+            Project.public_enabled.is_(True),
+        )
+        .order_by(Project.slug.asc())
+        .all()
+    )
+    routes: list[ProjectRoute] = []
+    for project in projects:
+        active = get_active_deployment(session, project.id)
+        if active and active.deploy_type == "process":
+            routes.append(
+                ProjectRoute(
+                    slug=project.slug,
+                    deploy_type="process",
+                    port=active.port,
+                    public_enabled=True,
+                )
+            )
+        else:
+            routes.append(
+                ProjectRoute(
+                    slug=project.slug,
+                    deploy_type="static",
+                    public_enabled=True,
+                )
+            )
+    return routes
 
 
 def render_caddyfile(
@@ -72,7 +112,8 @@ def render_caddyfile(
         if tls_block:
             lines.append(tls_block.rstrip())
         if r.deploy_type == "static":
-            lines.append(f"\treverse_proxy localhost:{backend_port}/api/deploy/{r.slug}/")
+            lines.append(f"\trewrite * /api/deploy/{r.slug}{{uri}}")
+            lines.append(f"\treverse_proxy localhost:{backend_port}")
         else:
             if r.port:
                 lines.append(f"\treverse_proxy localhost:{r.port}")

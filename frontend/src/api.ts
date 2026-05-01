@@ -61,6 +61,7 @@ export interface Project {
   deploy_port: number | null;
   autonomy_mode: AutonomyMode;
   deploy_trigger: DeployTrigger;
+  public_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -74,6 +75,7 @@ export interface ProjectCreatePayload {
   deploy_port?: number | null;
   autonomy_mode?: AutonomyMode;
   deploy_trigger?: DeployTrigger;
+  public_enabled?: boolean;
 }
 
 // ---- Tasks wire types (mirror backend app/schemas/task.py) --------------

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -56,6 +56,9 @@ class Project(Base):
     healthcheck_path: Mapped[str | None] = mapped_column(String, nullable=True)
     deploy_trigger: Mapped[str] = mapped_column(
         String, nullable=False, server_default="manual"
+    )
+    public_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="0"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
