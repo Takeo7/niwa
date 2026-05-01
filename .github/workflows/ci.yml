@@ -23,7 +23,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -42,3 +42,14 @@ jobs:
       - name: Run frontend tests
         run: npm test
         working-directory: frontend
+
+      - name: Run smoke
+        run: make smoke
+
+      - name: Upload smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output
+          path: .smoke/
+          if-no-files-found: ignore

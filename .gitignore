@@ -23,6 +23,9 @@ data/*.sqlite3-journal
 data/*.sqlite3-wal
 data/*.sqlite3-shm
 
+# Generated smoke output
+.smoke/
+
 # Local env
 *.env
 !*.env.example

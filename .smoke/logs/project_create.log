@@ -1,2 +1,0 @@
-POST /api/projects → 201
-{"id":1,"slug":"smoke-web","name":"Smoke Web Project","kind":"web-deployable","git_remote":"/tmp/niwa-smoke-plcnycjt/fixture-remote.git","local_path":"/tmp/niwa-smoke-plcnycjt/fixture-repo","deploy_port":null,"autonomy_mode":"safe","created_at":"2026-04-30T15:45:35","updated_at":"2026-04-30T15:45:35"}

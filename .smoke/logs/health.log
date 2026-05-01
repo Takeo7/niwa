@@ -1,2 +1,0 @@
-GET /api/health → 200
-{"status":"ok","version":"0.1.0"}
