@@ -58,6 +58,7 @@ class Run(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     session_handle: Mapped[str | None] = mapped_column(String, nullable=True)
     artifact_root: Mapped[str] = mapped_column(String, nullable=False)

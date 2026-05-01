@@ -63,6 +63,15 @@ until the human gives one explicit `go ahead` for this batch plan.
   focused frontend coverage.
 - 2026-05-01: WS-07 precommit gates passed: `cd backend && pytest -q`,
   `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-08 implemented locally on stacked branch
+  `codex/security-operational-hardening`: added run PID persistence, redacted
+  adapter payloads before `run_events`, made Claude subprocesses group-killable,
+  extended kill switch to signal recorded active run process groups, and updated
+  the security model.
+- 2026-05-01: WS-08 precommit gates passed: `cd backend && pytest -q`,
+  `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-08 postcommit gate exposed an SSE terminal-drain regression;
+  fixed the stream loop to drain new events before checking terminal state.
 
 ## Current repo state
 

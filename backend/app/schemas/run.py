@@ -38,6 +38,7 @@ class RunRead(BaseModel):
     started_at: datetime
     finished_at: datetime | None
     exit_code: int | None
+    pid: int | None
     outcome: str | None
     session_handle: str | None
     artifact_root: str

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from app.api.deps import get_session
+from app.models import Run, Task
+
 
 PROJECT = {
     "slug": "demo",
@@ -32,6 +35,38 @@ def test_kill_switch_cancels_queued_tasks(client) -> None:
     # Tasks should now be cancelled
     tasks = client.get("/api/projects/demo/tasks").json()
     assert all(t["status"] == "cancelled" for t in tasks)
+
+
+def test_kill_switch_signals_running_run_process(client, monkeypatch) -> None:
+    client.post("/api/projects", json=PROJECT)
+    created = client.post("/api/projects/demo/tasks", json={"title": "T1"}).json()
+    db = next(client.app.dependency_overrides[get_session]())
+    task = db.get(Task, created["id"])
+    assert task is not None
+    task.status = "running"
+    run = Run(
+        task_id=task.id,
+        status="running",
+        model="claude-code",
+        artifact_root="/tmp/demo",
+        pid=12345,
+    )
+    db.add(run)
+    db.commit()
+
+    calls: list[tuple[str, int, int]] = []
+    monkeypatch.setattr("app.api.ops.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr(
+        "app.api.ops.os.killpg",
+        lambda pid, sig: calls.append(("pg", pid, sig)),
+    )
+
+    resp = client.post("/api/ops/kill-switch")
+    body = resp.json()
+
+    assert body["running_tasks_marked"] == 1
+    assert body["running_processes_signalled"] == 1
+    assert calls == [("pg", 12345, 15)]
 
 
 def test_audit_events_empty(client) -> None:

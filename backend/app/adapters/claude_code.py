@@ -118,6 +118,10 @@ class ClaudeCodeAdapter:
 
         return self._session_id
 
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid if self._proc is not None else None
+
     def iter_events(self) -> Iterator[AdapterEvent]:
         """Spawn the CLI; yield one event per JSON line of stdout.
 
@@ -143,6 +147,7 @@ class ClaudeCodeAdapter:
                 stderr=subprocess.PIPE,
                 cwd=self._cwd,
                 env={**os.environ, "NO_COLOR": "1"},
+                start_new_session=True,
             )
         except FileNotFoundError:
             logger.warning("spawn failed: %r not found", self._cli_path)
@@ -281,19 +286,26 @@ class ClaudeCodeAdapter:
         if self._proc is None or self._proc.poll() is not None:
             return
         try:
-            self._proc.send_signal(signal.SIGTERM)
+            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
         except OSError:
-            pass
+            try:
+                self._proc.send_signal(signal.SIGTERM)
+            except OSError:
+                pass
         try:
             self._proc.wait(timeout=_SIGTERM_GRACE)
             return
         except subprocess.TimeoutExpired:
             pass
         try:
-            self._proc.kill()
+            os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
             self._proc.wait(timeout=_SIGTERM_GRACE)
         except OSError:
-            pass
+            try:
+                self._proc.kill()
+                self._proc.wait(timeout=_SIGTERM_GRACE)
+            except OSError:
+                pass
 
 
 def resolve_cli_path() -> str | None:
