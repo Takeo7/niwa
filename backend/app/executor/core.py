@@ -27,7 +27,16 @@ from ..adapters import (
     resolve_timeout,
 )
 from ..finalize import finalize_task
-from ..models import Attachment, Project, Run, RunEvent, Task, TaskEvent
+from ..models import (
+    Attachment,
+    Project,
+    Run,
+    RunEvent,
+    Task,
+    TaskEvent,
+    TaskPlan,
+    TaskReview,
+)
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
 from .git_workspace import GitWorkspaceError, prepare_task_branch
@@ -220,12 +229,20 @@ def run_adapter(session: Session, task: Task) -> Run:
     run.verification_json = json.dumps(result.evidence)
     session.commit()
 
+    review = None
+    if result.outcome != "needs_input":
+        review = _create_task_review(session, task, run, result)
+
     # PR-V1-13: safe-mode finalize runs on verified runs only. It is
     # best-effort — ``finalize_task`` swallows subprocess failures and
     # reports them on its return value, but we still guard against a
     # catastrophic exception (e.g. DB connection dropped) so the task
     # always reaches its terminal state below.
-    if result.passed and project is not None:
+    if (
+        result.passed
+        and project is not None
+        and (review is None or review.decision == "approved")
+    ):
         try:
             fin = finalize_task(session, run, task, project)
             logger.info(
@@ -288,6 +305,8 @@ def process_pending(session: Session) -> int:
             processed += 1
             continue
 
+        _create_task_plan(session, task)
+
         # ``run_adapter`` swallows adapter exceptions internally (see its
         # try/except/finally), so nothing we handle here would ever fire.
         run_adapter(session, task)
@@ -337,6 +356,104 @@ def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None
         )
     )
     session.commit()
+
+
+def _create_task_plan(session: Session, task: Task) -> TaskPlan:
+    """Persist a deterministic JSON plan before code execution begins."""
+
+    payload = {
+        "summary": f"Execute task: {task.title}",
+        "steps": [
+            "Inspect the assigned task and attached context.",
+            "Apply the smallest code or content change that satisfies the task.",
+            "Run verification and finalize only if evidence passes.",
+        ],
+        "risks": [],
+        "planner": "fake-json",
+    }
+    plan = TaskPlan(
+        task_id=task.id,
+        status="ready",
+        summary=payload["summary"],
+        steps_json=json.dumps(payload["steps"]),
+        risks_json=json.dumps(payload["risks"]),
+        planner="fake-json",
+        raw_json=json.dumps(payload, sort_keys=True),
+    )
+    session.add(plan)
+    session.flush()
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps(
+                {
+                    "event": "plan_created",
+                    "plan_id": plan.id,
+                    "planner": plan.planner,
+                }
+            ),
+        )
+    )
+    session.commit()
+    session.refresh(plan)
+    return plan
+
+
+def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskReview:
+    """Persist a deterministic JSON review after verification completes."""
+
+    decision = "approved" if result.passed else "request_changes"
+    findings = [] if result.passed else [
+        f"Verification did not pass: {result.error_code or result.outcome}"
+    ]
+    payload = {
+        "decision": decision,
+        "summary": (
+            "Verification passed; finalize is allowed."
+            if result.passed
+            else "Verification failed; changes are required before finalize."
+        ),
+        "findings": findings,
+        "reviewer": "fake-json",
+        "verification": result.evidence,
+    }
+    review = TaskReview(
+        task_id=task.id,
+        run_id=run.id,
+        decision=decision,
+        summary=payload["summary"],
+        findings_json=json.dumps(findings),
+        reviewer="fake-json",
+        raw_json=json.dumps(payload, sort_keys=True),
+    )
+    session.add(review)
+    session.flush()
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps(
+                {
+                    "event": "review_completed",
+                    "review_id": review.id,
+                    "decision": review.decision,
+                }
+            ),
+        )
+    )
+    session.add(
+        RunEvent(
+            run_id=run.id,
+            event_type="review",
+            payload_json=json.dumps(payload, sort_keys=True),
+        )
+    )
+    session.commit()
+    session.refresh(review)
+    return review
 
 
 def _finalize_triage_failure(
@@ -413,19 +530,19 @@ def _last_user_response_text(session: Session, task_id: int) -> str | None:
         select(TaskEvent)
         .where(TaskEvent.task_id == task_id, TaskEvent.kind == "message")
         .order_by(TaskEvent.id.desc())
-        .limit(1)
     )
-    event = session.scalars(stmt).first()
-    if event is None or not event.payload_json:
-        return None
-    try:
-        payload = json.loads(event.payload_json)
-    except ValueError:
-        return None
-    if not isinstance(payload, dict) or payload.get("event") != "user_response":
-        return None
-    text_value = payload.get("text")
-    return text_value if isinstance(text_value, str) and text_value else None
+    for event in session.scalars(stmt).all():
+        if not event.payload_json:
+            continue
+        try:
+            payload = json.loads(event.payload_json)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict) or payload.get("event") != "user_response":
+            continue
+        text_value = payload.get("text")
+        return text_value if isinstance(text_value, str) and text_value else None
+    return None
 
 
 def _last_run_session_handle(session: Session, task_id: int) -> str | None:

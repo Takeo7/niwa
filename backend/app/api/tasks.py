@@ -16,7 +16,16 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy.orm import Session
 
 from ..auth.deps import require_scope
-from ..schemas import AttachmentRead, RunRead, TaskCreate, TaskRead, TaskRespondPayload
+from ..models import TaskPlan, TaskReview
+from ..schemas import (
+    AttachmentRead,
+    RunRead,
+    TaskCreate,
+    TaskPlanRead,
+    TaskRead,
+    TaskRespondPayload,
+    TaskReviewRead,
+)
 from ..services import attachments as attachments_service
 from ..services import runs as runs_service
 from ..services import tasks as service
@@ -115,6 +124,66 @@ def list_runs_for_task(
             detail="task not found",
         )
     return [RunRead.model_validate(row) for row in rows]
+
+
+@tasks_router.get(
+    "/{task_id}/plan",
+    response_model=TaskPlanRead,
+    dependencies=[Depends(require_scope("read"))],
+)
+def get_task_plan(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskPlanRead:
+    try:
+        service.get_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    plan = (
+        session.query(TaskPlan)
+        .filter(TaskPlan.task_id == task_id)
+        .order_by(TaskPlan.id.desc())
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task plan not found",
+        )
+    return TaskPlanRead.model_validate(plan)
+
+
+@tasks_router.get(
+    "/{task_id}/review",
+    response_model=TaskReviewRead,
+    dependencies=[Depends(require_scope("read"))],
+)
+def get_task_review(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskReviewRead:
+    try:
+        service.get_task(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    review = (
+        session.query(TaskReview)
+        .filter(TaskReview.task_id == task_id)
+        .order_by(TaskReview.id.desc())
+        .first()
+    )
+    if review is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task review not found",
+        )
+    return TaskReviewRead.model_validate(review)
 
 
 @tasks_router.delete(

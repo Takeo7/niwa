@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.api.deps import get_session
+from app.models import TaskPlan, TaskReview
 
 
 PROJECT_PAYLOAD: dict[str, Any] = {
@@ -125,6 +126,47 @@ def test_create_task_writes_events(client, app) -> None:
     assert events[1]["kind"] == "status_changed"
     payload = json.loads(events[1]["payload_json"])
     assert payload == {"from": None, "to": "queued"}
+
+
+def test_get_task_plan_and_review(client, app) -> None:
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "planned"},
+    ).json()
+    override = app.dependency_overrides[get_session]
+    generator = override()
+    session = next(generator)
+    try:
+        plan = TaskPlan(
+            task_id=created["id"],
+            status="ready",
+            summary="Plan summary",
+            steps_json=json.dumps(["Step one"]),
+            risks_json=json.dumps([]),
+            planner="fake-json",
+            raw_json=json.dumps({"summary": "Plan summary"}),
+        )
+        review = TaskReview(
+            task_id=created["id"],
+            run_id=None,
+            decision="approved",
+            summary="Review summary",
+            findings_json=json.dumps([]),
+            reviewer="fake-json",
+            raw_json=json.dumps({"decision": "approved"}),
+        )
+        session.add_all([plan, review])
+        session.commit()
+    finally:
+        generator.close()
+
+    plan_resp = client.get(f"/api/tasks/{created['id']}/plan")
+    assert plan_resp.status_code == 200
+    assert plan_resp.json()["steps"] == ["Step one"]
+    review_resp = client.get(f"/api/tasks/{created['id']}/review")
+    assert review_resp.status_code == 200
+    assert review_resp.json()["decision"] == "approved"
 
 
 def test_get_task_happy(client) -> None:

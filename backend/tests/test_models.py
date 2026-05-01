@@ -204,10 +204,12 @@ EXPECTED_TABLES = {
     "audit_events",
     # Phase 4 added the deployments table
     "deployments",
+    "task_plans",
+    "task_reviews",
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "f3a4b5c6d7e8"
+HEAD_REVISION = "a4b5c6d7e8f9"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:
@@ -288,6 +290,9 @@ EXPECTED_FK_INDEXES = [
     ("runs", "ix_runs_task_id", "task_id"),
     ("task_events", "ix_task_events_task_id", "task_id"),
     ("run_events", "ix_run_events_run_id", "run_id"),
+    ("task_plans", "ix_task_plans_task_id", "task_id"),
+    ("task_reviews", "ix_task_reviews_task_id", "task_id"),
+    ("task_reviews", "ix_task_reviews_run_id", "run_id"),
 ]
 
 

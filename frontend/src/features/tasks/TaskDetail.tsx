@@ -14,6 +14,8 @@ import {
   useRespondTask,
   useTask,
   useTaskAttachments,
+  useTaskPlan,
+  useTaskReview,
 } from "./api";
 
 interface Props { taskId: number }
@@ -21,6 +23,8 @@ interface Props { taskId: number }
 // Mirrors TaskList.STATUS_COLOR; cancelled also gets a strikethrough title.
 const TASK_STATUS_COLOR: Record<TaskStatus, string> = {
   inbox: "gray", queued: "blue", running: "cyan", waiting_input: "yellow",
+  triaging: "cyan", planning: "indigo", waiting_approval: "yellow",
+  executing: "cyan", verifying: "violet", reviewing: "grape",
   done: "green", failed: "red", cancelled: "gray",
 };
 
@@ -41,6 +45,8 @@ function formatSize(bytes: number): string {
 export function TaskDetail({ taskId }: Props) {
   const taskQuery = useTask(taskId);
   const runQuery = useLatestRun(taskId);
+  const planQuery = useTaskPlan(taskId);
+  const reviewQuery = useTaskReview(taskId);
   const respondMutation = useRespondTask(taskId);
   const attachmentsQuery = useTaskAttachments(taskId);
   const deleteAttachment = useDeleteAttachment(taskId);
@@ -97,6 +103,38 @@ export function TaskDetail({ taskId }: Props) {
 
       {task.description ? (
         <Text style={{ whiteSpace: "pre-wrap" }}>{task.description}</Text>
+      ) : null}
+
+      {planQuery.data ? (
+        <Stack gap="xs">
+          <Title order={4}>Plan</Title>
+          <Text size="sm">{planQuery.data.summary}</Text>
+          {planQuery.data.steps.map((step, index) => (
+            <Text key={`${index}-${step}`} size="sm">
+              {index + 1}. {step}
+            </Text>
+          ))}
+        </Stack>
+      ) : null}
+
+      {reviewQuery.data ? (
+        <Stack gap="xs">
+          <Title order={4}>Review</Title>
+          <Group gap="xs">
+            <Badge
+              color={reviewQuery.data.decision === "approved" ? "green" : "orange"}
+              variant="light"
+            >
+              {reviewQuery.data.decision}
+            </Badge>
+            <Text size="sm">{reviewQuery.data.summary}</Text>
+          </Group>
+          {reviewQuery.data.findings.map((finding, index) => (
+            <Text key={`${index}-${finding}`} size="sm">
+              {finding}
+            </Text>
+          ))}
+        </Stack>
       ) : null}
 
       {waitingInput ? (

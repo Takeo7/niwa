@@ -18,6 +18,8 @@ from .task import Task
 from .task_event import TaskEvent
 from .run import Run
 from .run_event import RunEvent
+from .task_plan import TaskPlan
+from .task_review import TaskReview
 
 __all__ = [
     "Base",
@@ -31,4 +33,6 @@ __all__ = [
     "TaskEvent",
     "Run",
     "RunEvent",
+    "TaskPlan",
+    "TaskReview",
 ]

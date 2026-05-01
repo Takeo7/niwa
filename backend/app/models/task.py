@@ -26,6 +26,12 @@ from app.db import Base
 TASK_STATUSES = (
     "inbox",
     "queued",
+    "triaging",
+    "planning",
+    "waiting_approval",
+    "executing",
+    "verifying",
+    "reviewing",
     "running",
     "waiting_input",
     "done",
@@ -104,4 +110,16 @@ class Task(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="Attachment.id.asc()",
+    )
+    plans: Mapped[list["TaskPlan"]] = relationship(  # noqa: F821
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TaskPlan.id.asc()",
+    )
+    reviews: Mapped[list["TaskReview"]] = relationship(  # noqa: F821
+        back_populates="task",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TaskReview.id.asc()",
     )

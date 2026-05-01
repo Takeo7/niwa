@@ -25,6 +25,12 @@ from pydantic import BaseModel, ConfigDict, Field
 TaskStatus = Literal[
     "inbox",
     "queued",
+    "triaging",
+    "planning",
+    "waiting_approval",
+    "executing",
+    "verifying",
+    "reviewing",
     "running",
     "waiting_input",
     "done",

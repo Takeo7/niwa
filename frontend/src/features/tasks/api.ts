@@ -8,6 +8,8 @@ import {
   type Run,
   type Task,
   type TaskCreatePayload,
+  type TaskPlan,
+  type TaskReview,
 } from "../../api";
 
 const API_BASE = "/api";
@@ -117,6 +119,36 @@ export function useLatestRun(taskId: number | undefined) {
   });
 }
 
+export function useTaskPlan(taskId: number | undefined) {
+  return useQuery<TaskPlan | null>({
+    queryKey: ["task", taskId, "plan"] as const,
+    queryFn: async () => {
+      try {
+        return await apiFetch<TaskPlan>(`/tasks/${taskId}/plan`);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: Boolean(taskId),
+  });
+}
+
+export function useTaskReview(taskId: number | undefined) {
+  return useQuery<TaskReview | null>({
+    queryKey: ["task", taskId, "review"] as const,
+    queryFn: async () => {
+      try {
+        return await apiFetch<TaskReview>(`/tasks/${taskId}/review`);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: Boolean(taskId),
+  });
+}
+
 export function useDeleteTask(slug: string) {
   const qc = useQueryClient();
   return useMutation<void, Error, number>({
@@ -168,6 +200,8 @@ export function useRespondTask(taskId: number) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["task", taskId] });
+      qc.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+      qc.invalidateQueries({ queryKey: ["task", taskId, "review"] });
     },
   });
 }
