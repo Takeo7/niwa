@@ -14,9 +14,11 @@ Supported methods:
     tools/call {name, arguments} → tool result
 
 Tool scope mapping (API token scopes):
-    read        → project_list, project_get, task_status, task_list
+    read        → project_list, project_get, task_status, task_list,
+                  deployment_status
     task:create → task_create, task_attach
     task:write  → task_respond, task_cancel, task_retry
+    deploy      → deploy_trigger
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from sqlalchemy.orm import Session
 from ..api.deps import get_session
 from ..auth.token_store import validate_token
 from ..services.audit import log_event
+from .tools import deployments as deploy_tools
 from .tools import projects as proj_tools
 from .tools import pulls as pull_tools
 from .tools import tasks as task_tools
@@ -81,6 +84,45 @@ def _err(id_: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
 
 
+class JsonRpcError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def _http_to_rpc_error(exc: HTTPException) -> JsonRpcError:
+    detail = str(exc.detail)
+    code_by_status = {
+        400: -32602,
+        401: -32001,
+        403: -32003,
+        404: -32004,
+        409: -32009,
+        502: -32052,
+        503: -32053,
+        504: -32054,
+    }
+    return JsonRpcError(code_by_status.get(exc.status_code, -32000), detail)
+
+
+def _audit_payload(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    if method == "tools/call":
+        name = params.get("name") or params.get("tool") or ""
+        args = dict(params.get("arguments") or params.get("params") or {})
+        return {"tool": name, "arguments": _redact_mcp_args(name, args)}
+    return {"params": _redact_mcp_args(method, dict(params))}
+
+
+def _redact_mcp_args(method: str, args: dict[str, Any]) -> dict[str, Any]:
+    if method == "task_attach":
+        redacted = dict(args)
+        if "content" in redacted:
+            redacted["content"] = "[REDACTED_ATTACHMENT_CONTENT]"
+        return redacted
+    return args
+
+
 # ── Tool definitions ───────────────────────────────────────────────────────────
 
 
@@ -128,6 +170,25 @@ _TOOLS = [
                 "description": {"type": "string"},
             },
             "required": ["project_slug", "title"],
+        },
+    },
+    {
+        "name": "task_attach",
+        "description": "Attach text/base64 content to a task. Requires scope: task:create.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "filename": {"type": "string"},
+                "content": {"type": "string"},
+                "content_type": {"type": "string"},
+                "encoding": {
+                    "type": "string",
+                    "enum": ["text", "base64"],
+                    "default": "text",
+                },
+            },
+            "required": ["task_id", "filename", "content"],
         },
     },
     {
@@ -195,6 +256,30 @@ _TOOLS = [
             "required": ["project_slug", "number"],
         },
     },
+    {
+        "name": "deploy_trigger",
+        "description": "Trigger a deployment for a project. Requires scope: deploy.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_slug": {"type": "string"}},
+            "required": ["project_slug"],
+        },
+    },
+    {
+        "name": "deployment_status",
+        "description": "Get latest project deployment or one deployment by id. Requires scope: read.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "deployment_id": {"type": "integer"},
+                "project_slug": {"type": "string"},
+            },
+            "anyOf": [
+                {"required": ["deployment_id"]},
+                {"required": ["project_slug"]},
+            ],
+        },
+    },
 ]
 
 
@@ -230,16 +315,25 @@ async def mcp_dispatch(
 
     try:
         result = _dispatch(method, params, scopes, db)
+    except JsonRpcError as exc:
+        return _err(rpc_id, exc.code, exc.message)
     except HTTPException as exc:
-        return _err(rpc_id, -32000, exc.detail)
+        rpc_error = _http_to_rpc_error(exc)
+        return _err(rpc_id, rpc_error.code, rpc_error.message)
     except KeyError as exc:
         return _err(rpc_id, -32602, f"Missing param: {exc}")
     except Exception as exc:  # noqa: BLE001
         return _err(rpc_id, -32000, str(exc))
 
-    # Audit log: write actions only (task_create, task_respond, task_cancel, task_retry)
+    # Audit log: write actions only.
     write_actions = {
-        "task_create", "task_respond", "task_cancel", "task_retry", "pull_merge",
+        "task_create",
+        "task_attach",
+        "task_respond",
+        "task_cancel",
+        "task_retry",
+        "pull_merge",
+        "deploy_trigger",
     }
     effective_method = method
     if method == "tools/call":
@@ -252,7 +346,7 @@ async def mcp_dispatch(
             actor_id=actor_id,
             action=f"mcp.{effective_method}",
             ip_address=ip,
-            payload={"params": params},
+            payload=_audit_payload(method, params),
         )
 
     return _ok(rpc_id, result)
@@ -291,6 +385,17 @@ def _dispatch(method: str, params: dict, scopes: set[str], db: Session) -> Any:
             params.get("description"),
         )
 
+    if method == "task_attach":
+        _require_scope(scopes, "task:create")
+        return task_tools.task_attach(
+            db,
+            int(params["task_id"]),
+            params["filename"],
+            params["content"],
+            content_type=params.get("content_type"),
+            encoding=params.get("encoding", "text"),
+        )
+
     if method == "task_status":
         _require_scope(scopes, "read")
         return task_tools.task_status(db, int(params["task_id"]))
@@ -320,4 +425,20 @@ def _dispatch(method: str, params: dict, scopes: set[str], db: Session) -> Any:
             params.get("method", "squash"),
         )
 
-    raise HTTPException(status_code=404, detail=f"Unknown method: {method}")
+    if method == "deploy_trigger":
+        _require_scope(scopes, "deploy")
+        return deploy_tools.deploy_trigger(db, params["project_slug"])
+
+    if method == "deployment_status":
+        _require_scope(scopes, "read")
+        return deploy_tools.deployment_status(
+            db,
+            deployment_id=(
+                int(params["deployment_id"])
+                if params.get("deployment_id") is not None
+                else None
+            ),
+            project_slug=params.get("project_slug"),
+        )
+
+    raise JsonRpcError(-32601, f"Method not found: {method}")
