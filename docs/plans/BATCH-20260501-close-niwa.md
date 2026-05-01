@@ -70,6 +70,8 @@ until the human gives one explicit `go ahead` for this batch plan.
   the security model.
 - 2026-05-01: WS-08 precommit gates passed: `cd backend && pytest -q`,
   `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-08 postcommit gate exposed an SSE terminal-drain regression;
+  fixed the stream loop to drain new events before checking terminal state.
 
 ## Current repo state
 

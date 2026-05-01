@@ -76,10 +76,6 @@ async def _event_stream(
         if await request.is_disconnected():
             return
 
-        snapshot = await asyncio.to_thread(_initial_snapshot, request, run_id)
-        if snapshot is None:
-            return
-
         new_events = await asyncio.to_thread(
             _load_events, request, run_id, last_id
         )
@@ -87,6 +83,10 @@ async def _event_stream(
             yield svc.format_sse_event(event)
             if event.id > last_id:
                 last_id = event.id
+
+        snapshot = await asyncio.to_thread(_initial_snapshot, request, run_id)
+        if snapshot is None:
+            return
 
         if snapshot.status in svc.TERMINAL_RUN_STATUSES:
             # Drain events that landed between snapshot load and the
