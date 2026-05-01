@@ -103,7 +103,7 @@ def test_task_create_and_write_scopes(
     assert cancelled.json()["status"] == "cancelled"
 
 
-def test_deploy_and_public_static_routes_are_scoped(
+def test_deploy_and_static_routes_are_scoped_unless_public(
     client,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -132,6 +132,17 @@ def test_deploy_and_public_static_routes_are_scoped(
     )
     assert public.status_code == 200
     assert "ok" in public.text
+
+    public_payload = _project_payload(tmp_path, slug="public")
+    public_payload["public_enabled"] = True
+    client.post(
+        "/api/projects",
+        json=public_payload,
+        headers=_token_headers(client, ["admin"]),
+    )
+    exposed = client.get("/api/deploy/public/")
+    assert exposed.status_code == 200
+    assert "ok" in exposed.text
 
 
 def test_metrics_and_pull_merge_scopes(

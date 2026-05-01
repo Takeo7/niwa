@@ -43,6 +43,13 @@ until the human gives one explicit `go ahead` for this batch plan.
   behavior before starting a new process deployment.
 - 2026-05-01: WS-04 precommit gates passed: `cd backend && pytest -q`,
   `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-05 implemented locally on stacked branch
+  `codex/domain-caddy-publication`: added project `public_enabled`, made
+  static deploy serving anonymous only for explicitly public projects, wired
+  Caddy route generation to public projects/active process deployments, and
+  added `niwa-executor proxy render|validate`.
+- 2026-05-01: WS-05 precommit gates passed: `cd backend && pytest -q`,
+  `cd frontend && npm test`, and `make smoke`.
 
 ## Current repo state
 

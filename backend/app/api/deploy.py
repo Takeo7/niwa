@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -61,14 +61,26 @@ def _resolve_target(local_path: str, path: str, *, root: str | None = None) -> P
     return target
 
 
-def _serve(slug: str, path: str, session: Session) -> FileResponse:
+def _require_read_for_private(
+    request: Request,
+    session: Session,
+    project: Project | None,
+) -> None:
+    if project is not None and project.public_enabled:
+        return
+    require_scope("read")(request, session)
+
+
+def _serve(slug: str, path: str, request: Request, session: Session) -> FileResponse:
     project = session.execute(
         select(Project).where(Project.slug == slug)
     ).scalar_one_or_none()
     if project is None or project.kind != "web-deployable":
+        _require_read_for_private(request, session, project)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found"
         )
+    _require_read_for_private(request, session, project)
 
     # Phase 4: prefer the active deployment's versioned artifact when present.
     active = get_active_deployment(session, project.id)
@@ -88,21 +100,21 @@ def _serve(slug: str, path: str, session: Session) -> FileResponse:
 @router.get("/{slug}/")
 def serve_deploy_root(
     slug: str,
-    _auth=Depends(require_scope("read")),
+    request: Request,
     session: Session = Depends(get_session),
 ) -> FileResponse:
     """SPA entry point: ``/api/deploy/{slug}/`` → ``dist/index.html``."""
 
-    return _serve(slug, "", session)
+    return _serve(slug, "", request, session)
 
 
 @router.get("/{slug}/{path:path}")
 def serve_deploy(
     slug: str,
     path: str,
-    _auth=Depends(require_scope("read")),
+    request: Request,
     session: Session = Depends(get_session),
 ) -> FileResponse:
     """Serve any file under ``<local_path>/dist/`` for a web-deployable project."""
 
-    return _serve(slug, path, session)
+    return _serve(slug, path, request, session)

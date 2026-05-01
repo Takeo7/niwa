@@ -35,6 +35,7 @@ def test_create_project_happy(client) -> None:
     assert body["kind"] == "library"
     assert body["local_path"] == "/tmp/demo"
     assert body["autonomy_mode"] == "safe"
+    assert body["public_enabled"] is False
     assert body["git_remote"] is None
     assert body["deploy_port"] is None
     assert isinstance(body["id"], int)
@@ -82,11 +83,12 @@ def test_patch_project(client) -> None:
 
     response = client.patch(
         "/api/projects/demo",
-        json={"autonomy_mode": "dangerous"},
+        json={"autonomy_mode": "dangerous", "public_enabled": True},
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["autonomy_mode"] == "dangerous"
+    assert body["public_enabled"] is True
     # Untouched fields keep their previous value.
     assert body["name"] == "Demo"
     assert body["kind"] == "library"
