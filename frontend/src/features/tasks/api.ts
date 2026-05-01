@@ -163,6 +163,30 @@ export function useDeleteTask(slug: string) {
   });
 }
 
+export function useCancelTask(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, number>({
+    mutationFn: (taskId) =>
+      apiFetch<Task>(`/tasks/${taskId}/cancel`, { method: "POST" }),
+    onSettled: (_data, _error, taskId) => {
+      qc.invalidateQueries({ queryKey: tasksKey(slug) });
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
+
+export function useRetryTask(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, number>({
+    mutationFn: (taskId) =>
+      apiFetch<Task>(`/tasks/${taskId}/retry`, { method: "POST" }),
+    onSettled: (_data, _error, taskId) => {
+      qc.invalidateQueries({ queryKey: tasksKey(slug) });
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+    },
+  });
+}
+
 // PR-V1-33: read the attachments tied to a task. Always enabled when
 // `taskId` is set — the detail page renders the section conditionally
 // based on `data.length`, not on `enabled`.

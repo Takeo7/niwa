@@ -56,6 +56,13 @@ until the human gives one explicit `go ahead` for this batch plan.
   content from MCP audit payloads, and updated the OpenClaw integration guide.
 - 2026-05-01: WS-06 precommit gates passed: `cd backend && pytest -q`,
   `cd frontend && npm test`, and `make smoke`.
+- 2026-05-01: WS-07 implemented locally on stacked branch
+  `codex/ui-management-dashboard`: added project dashboard counters, backlog
+  search/status filters with hierarchical subtasks, visible cancel/retry
+  actions, project settings for autonomy/deploy/publication/repo settings, and
+  focused frontend coverage.
+- 2026-05-01: WS-07 precommit gates passed: `cd backend && pytest -q`,
+  `cd frontend && npm test`, and `make smoke`.
 
 ## Current repo state
 

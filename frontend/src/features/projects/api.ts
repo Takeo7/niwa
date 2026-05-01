@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiFetch, type Project, type ProjectCreatePayload } from "../../api";
+import {
+  apiFetch,
+  type Project,
+  type ProjectCreatePayload,
+  type ProjectPatchPayload,
+} from "../../api";
 
 const PROJECTS_KEY = ["projects"] as const;
 
@@ -83,6 +88,21 @@ export function useCreateProject() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: PROJECTS_KEY });
+    },
+  });
+}
+
+export function usePatchProject(slug: string) {
+  const qc = useQueryClient();
+  return useMutation<Project, Error, ProjectPatchPayload>({
+    mutationFn: (payload) =>
+      apiFetch<Project>(`/projects/${slug}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (project) => {
+      qc.invalidateQueries({ queryKey: PROJECTS_KEY });
+      qc.setQueryData(["project", project.slug], project);
     },
   });
 }

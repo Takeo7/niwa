@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectDetail } from "../src/features/projects/ProjectDetail";
@@ -9,11 +9,19 @@ import { renderWithProviders } from "./renderWithProviders";
 // (`/api/projects/<slug>`) and the task list (`/api/projects/<slug>/tasks`).
 // We stub fetch by URL suffix so the banner assertions don't depend on the
 // task list hook completing in a specific order.
-function stubFetch(project: Project): void {
+function stubFetch(project: Project, onPatch?: ReturnType<typeof vi.fn>): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith(`/projects/${project.slug}`) && init?.method === "PATCH") {
+        onPatch?.(init);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ...project, ...JSON.parse(init.body as string) }),
+        } as Response;
+      }
       const body = url.endsWith(`/projects/${project.slug}`) ? project : [];
       return {
         ok: true,
@@ -34,6 +42,11 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     local_path: "/tmp/demo",
     deploy_port: null,
     autonomy_mode: "safe",
+    deploy_type: "static",
+    build_command: null,
+    dist_dir: null,
+    start_command: null,
+    healthcheck_path: null,
     deploy_trigger: "manual",
     public_enabled: false,
     created_at: "2026-04-20T00:00:00Z",
@@ -72,5 +85,24 @@ describe("ProjectDetail dangerous-mode banner", () => {
     expect(
       screen.queryByText(/Runs auto-merge PRs without review/i),
     ).toBeNull();
+  });
+
+  it("saves project deployment settings from the settings tab", async () => {
+    const patched = vi.fn();
+    stubFetch(makeProject(), patched);
+    renderWithProviders(<ProjectDetail slug="demo" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Demo")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /Settings/i }));
+    fireEvent.click(screen.getByLabelText(/Public deployment/i));
+    fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
+
+    await waitFor(() => {
+      expect(patched).toHaveBeenCalledTimes(1);
+    });
+    const init = patched.mock.calls[0][0] as RequestInit;
+    expect(JSON.parse(init.body as string).public_enabled).toBe(true);
   });
 });

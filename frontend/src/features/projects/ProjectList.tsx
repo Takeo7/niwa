@@ -23,6 +23,10 @@ export function ProjectList() {
   const [modalOpen, setModalOpen] = useState(false);
   const query = useProjects();
   const isEmpty = !query.isLoading && !query.isError && query.data && query.data.length === 0;
+  const projects = query.data ?? [];
+  const publicCount = projects.filter((p) => p.public_enabled).length;
+  const autoDeployCount = projects.filter((p) => p.deploy_trigger !== "manual").length;
+  const dangerousCount = projects.filter((p) => p.autonomy_mode === "dangerous").length;
 
   return (
     <Stack gap="md">
@@ -35,6 +39,28 @@ export function ProjectList() {
           Nuevo proyecto
         </Button>
       </Group>
+
+      {!query.isLoading && !query.isError && projects.length > 0 ? (
+        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+          <Card withBorder padding="sm">
+            <Text size="xs" c="dimmed">Projects</Text>
+            <Text fw={700}>{projects.length}</Text>
+          </Card>
+          <Card withBorder padding="sm">
+            <Text size="xs" c="dimmed">Public apps</Text>
+            <Text fw={700}>{publicCount}</Text>
+          </Card>
+          <Card withBorder padding="sm">
+            <Text size="xs" c="dimmed">Auto deploy</Text>
+            <Group gap="xs">
+              <Text fw={700}>{autoDeployCount}</Text>
+              {dangerousCount > 0 ? (
+                <Badge color="red" variant="light">{dangerousCount} dangerous</Badge>
+              ) : null}
+            </Group>
+          </Card>
+        </SimpleGrid>
+      ) : null}
 
       {query.isLoading ? (
         <Group justify="center" py="xl">
@@ -88,7 +114,7 @@ cd your-repo`}
         </Card>
       ) : (
         <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md">
-          {query.data?.map((p) => (
+          {projects.map((p) => (
             <Card
               key={p.id}
               component={Link}
@@ -108,6 +134,12 @@ cd your-repo`}
                   >
                     {p.autonomy_mode}
                   </Badge>
+                  {p.public_enabled ? (
+                    <Badge variant="light" color="blue">public</Badge>
+                  ) : null}
+                  {p.deploy_trigger !== "manual" ? (
+                    <Badge variant="light" color="violet">{p.deploy_trigger}</Badge>
+                  ) : null}
                 </Group>
                 <Text c="dimmed" size="xs">
                   /{p.slug}
