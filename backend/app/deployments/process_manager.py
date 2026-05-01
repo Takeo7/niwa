@@ -16,6 +16,14 @@ from ..models import Deployment, Project
 from .ports import allocate_port
 
 
+def _niwa_home() -> Path:
+    return Path(os.environ.get("NIWA_HOME", Path.home() / ".niwa"))
+
+
+def process_log_path(project: Project, deployment: Deployment) -> Path:
+    return _niwa_home() / "deployments" / project.slug / str(deployment.id) / "process.log"
+
+
 def is_process_alive(pid: int | None) -> bool:
     """Return True if a process with this PID is still running."""
     if pid is None:
@@ -55,17 +63,27 @@ def start_process(
     artifact = deployment.artifact_path or project.local_path
     cwd = str(Path(artifact)) if artifact else project.local_path
 
+    log_fh = None
     try:
+        log_path = process_log_path(project, deployment)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = log_path.open("ab")
         proc = subprocess.Popen(
             shlex.split(project.start_command),
             shell=False,
             cwd=cwd,
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        log_fh.close()
     except Exception as exc:  # noqa: BLE001
+        if log_fh is not None:
+            try:
+                log_fh.close()
+            except Exception:  # noqa: BLE001
+                pass
         deployment.status = "failed"
         deployment.error = f"failed to spawn process: {exc}"[:500]
         session.commit()

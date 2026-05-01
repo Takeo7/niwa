@@ -100,6 +100,7 @@ def _make_task(session: Session, project: Project, **overrides) -> Task:
 def test_project_defaults(session: Session) -> None:
     project = _make_project(session)
     assert project.autonomy_mode == "safe"
+    assert project.deploy_trigger == "manual"
     assert project.created_at is not None
     assert project.updated_at is not None
 
@@ -209,7 +210,7 @@ EXPECTED_TABLES = {
 }
 # Revision id of the current head migration. Bump when adding a new
 # revision so the partner test below pins the latest applied schema.
-HEAD_REVISION = "a4b5c6d7e8f9"
+HEAD_REVISION = "b5c6d7e8f9a0"
 
 
 def _run_alembic_upgrade(tmp_path: Path, db_path: Path) -> subprocess.CompletedProcess:
