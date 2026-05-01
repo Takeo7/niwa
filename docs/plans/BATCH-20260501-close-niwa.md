@@ -36,6 +36,13 @@ until the human gives one explicit `go ahead` for this batch plan.
   migration, schemas, task API read endpoints, fake JSON planner before
   execution, fake JSON reviewer after verification and before finalize, and
   TaskDetail plan/review display.
+- 2026-05-01: WS-04 implemented locally on stacked branch
+  `codex/deploy-triggers-hardening`: added project `deploy_trigger`, auto
+  deploy for `on_done`/dangerous `on_merge`, process deployment logs under
+  `NIWA_HOME/deployments/{slug}/{id}/process.log`, and stop-previous-process
+  behavior before starting a new process deployment.
+- 2026-05-01: WS-04 precommit gates passed: `cd backend && pytest -q`,
+  `cd frontend && npm test`, and `make smoke`.
 
 ## Current repo state
 

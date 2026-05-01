@@ -49,6 +49,7 @@ export function getHealth(): Promise<HealthResponse> {
 
 export type ProjectKind = "web-deployable" | "library" | "script";
 export type AutonomyMode = "safe" | "dangerous";
+export type DeployTrigger = "manual" | "on_done" | "on_merge";
 
 export interface Project {
   id: number;
@@ -59,6 +60,7 @@ export interface Project {
   local_path: string;
   deploy_port: number | null;
   autonomy_mode: AutonomyMode;
+  deploy_trigger: DeployTrigger;
   created_at: string;
   updated_at: string;
 }
@@ -71,6 +73,7 @@ export interface ProjectCreatePayload {
   git_remote?: string | null;
   deploy_port?: number | null;
   autonomy_mode?: AutonomyMode;
+  deploy_trigger?: DeployTrigger;
 }
 
 // ---- Tasks wire types (mirror backend app/schemas/task.py) --------------

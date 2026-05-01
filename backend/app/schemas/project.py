@@ -25,6 +25,7 @@ SLUG_PATTERN = r"^[a-z0-9-]+$"
 ProjectKind = Literal["web-deployable", "library", "script"]
 AutonomyMode = Literal["safe", "dangerous"]
 DeployType = Literal["static", "process"]
+DeployTrigger = Literal["manual", "on_done", "on_merge"]
 
 
 class ProjectCreate(BaseModel):
@@ -45,6 +46,7 @@ class ProjectCreate(BaseModel):
     dist_dir: str | None = None
     start_command: str | None = None
     healthcheck_path: str | None = None
+    deploy_trigger: DeployTrigger = "manual"
 
 
 class ProjectPatch(BaseModel):
@@ -63,6 +65,7 @@ class ProjectPatch(BaseModel):
     dist_dir: str | None = None
     start_command: str | None = None
     healthcheck_path: str | None = None
+    deploy_trigger: DeployTrigger | None = None
 
 
 class ProjectRead(BaseModel):
@@ -83,5 +86,6 @@ class ProjectRead(BaseModel):
     dist_dir: str | None
     start_command: str | None
     healthcheck_path: str | None
+    deploy_trigger: str
     created_at: datetime
     updated_at: datetime

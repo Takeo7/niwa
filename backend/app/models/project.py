@@ -30,6 +30,10 @@ class Project(Base):
             "deploy_type IN ('static', 'process')",
             name="ck_projects_deploy_type",
         ),
+        CheckConstraint(
+            "deploy_trigger IN ('manual', 'on_done', 'on_merge')",
+            name="ck_projects_deploy_trigger",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -50,6 +54,9 @@ class Project(Base):
     dist_dir: Mapped[str | None] = mapped_column(String, nullable=True)
     start_command: Mapped[str | None] = mapped_column(String, nullable=True)
     healthcheck_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    deploy_trigger: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="manual"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

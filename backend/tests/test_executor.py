@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from app.executor.core import claim_next_task, process_pending
 from app.executor.git_workspace import build_branch_name
 from app.models import (
     Base,
+    Deployment,
     Project,
     Run,
     RunEvent,
@@ -189,6 +191,48 @@ def test_process_pending_single_task(
     review = session.query(TaskReview).filter(TaskReview.task_id == task.id).one()
     assert review.run_id == run.id
     assert review.decision == "approved"
+
+
+def test_on_done_deploy_trigger_creates_deployment(
+    session: Session,
+    git_project: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dist = git_project / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>deployed</html>", encoding="utf-8")
+    subprocess.run(["git", "add", "dist"], cwd=git_project, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add deploy fixture"],
+        cwd=git_project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    monkeypatch.setenv("NIWA_HOME", str(tmp_path / ".niwa"))
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", "touch-{pid}.txt")
+    project = _make_project(
+        session,
+        local_path=git_project,
+        kind="web-deployable",
+        deploy_type="static",
+        dist_dir="dist",
+        healthcheck_path="/index.html",
+        deploy_trigger="on_done",
+    )
+    task = _make_task(session, project, title="deploy me")
+
+    assert process_pending(session) == 1
+
+    deployment = (
+        session.query(Deployment)
+        .filter(Deployment.task_id == task.id)
+        .one()
+    )
+    assert deployment.status == "healthy"
+    assert deployment.artifact_path is not None
+    assert (Path(deployment.artifact_path) / "index.html").exists()
 
 
 def test_process_pending_multiple_tasks(

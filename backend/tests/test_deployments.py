@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,17 @@ PROJECT_PAYLOAD = {
     "dist_dir": "dist",
     "healthcheck_path": "/index.html",
 }
+
+
+def _process_project_path(tmp_path: Path) -> Path:
+    project = tmp_path / "process-app"
+    dist = project / "dist"
+    dist.mkdir(parents=True)
+    (dist / "server.py").write_text(
+        "import time\nprint('process-started', flush=True)\ntime.sleep(60)\n",
+        encoding="utf-8",
+    )
+    return project
 
 
 @pytest.fixture()
@@ -180,3 +192,46 @@ def test_healthcheck_endpoint(
     resp = client.post(f"/api/deployments/{d['id']}/healthcheck")
     assert resp.status_code == 200
     assert resp.json()["last_health_check"] is not None
+
+
+def test_process_deploy_writes_process_log(
+    client, tmp_path: Path, niwa_home_tmp: Path
+) -> None:
+    project = _process_project_path(tmp_path)
+    payload = {
+        **PROJECT_PAYLOAD,
+        "local_path": str(project),
+        "deploy_type": "process",
+        "start_command": f"{sys.executable} server.py",
+    }
+    client.post("/api/projects", json=payload)
+
+    body = client.post("/api/projects/demo/deployments").json()
+    assert body["status"] == "starting"
+    log_path = niwa_home_tmp / "deployments" / "demo" / str(body["id"]) / "process.log"
+    assert log_path.exists()
+
+    client.post(f"/api/deployments/{body['id']}/stop")
+
+
+def test_new_process_deploy_stops_previous_process(
+    client, tmp_path: Path, niwa_home_tmp: Path
+) -> None:
+    project = _process_project_path(tmp_path)
+    payload = {
+        **PROJECT_PAYLOAD,
+        "local_path": str(project),
+        "deploy_type": "process",
+        "start_command": f"{sys.executable} server.py",
+    }
+    client.post("/api/projects", json=payload)
+
+    first = client.post("/api/projects/demo/deployments").json()
+    second = client.post("/api/projects/demo/deployments").json()
+    first_after = client.get(f"/api/deployments/{first['id']}").json()
+
+    assert first_after["status"] == "stopped"
+    assert first_after["pid"] is None
+    assert second["status"] == "starting"
+
+    client.post(f"/api/deployments/{second['id']}/stop")

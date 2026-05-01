@@ -29,11 +29,38 @@ def _resolve_commit_sha(local_path: str) -> str | None:
     return None
 
 
-def trigger_deploy(session: Session, project: Project) -> Deployment:
+def _stop_previous_process_deployments(
+    session: Session,
+    project: Project,
+    current_id: int,
+) -> None:
+    previous = (
+        session.query(Deployment)
+        .filter(
+            Deployment.project_id == project.id,
+            Deployment.id != current_id,
+            Deployment.deploy_type == "process",
+            Deployment.status.in_(["starting", "healthy", "unhealthy"]),
+            Deployment.pid.is_not(None),
+        )
+        .order_by(Deployment.id.desc())
+        .all()
+    )
+    for deployment in previous:
+        stop_process(session, deployment)
+
+
+def trigger_deploy(
+    session: Session,
+    project: Project,
+    *,
+    task_id: int | None = None,
+) -> Deployment:
     """Create a Deployment, build+stage, and start (process) or healthcheck (static)."""
     deploy_type = project.deploy_type or "static"
     deployment = Deployment(
         project_id=project.id,
+        task_id=task_id,
         deploy_type=deploy_type,
         status="queued",
         commit_sha=_resolve_commit_sha(project.local_path),
@@ -49,6 +76,7 @@ def trigger_deploy(session: Session, project: Project) -> Deployment:
         return deployment
 
     if deploy_type == "process":
+        _stop_previous_process_deployments(session, project, deployment.id)
         start_process(session, deployment, project)
         session.refresh(deployment)
     else:

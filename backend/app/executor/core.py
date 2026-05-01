@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_cli_path,
     resolve_timeout,
 )
+from ..deployments.service import trigger_deploy
 from ..finalize import finalize_task
 from ..models import (
     Attachment,
@@ -238,6 +239,7 @@ def run_adapter(session: Session, task: Task) -> Run:
     # reports them on its return value, but we still guard against a
     # catastrophic exception (e.g. DB connection dropped) so the task
     # always reaches its terminal state below.
+    deploy_after_merge = False
     if (
         result.passed
         and project is not None
@@ -253,6 +255,7 @@ def run_adapter(session: Session, task: Task) -> Run:
                 fin.pr_url,
                 fin.commands_skipped,
             )
+            deploy_after_merge = fin.pr_merged
         except Exception:  # noqa: BLE001 — must never fail the run
             logger.exception("finalize crashed for task_id=%s", task.id)
 
@@ -263,6 +266,8 @@ def run_adapter(session: Session, task: Task) -> Run:
         error_code=None if result.passed else result.error_code,
         pending_question=result.pending_question,
     )
+    if result.passed and project is not None:
+        _maybe_trigger_deploy(session, task, project, deploy_after_merge)
     session.refresh(run)
     return run
 
@@ -454,6 +459,31 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
     session.commit()
     session.refresh(review)
     return review
+
+
+def _maybe_trigger_deploy(
+    session: Session,
+    task: Task,
+    project: Project,
+    deploy_after_merge: bool,
+) -> None:
+    trigger = getattr(project, "deploy_trigger", "manual") or "manual"
+    should_deploy = trigger == "on_done" or (
+        trigger == "on_merge" and deploy_after_merge
+    )
+    if not should_deploy:
+        return
+    try:
+        deployment = trigger_deploy(session, project, task_id=task.id)
+        logger.info(
+            "auto deploy task_id=%s deployment_id=%s trigger=%s status=%s",
+            task.id,
+            deployment.id,
+            trigger,
+            deployment.status,
+        )
+    except Exception:  # noqa: BLE001 — deployment must not unsettle the task
+        logger.exception("auto deploy failed for task_id=%s trigger=%s", task.id, trigger)
 
 
 def _finalize_triage_failure(
