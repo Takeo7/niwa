@@ -67,6 +67,43 @@ must not be changed until the human reviews this file and gives one explicit:
   timing-sensitive runs SSE test; the test was stabilized and `make
   release-gate` then passed with clean HOME bootstrap, `make test`,
   `make smoke`, doctor, backup, and restore.
+- 2026-05-02: PR-CLOSE-04 pushed and opened as draft PR #172, stacked on
+  PR-CLOSE-03. PR-CLOSE-05 started on
+  `codex/close-05-online-publication-e2e` for Caddy/publication tests and
+  operator runbook coverage.
+- 2026-05-02: PR-CLOSE-05 implemented locally with added Caddy/CLI coverage
+  and `docs/runbooks/ONLINE_PUBLICATION.md`. Targeted publication tests,
+  backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-05 pushed and opened as draft PR #173, stacked on
+  PR-CLOSE-04. PR-CLOSE-06 started on
+  `codex/close-06-security-locks-limits-sandbox` for operational locks,
+  queue/attachment limits, and the security model update.
+- 2026-05-02: PR-CLOSE-06 implemented locally with queued-task limits,
+  attachment size limits, run-level project/concurrency claim guards, MCP
+  error mapping, backend tests, and `docs/SECURITY.md` updates. Targeted
+  security/ops tests, backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-06 pushed and opened as draft PR #174, stacked on
+  PR-CLOSE-05. PR-CLOSE-07 started on
+  `codex/close-07-mcp-openclaw-conformance` for MCP handshake, tools/error
+  contract tests, OpenClaw examples, and an optional MCP smoke script.
+- 2026-05-02: PR-CLOSE-07 implemented locally with `initialize`, exact
+  `tools/list` contract tests, OpenClaw documentation examples, JSON-RPC
+  error assertions, and `scripts/mcp_smoke.py`. MCP targeted tests, backend,
+  frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-07 pushed and opened as draft PR #175, stacked on
+  PR-CLOSE-06. PR-CLOSE-08 started on
+  `codex/close-08-ui-operator-closure` for TaskDetail operator timeline,
+  deployment visibility, deploy healthcheck controls, and admin ops hints.
+- 2026-05-02: PR-CLOSE-08 implemented locally with TaskDetail plan/review/run/
+  deployment timeline, deploy healthcheck/process-log UI, admin operator hints,
+  and RTL coverage. Backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-08 pushed and opened as draft PR #176, stacked on
+  PR-CLOSE-07. PR-CLOSE-09 started on
+  `codex/close-09-release-packaging-final-acceptance` for version, changelog,
+  acceptance checklist, release notes template, and final gates.
+- 2026-05-02: PR-CLOSE-09 release packaging implemented locally and final
+  gates passed before commit: backend tests, frontend tests, deterministic
+  smoke, and clean-machine `make release-gate`.
 
 ## Current Repo State
 

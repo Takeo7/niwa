@@ -166,3 +166,29 @@ def test_routes_from_session_include_public_projects_only() -> None:
             public_enabled=True,
         ),
     ]
+
+
+def test_routes_from_session_empty_when_no_public_projects() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+    with SessionLocal() as session:
+        session.add(
+            Project(
+                slug="private",
+                name="Private",
+                kind="web-deployable",
+                local_path="/tmp/private",
+                public_enabled=False,
+            )
+        )
+        session.commit()
+        routes = routes_from_session(session)
+    engine.dispose()
+
+    assert routes == []

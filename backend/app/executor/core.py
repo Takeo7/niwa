@@ -17,7 +17,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from ..adapters import (
@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_cli_path,
     resolve_timeout,
 )
+from ..config import load_settings
 from ..deployments.service import trigger_deploy
 from ..finalize import finalize_task
 from ..models import (
@@ -54,6 +55,12 @@ ADAPTER_MODEL = "claude-code"
 _TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
 
 
+def _running_run_count(session: Session) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Run).where(Run.status == "running")
+    ) or 0
+
+
 def claim_next_task(session: Session) -> Task | None:
     """Atomically take ownership of the oldest ``queued`` task."""
 
@@ -62,10 +69,20 @@ def claim_next_task(session: Session) -> Task | None:
     session.execute(text("BEGIN IMMEDIATE"))
 
     try:
+        if _running_run_count(session) >= max(1, load_settings().max_concurrent_runs):
+            session.commit()
+            return None
         row = session.execute(
             text(
-                "SELECT id FROM tasks WHERE status = 'queued' "
-                "ORDER BY created_at ASC, id ASC LIMIT 1"
+                "SELECT t.id FROM tasks t "
+                "WHERE t.status = 'queued' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM tasks active "
+                "  JOIN runs r ON r.task_id = active.id "
+                "  WHERE active.project_id = t.project_id "
+                "  AND r.status = 'running'"
+                ") "
+                "ORDER BY t.created_at ASC, t.id ASC LIMIT 1"
             )
         ).first()
         if row is None:

@@ -8,6 +8,7 @@ import {
   Stack,
   Table,
   Tabs,
+  Text,
   TextInput,
   Title,
 } from "@mantine/core";
@@ -297,6 +298,12 @@ function OpsTab() {
       <Title order={4}>Kill switch</Title>
       <Alert color="red" title="Danger">
         Cancels all queued, running and waiting tasks. Use only for incidents.
+      </Alert>
+      <Alert color="blue" title="Operator checks">
+        <Stack gap={4}>
+          <Text size="sm">Run <Code>niwa-executor doctor</Code> before exposing Niwa.</Text>
+          <Text size="sm">Run <Code>make smoke</Code> after upgrades or config changes.</Text>
+        </Stack>
       </Alert>
       <Button
         color="red"

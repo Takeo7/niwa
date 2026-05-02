@@ -18,6 +18,22 @@ PROJECT_PAYLOAD = {
 }
 
 _RPC = {"jsonrpc": "2.0", "id": 1}
+EXPECTED_TOOLS = {
+    "ping",
+    "project_list",
+    "project_get",
+    "task_list",
+    "task_create",
+    "task_attach",
+    "task_status",
+    "task_respond",
+    "task_cancel",
+    "task_retry",
+    "pull_list",
+    "pull_merge",
+    "deploy_trigger",
+    "deployment_status",
+}
 
 
 def _call(client, method: str, params: dict = {}, *, token: str | None = None) -> dict:
@@ -50,6 +66,12 @@ def test_ping_requires_no_auth(client) -> None:
     resp = _call(client, "ping")
     assert resp["result"]["pong"] is True
     assert "version" in resp["result"]
+
+
+def test_initialize_requires_no_auth(client) -> None:
+    resp = _call(client, "initialize")
+    assert resp["result"]["serverInfo"]["name"] == "niwa"
+    assert resp["result"]["capabilities"]["tools"]["listChanged"] is False
 
 
 def test_project_list_requires_token(client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,14 +122,18 @@ def test_token_without_write_scope_denied(client, monkeypatch: pytest.MonkeyPatc
 def test_tools_list(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "tools/list", token="tok")
-    names = [t["name"] for t in resp["result"]["tools"]]
-    assert "ping" in names
-    assert "project_list" in names
-    assert "task_create" in names
-    assert "task_attach" in names
-    assert "task_respond" in names
-    assert "deploy_trigger" in names
-    assert "deployment_status" in names
+    names = {t["name"] for t in resp["result"]["tools"]}
+    assert names == EXPECTED_TOOLS
+    for tool in resp["result"]["tools"]:
+        assert "inputSchema" in tool
+
+
+def test_openclaw_doc_lists_every_tool(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    documented = (Path(__file__).resolve().parents[2] / "docs/integrations/OPENCLAW.md").read_text()
+    resp = _call(client, "tools/list", token="tok")
+    for tool in resp["result"]["tools"]:
+        assert f"`{tool['name']}`" in documented
 
 
 # ── project tools ─────────────────────────────────────────────────────────────
@@ -152,6 +178,31 @@ def test_task_create_and_status(client, monkeypatch: pytest.MonkeyPatch) -> None
     assert status_resp["result"]["status"] in ("queued", "inbox")
 
 
+def test_task_create_queue_limit_returns_stable_error(
+    client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    monkeypatch.setenv("NIWA_MAX_QUEUED_TASKS_PER_PROJECT", "1")
+    client.post("/api/projects", json=PROJECT_PAYLOAD)
+    first = _call(
+        client,
+        "task_create",
+        {"project_slug": "demo", "title": "first"},
+        token="tok",
+    )
+    assert "result" in first
+
+    second = _call(
+        client,
+        "task_create",
+        {"project_slug": "demo", "title": "second"},
+        token="tok",
+    )
+    assert second["error"]["code"] == -32009
+    assert "queue limit" in second["error"]["message"].lower()
+
+
 def test_task_attach_uses_attachment_service_and_redacts_audit_payload(
     client,
     tmp_path: Path,
@@ -186,6 +237,36 @@ def test_task_attach_uses_attachment_service_and_redacts_audit_payload(
     event = db.query(AuditEvent).filter(AuditEvent.action == "mcp.task_attach").one()
     assert "secret-body" not in (event.payload_json or "")
     assert "REDACTED_ATTACHMENT_CONTENT" in (event.payload_json or "")
+
+
+def test_task_attach_size_limit_returns_stable_error(
+    client,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    monkeypatch.setenv("NIWA_MAX_ATTACHMENT_BYTES", "3")
+    client.post("/api/projects", json=_web_project_payload(tmp_path))
+    task = _call(
+        client,
+        "task_create",
+        {"project_slug": "demo", "title": "Attach spec"},
+        token="tok",
+    )["result"]
+
+    resp = _call(
+        client,
+        "task_attach",
+        {
+            "task_id": task["id"],
+            "filename": "too-big.txt",
+            "content": "1234",
+        },
+        token="tok",
+    )
+
+    assert resp["error"]["code"] == -32013
+    assert "attachment exceeds 3 bytes" in resp["error"]["message"]
 
 
 def test_task_list_for_project(client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -319,6 +400,8 @@ def test_missing_required_param_returns_error(client, monkeypatch: pytest.Monkey
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "project_get", {}, token="tok")
     assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "Missing param" in resp["error"]["message"]
 
 
 def test_tools_call_dispatch(client, monkeypatch: pytest.MonkeyPatch) -> None:
