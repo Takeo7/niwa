@@ -38,8 +38,8 @@ Current truth:
   `git status`/`git diff` context. It is not a complete semantic or security
   audit.
 - Pipeline states (`triaging`, `planning`, `waiting_approval`, `executing`,
-  `verifying`, `reviewing`) exist in the model. PR-CLOSE-02 is responsible for
-  making them a real state machine throughout execution.
+  `verifying`, `reviewing`) are emitted as task events during execution.
+  Manual plan approval can pause execution in `waiting_approval`.
 - `waiting_input` is real: user responses are persisted and the executor resumes
   the previous Claude session when a `session_handle` is available.
 
@@ -103,14 +103,15 @@ smoke do not require them.
 
 Niwa exposes HTTP JSON-RPC at `/api/mcp` with Bearer token auth. Current tools
 cover projects, tasks, attachments, pulls, deploy trigger, and deployment
-status. This is not stdio MCP. PR-CLOSE-07 will tighten conformance and add
-client-facing initialize/examples.
+status. The surface includes `initialize`, `ping`, `tools/list`, and
+`tools/call`. This is not stdio MCP and it does not provide streaming.
 
 ### Smoke And Release Gates
 
 `make smoke` is deterministic and uses fake Claude/fake `gh` in an isolated
-environment. It does not require external credentials. PR-CLOSE-04 will add a
-clean-machine release gate and optional smoke-live opt-in for real integrations.
+environment. It does not require external credentials. `make release-gate`
+validates a clean temporary home with strict doctor, backup, restore, tests,
+and smoke. `make smoke-live` is an optional live tools check only.
 
 ### Security Boundary
 

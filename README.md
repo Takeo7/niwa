@@ -109,8 +109,9 @@ It writes:
 Generated `.smoke/` output is ignored by git.
 
 CI runs backend tests, frontend tests, and smoke on Python 3.12 and Node 22.
-`make smoke-live` is optional and skips clearly unless real Claude/GitHub
-credentials are available.
+`make smoke-live` is optional and skips clearly unless `NIWA_SMOKE_LIVE=1` is
+set. With opt-in enabled it is a live tools check for local Claude and GitHub
+CLI auth, not an end-to-end online deployment test.
 
 ## Operator CLI
 

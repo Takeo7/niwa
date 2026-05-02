@@ -28,6 +28,9 @@ permissions, or reports another operational warning.
 
 ## Live Tool Check
 
+`make smoke-live` is intentionally a live tools check, not an end-to-end live
+task smoke. It never runs in deterministic CI gates.
+
 Run:
 
 ```bash
@@ -37,7 +40,17 @@ NIWA_SMOKE_LIVE=1 make smoke-live
 
 Without `NIWA_SMOKE_LIVE=1`, the target exits successfully with a skip message.
 With opt-in enabled, it checks for a real `claude` CLI and authenticated `gh`
-session, then exits non-zero if either is missing.
+session, then exits non-zero if either is missing. It does not create a task,
+open a PR, deploy online, reload Caddy, or prove DNS/TLS.
+
+To summarize recorded deterministic smoke evidence without running gates:
+
+```bash
+python3 scripts/acceptance_summary.py
+```
+
+The summary is informational. It does not replace the literal gate output that
+must be attached to release PRs or release notes.
 
 ## CI
 

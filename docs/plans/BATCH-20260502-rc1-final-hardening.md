@@ -305,3 +305,6 @@ Each PR body must include:
 - 2026-05-02: PR-RC1-HARDEN-01 opened as https://github.com/Takeo7/niwa/pull/178 after backend/frontend/smoke/release-gate passed on `a5d29625031da9608fb69290c83a9e9b11229cb1`.
 - 2026-05-02: PR-RC1-HARDEN-02 implementation started on `codex/rc1-harden-02-reviewer-diff-awareness`.
 - 2026-05-02: PR-RC1-HARDEN-02 added bounded git status/diff context to `claude-code` reviewer prompts, fallback tests, and reviewer capability docs.
+- 2026-05-02: PR-RC1-HARDEN-02 opened as https://github.com/Takeo7/niwa/pull/179 after backend/frontend/smoke passed on `1c2342b1a958cf33ceae2c2a3a07d2d2f84de8fd`.
+- 2026-05-02: PR-RC1-HARDEN-03 implementation started on `codex/rc1-harden-03-acceptance-live-smoke`.
+- 2026-05-02: PR-RC1-HARDEN-03 clarified smoke-live as a live tools check, added acceptance summary output, and removed stale PR-CLOSE/planned claims from current docs.

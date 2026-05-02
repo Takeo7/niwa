@@ -25,6 +25,8 @@ Release-candidate close for Niwa local-first operation.
 Known limitations:
 
 - Real Claude/GitHub/DNS/Caddy infrastructure is opt-in and not required for
-  CI/smoke.
+  CI/smoke. `make smoke-live` is a live tools check, not a full E2E live flow.
 - Niwa is not a strong OS sandbox; Claude runs as the Niwa user.
 - MCP is HTTP JSON-RPC request/response, not stdio or streaming.
+- The `claude-code` reviewer receives bounded diff/evidence context and is not
+  a complete semantic or security audit.
