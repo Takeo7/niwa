@@ -97,7 +97,9 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 - [ ] Generate MCP token with minimal scopes if using MCP
 - [ ] Enable auth before exposing to network
 - [ ] Do NOT use `autonomy_mode = "dangerous"` without understanding implications
-- [ ] Keep `~/.niwa/` permissions restricted (`chmod 700 ~/.niwa`)
+- [ ] Keep `~/.niwa/` permissions restricted (`chmod 700 ~/.niwa`);
+      `make release-gate` runs `niwa-executor doctor --strict` to enforce this
+      for fresh installs
 - [ ] Set explicit `executor.max_concurrent_runs` for your host capacity
 - [ ] Tune `NIWA_MAX_ATTACHMENT_BYTES` and `NIWA_MAX_QUEUED_TASKS_PER_PROJECT`
 - [ ] Review `audit_events` table periodically

@@ -32,7 +32,7 @@ export PATH="${NIWA_HOME}/venv/bin:${PATH}"
 
 run make test
 run make smoke
-run niwa-executor doctor
+run niwa-executor doctor --strict
 
 BACKUP="${TMP_HOME}/niwa-backup.tar.gz"
 RESTORE_DB="${TMP_HOME}/restored.sqlite3"

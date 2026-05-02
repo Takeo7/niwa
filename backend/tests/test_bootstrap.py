@@ -77,6 +77,7 @@ def test_fresh_install_creates_layout_and_config(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
     niwa = tmp_path / ".niwa"
+    assert (niwa.stat().st_mode & 0o777) == 0o700
     assert (niwa / "venv" / "bin" / "python").exists()
     assert (niwa / "logs").is_dir()
     assert (niwa / "data" / "niwa-v1.sqlite3").exists()
@@ -109,6 +110,8 @@ def test_rerun_is_idempotent(tmp_path: Path) -> None:
     first = _run_bootstrap(tmp_path)
     assert first.returncode == 0, first.stderr
 
+    niwa = tmp_path / ".niwa"
+    niwa.chmod(0o755)
     config_path = tmp_path / ".niwa" / "config.toml"
     sentinel = "\n# user-edited-sentinel\n"
     config_path.write_text(config_path.read_text() + sentinel)
@@ -118,6 +121,7 @@ def test_rerun_is_idempotent(tmp_path: Path) -> None:
     second = _run_bootstrap(tmp_path)
     assert second.returncode == 0, second.stderr
 
+    assert (niwa.stat().st_mode & 0o777) == 0o700
     assert sentinel in config_path.read_text(), "config.toml was overwritten"
     # DB stays as a single file after ``alembic upgrade head`` re-runs
     # against an already-migrated schema.
