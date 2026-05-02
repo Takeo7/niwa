@@ -1,10 +1,11 @@
-import { Alert, Anchor, Badge, Button, Group, Loader, Stack, Table, Text } from "@mantine/core";
+import { Alert, Anchor, Badge, Button, Code, Group, Loader, Stack, Table, Text } from "@mantine/core";
 import { IconAlertTriangle, IconRocket } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
 import {
   Deployment,
   DeploymentStatus,
+  healthcheckDeployment,
   listDeployments,
   rollbackDeployment,
   stopDeployment,
@@ -93,6 +94,7 @@ export function DeploysTab({ projectSlug, active }: Props) {
               <Table.Th>Tipo</Table.Th>
               <Table.Th>Estado</Table.Th>
               <Table.Th>URL</Table.Th>
+              <Table.Th>Process</Table.Th>
               <Table.Th>Cuándo</Table.Th>
               <Table.Th />
             </Table.Tr>
@@ -118,9 +120,29 @@ export function DeploysTab({ projectSlug, active }: Props) {
                     "—"
                   )}
                 </Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="xs">{d.pid ? `pid ${d.pid}` : "—"}</Text>
+                    {d.deploy_type === "process" ? (
+                      <Code>{`~/.niwa/deployments/${projectSlug}/${d.id}/process.log`}</Code>
+                    ) : null}
+                  </Stack>
+                </Table.Td>
                 <Table.Td>{new Date(d.created_at).toLocaleString()}</Table.Td>
                 <Table.Td>
                   <Group gap="xs">
+                    {["healthy", "unhealthy", "starting"].includes(d.status) && (
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={async () => {
+                          await healthcheckDeployment(d.id);
+                          refresh();
+                        }}
+                      >
+                        Healthcheck
+                      </Button>
+                    )}
                     {d.status === "healthy" && (
                       <Button
                         size="xs"
