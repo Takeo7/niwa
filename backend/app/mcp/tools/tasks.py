@@ -62,6 +62,8 @@ def task_create(
         )
     except service.ProjectNotFound:
         raise HTTPException(status_code=404, detail=f"Project '{project_slug}' not found")
+    except service.TaskQueueLimitExceeded as exc:
+        raise HTTPException(status_code=409, detail="Project task queue limit reached") from exc
     return _task_dict(task)
 
 
@@ -104,6 +106,8 @@ def task_attach(
             status_code=409,
             detail="Task is not accepting attachments",
         ) from exc
+    except attachment_service.AttachmentTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     return _attachment_dict(row)
 
 
