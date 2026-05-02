@@ -90,6 +90,13 @@ must not be changed until the human reviews this file and gives one explicit:
   `tools/list` contract tests, OpenClaw documentation examples, JSON-RPC
   error assertions, and `scripts/mcp_smoke.py`. MCP targeted tests, backend,
   frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-07 pushed and opened as draft PR #175, stacked on
+  PR-CLOSE-06. PR-CLOSE-08 started on
+  `codex/close-08-ui-operator-closure` for TaskDetail operator timeline,
+  deployment visibility, deploy healthcheck controls, and admin ops hints.
+- 2026-05-02: PR-CLOSE-08 implemented locally with TaskDetail plan/review/run/
+  deployment timeline, deploy healthcheck/process-log UI, admin operator hints,
+  and RTL coverage. Backend, frontend, and smoke gates passed before commit.
 
 ## Current Repo State
 
