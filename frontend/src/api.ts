@@ -51,6 +51,7 @@ export type ProjectKind = "web-deployable" | "library" | "script";
 export type AutonomyMode = "safe" | "dangerous";
 export type DeployType = "static" | "process";
 export type DeployTrigger = "manual" | "on_done" | "on_merge";
+export type PlanApprovalMode = "auto" | "manual";
 
 export interface Project {
   id: number;
@@ -68,6 +69,7 @@ export interface Project {
   healthcheck_path: string | null;
   deploy_trigger: DeployTrigger;
   public_enabled: boolean;
+  plan_approval_mode: PlanApprovalMode;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +89,7 @@ export interface ProjectCreatePayload {
   healthcheck_path?: string | null;
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
+  plan_approval_mode?: PlanApprovalMode;
 }
 
 export interface ProjectPatchPayload {
@@ -103,6 +106,7 @@ export interface ProjectPatchPayload {
   healthcheck_path?: string | null;
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
+  plan_approval_mode?: PlanApprovalMode;
 }
 
 // ---- Tasks wire types (mirror backend app/schemas/task.py) --------------
@@ -145,7 +149,7 @@ export interface TaskCreatePayload {
 export interface TaskPlan {
   id: number;
   task_id: number;
-  status: "ready";
+  status: "ready" | "approved" | "rejected" | "superseded";
   summary: string;
   steps: string[];
   risks: string[];

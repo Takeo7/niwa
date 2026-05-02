@@ -34,6 +34,10 @@ class Project(Base):
             "deploy_trigger IN ('manual', 'on_done', 'on_merge')",
             name="ck_projects_deploy_trigger",
         ),
+        CheckConstraint(
+            "plan_approval_mode IN ('auto', 'manual')",
+            name="ck_projects_plan_approval_mode",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -59,6 +63,9 @@ class Project(Base):
     )
     public_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="0"
+    )
+    plan_approval_mode: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="auto"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

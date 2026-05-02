@@ -211,6 +211,31 @@ def delete_task(
 
 
 @tasks_router.post(
+    "/{task_id}/approve-plan",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("task:write"))],
+)
+def approve_task_plan(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Approve the latest ready plan for a task in ``waiting_approval``."""
+    try:
+        task = service.approve_task_plan(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    except service.TaskPlanNotApprovable:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="task plan cannot be approved",
+        )
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.post(
     "/{task_id}/respond",
     response_model=TaskRead,
     dependencies=[Depends(require_scope("task:write"))],

@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 
-PlanStatus = Literal["ready"]
+PlanStatus = Literal["ready", "approved", "rejected", "superseded"]
 ReviewDecision = Literal["approved", "request_changes"]
 
 

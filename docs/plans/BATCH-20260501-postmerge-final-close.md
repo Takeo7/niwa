@@ -37,6 +37,14 @@ must not be changed until the human reviews this file and gives one explicit:
 - 2026-05-01: PR-CLOSE-01 gates passed locally: obsolete-claim grep checks,
   `cd backend && pytest -q`, `cd frontend && npm test -- --run`, and
   `make smoke`.
+- 2026-05-02: PR-CLOSE-02 initially exceeded the 400 LOC PR cap, so it was
+  split into stacked PRs. PR-CLOSE-02a covers explicit executor states,
+  project plan approval mode, `approve-plan` API, and smoke assertions for
+  plan/review artifacts. PR-CLOSE-02b will cover bounded review
+  request-changes loops and the richer operator UI/settings follow-up.
+- 2026-05-02: PR-CLOSE-02a targeted gates passed locally for models,
+  executor, task/project APIs, and the frontend test suite. Full PR gates are
+  being measured before commit/push.
 
 ## Current Repo State
 

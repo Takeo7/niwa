@@ -1,7 +1,7 @@
 """Executor pipeline — claim queued tasks and drive the Claude adapter.
 
 * ``claim_next_task`` atomically flips the oldest ``queued`` task to
-  ``running`` using ``BEGIN IMMEDIATE`` + conditional ``UPDATE``.
+  ``triaging`` using ``BEGIN IMMEDIATE`` + conditional ``UPDATE``.
 * ``run_adapter`` creates the ``Run``, streams ``AdapterEvent`` rows into
   ``run_events`` (one commit per event — see PR-V1-07 brief, batch is a
   follow-up tunable), and finalizes run+task based on ``adapter.outcome``.
@@ -75,7 +75,7 @@ def claim_next_task(session: Session) -> Task | None:
         result = session.execute(
             update(Task)
             .where(Task.id == task_id, Task.status == "queued")
-            .values(status="running")
+            .values(status="triaging")
         )
         if result.rowcount == 0:
             session.commit()
@@ -86,7 +86,7 @@ def claim_next_task(session: Session) -> Task | None:
                 task_id=task_id,
                 kind="status_changed",
                 message=None,
-                payload_json=json.dumps({"from": "queued", "to": "running"}),
+                payload_json=json.dumps({"from": "queued", "to": "triaging"}),
             )
         )
         session.commit()
@@ -113,6 +113,7 @@ def run_adapter(session: Session, task: Task) -> Run:
 
     project = session.get(Project, task.project_id)
     artifact_root = project.local_path if project is not None else ""
+    _set_task_status(session, task, "executing", reason="adapter_start")
 
     run = Run(
         task_id=task.id,
@@ -223,6 +224,7 @@ def run_adapter(session: Session, task: Task) -> Run:
         session.refresh(run)
         return run
 
+    _set_task_status(session, task, "verifying", reason="verify_start")
     result = verify_run(
         session, run, task, project,
         cwd=artifact_root or ".",
@@ -234,6 +236,7 @@ def run_adapter(session: Session, task: Task) -> Run:
 
     review = None
     if result.outcome != "needs_input":
+        _set_task_status(session, task, "reviewing", reason="review_start")
         review = _create_task_review(session, task, run, result)
 
     # PR-V1-13: safe-mode finalize runs on verified runs only. It is
@@ -294,6 +297,13 @@ def process_pending(session: Session) -> int:
             break
 
         project = session.get(Project, task.project_id)
+        approved_plan = _latest_task_plan(session, task.id, status="approved")
+        if approved_plan is not None:
+            run_adapter(session, task)
+            processed += 1
+            logger.info("ran adapter for approved task_id=%s", task.id)
+            continue
+
         try:
             decision = triage_task(project, task)
         except TriageError as exc:
@@ -308,11 +318,30 @@ def process_pending(session: Session) -> int:
                 task.id,
                 len(decision.subtasks),
             )
+            _set_task_status(session, task, "executing", reason="triage_split")
             _apply_split(session, task, decision)
             processed += 1
             continue
 
-        _create_task_plan(session, task)
+        _set_task_status(session, task, "planning", reason="plan_start")
+        approval_mode = (
+            getattr(project, "plan_approval_mode", "auto") if project else "auto"
+        ) or "auto"
+        plan = _create_task_plan(
+            session,
+            task,
+            status="ready" if approval_mode == "manual" else "approved",
+        )
+        if approval_mode == "manual":
+            _set_task_status(
+                session,
+                task,
+                "waiting_approval",
+                reason="plan_waiting_approval",
+            )
+            logger.info("task_id=%s waiting for plan approval plan_id=%s", task.id, plan.id)
+            processed += 1
+            continue
 
         # ``run_adapter`` swallows adapter exceptions internally (see its
         # try/except/finally), so nothing we handle here would ever fire.
@@ -320,6 +349,45 @@ def process_pending(session: Session) -> int:
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
     return processed
+
+
+def _set_task_status(
+    session: Session,
+    task: Task,
+    new_status: str,
+    *,
+    reason: str | None = None,
+) -> None:
+    """Set task status and append the matching ``status_changed`` event."""
+
+    from_status = task.status
+    if from_status == new_status:
+        return
+    task.status = new_status
+    payload: dict[str, object] = {"from": from_status, "to": new_status}
+    if reason:
+        payload["reason"] = reason
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps(payload),
+        )
+    )
+    session.commit()
+
+
+def _latest_task_plan(
+    session: Session,
+    task_id: int,
+    *,
+    status: str | None = None,
+) -> TaskPlan | None:
+    query = session.query(TaskPlan).filter(TaskPlan.task_id == task_id)
+    if status is not None:
+        query = query.filter(TaskPlan.status == status)
+    return query.order_by(TaskPlan.id.desc()).first()
 
 
 def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None:
@@ -365,7 +433,12 @@ def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None
     session.commit()
 
 
-def _create_task_plan(session: Session, task: Task) -> TaskPlan:
+def _create_task_plan(
+    session: Session,
+    task: Task,
+    *,
+    status: str = "approved",
+) -> TaskPlan:
     """Persist a deterministic JSON plan before code execution begins."""
 
     payload = {
@@ -380,7 +453,7 @@ def _create_task_plan(session: Session, task: Task) -> TaskPlan:
     }
     plan = TaskPlan(
         task_id=task.id,
-        status="ready",
+        status=status,
         summary=payload["summary"],
         steps_json=json.dumps(payload["steps"]),
         risks_json=json.dumps(payload["risks"]),
@@ -399,6 +472,7 @@ def _create_task_plan(session: Session, task: Task) -> TaskPlan:
                     "event": "plan_created",
                     "plan_id": plan.id,
                     "planner": plan.planner,
+                    "status": plan.status,
                 }
             ),
         )
@@ -453,11 +527,11 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
     )
     session.add(
         RunEvent(
-                run_id=run.id,
-                event_type="review",
-                payload_json=_event_payload(payload, sort_keys=True),
-            )
+            run_id=run.id,
+            event_type="review",
+            payload_json=_event_payload(payload, sort_keys=True),
         )
+    )
     session.commit()
     session.refresh(review)
     return review

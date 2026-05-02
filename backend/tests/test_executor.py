@@ -193,6 +193,41 @@ def test_process_pending_single_task(
     assert review.decision == "approved"
 
 
+def test_manual_plan_approval_blocks_until_approved(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.tasks import approve_task_plan
+
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    project = _make_project(
+        session,
+        local_path=git_project,
+        plan_approval_mode="manual",
+    )
+    task = _make_task(session, project, title="manual approval")
+
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    waiting = session.get(Task, task.id)
+    assert waiting is not None
+    assert waiting.status == "waiting_approval"
+    assert session.query(Run).filter(Run.task_id == task.id).count() == 0
+    plan = session.query(TaskPlan).filter(TaskPlan.task_id == task.id).one()
+    assert plan.status == "ready"
+
+    approve_task_plan(session, task.id)
+    assert process_pending(session) == 1
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    session.refresh(plan)
+    assert plan.status == "approved"
+
 def test_on_done_deploy_trigger_creates_deployment(
     session: Session,
     git_project: Path,
@@ -362,15 +397,23 @@ def test_task_writes_status_transitions(
         .order_by(TaskEvent.id.asc())
         .all()
     )
-    # Two status_changed events written by the executor:
-    #   queued → running, running → done.
+    # Explicit pipeline status events written by the executor.
     status_events = [e for e in events if e.kind == "status_changed"]
-    assert len(status_events) == 2
-    payloads = [e.payload_json for e in status_events]
-    assert '"from": "queued"' in payloads[0]
-    assert '"to": "running"' in payloads[0]
-    assert '"from": "running"' in payloads[1]
-    assert '"to": "done"' in payloads[1]
+    transitions = [
+        (
+            json.loads(e.payload_json or "{}").get("from"),
+            json.loads(e.payload_json or "{}").get("to"),
+        )
+        for e in status_events
+    ]
+    assert transitions == [
+        ("queued", "triaging"),
+        ("triaging", "planning"),
+        ("planning", "executing"),
+        ("executing", "verifying"),
+        ("verifying", "reviewing"),
+        ("reviewing", "done"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +449,7 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
     # SQLite may raise ``OperationalError: database is locked`` on the loser
     # when two BEGIN IMMEDIATE collide; we treat that as "lost the race".
     # The invariant is: no more than one winner, and the task ends in
-    # ``running``.
+    # ``triaging``.
     winners = [r for r in results if r is not None]
     assert len(winners) <= 1, "two threads claimed the same task"
 
@@ -419,11 +462,11 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
         if err is not None:
             assert isinstance(err, OperationalError), err
 
-    # Final state: the task is ``running`` (one of the threads did claim it).
+    # Final state: the task is in the first explicit pipeline state.
     with Session_() as s:
         final = s.get(Task, task_id)
         assert final is not None
-        assert final.status == "running"
+        assert final.status == "triaging"
 
 
 # ---------------------------------------------------------------------------
@@ -728,7 +771,7 @@ def test_process_pending_finalizes_verified_run_with_gh_stub(
 # ---------------------------------------------------------------------------
 #
 # Before PR-V1-23 ``_apply_split`` closed the parent ``done`` immediately.
-# Now the parent stays ``running`` after the split and is promoted only
+# Now the parent stays active after the split and is promoted only
 # when every subtask has reached a terminal state. The four tests below
 # pin the contract: one against the split path, three against
 # ``_finalize`` which is where the aggregation hook lives.
@@ -762,8 +805,8 @@ def _make_parent_with_subtasks(
     return parent, subtasks
 
 
-def test_parent_stays_running_after_split(session: Session) -> None:
-    """``_apply_split`` must leave the parent in ``running`` — the
+def test_parent_stays_active_after_split(session: Session) -> None:
+    """``_apply_split`` must leave the parent active — the
     terminal transition now ships via ``_maybe_promote_parent`` when
     the subtasks finish."""
 
@@ -771,7 +814,7 @@ def test_parent_stays_running_after_split(session: Session) -> None:
     from app.triage import TriageDecision
 
     project = _make_project(session)
-    parent = _make_task(session, project, status="running", title="big change")
+    parent = _make_task(session, project, status="executing", title="big change")
 
     decision = TriageDecision(
         kind="split",
@@ -784,7 +827,7 @@ def test_parent_stays_running_after_split(session: Session) -> None:
     session.expire_all()
     refreshed = session.get(Task, parent.id)
     assert refreshed is not None
-    assert refreshed.status == "running"
+    assert refreshed.status == "executing"
     assert refreshed.completed_at is None
 
     subtasks = (

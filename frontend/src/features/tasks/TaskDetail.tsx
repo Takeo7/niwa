@@ -108,6 +108,7 @@ export function TaskDetail({ taskId }: Props) {
       {planQuery.data ? (
         <Stack gap="xs">
           <Title order={4}>Plan</Title>
+          <Badge variant="light" w="fit-content">{planQuery.data.status}</Badge>
           <Text size="sm">{planQuery.data.summary}</Text>
           {planQuery.data.steps.map((step, index) => (
             <Text key={`${index}-${step}`} size="sm">
