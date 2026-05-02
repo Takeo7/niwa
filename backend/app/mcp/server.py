@@ -99,6 +99,7 @@ def _http_to_rpc_error(exc: HTTPException) -> JsonRpcError:
         403: -32003,
         404: -32004,
         409: -32009,
+        413: -32013,
         502: -32052,
         503: -32053,
         504: -32054,

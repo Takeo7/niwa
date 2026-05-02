@@ -543,6 +543,66 @@ def test_claim_is_atomic_under_race(engine, Session_) -> None:
         assert final.status == "triaging"
 
 
+def test_claim_skips_project_with_running_run(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text("[executor]\nmax_concurrent_runs = 2\n", encoding="utf-8")
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(config))
+
+    busy_project = _make_project(session, slug="busy")
+    free_project = _make_project(session, slug="free")
+    active = _make_task(session, busy_project, status="executing", title="active")
+    same_project = _make_task(session, busy_project, title="blocked")
+    other_project = _make_task(session, free_project, title="claimable")
+    session.add(
+        Run(
+            task_id=active.id,
+            status="running",
+            model="fake",
+            artifact_root=str(tmp_path / "busy"),
+        )
+    )
+    session.commit()
+
+    claimed = claim_next_task(session)
+
+    assert claimed is not None
+    assert claimed.id == other_project.id
+    session.expire_all()
+    blocked = session.get(Task, same_project.id)
+    assert blocked is not None
+    assert blocked.status == "queued"
+
+
+def test_claim_respects_max_concurrent_runs(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text("[executor]\nmax_concurrent_runs = 1\n", encoding="utf-8")
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(config))
+
+    first_project = _make_project(session, slug="first")
+    second_project = _make_project(session, slug="second")
+    active = _make_task(session, first_project, status="executing", title="active")
+    _make_task(session, second_project, title="blocked by concurrency")
+    session.add(
+        Run(
+            task_id=active.id,
+            status="running",
+            model="fake",
+            artifact_root=str(tmp_path / "active"),
+        )
+    )
+    session.commit()
+
+    assert claim_next_task(session) is None
+
+
 # ---------------------------------------------------------------------------
 # Git workspace failure — non-git local_path (PR-V1-08)
 # ---------------------------------------------------------------------------

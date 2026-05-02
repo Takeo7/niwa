@@ -9,8 +9,9 @@ the task itself — the API should never see an event without its task.
 from __future__ import annotations
 
 import json
+import os
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Project, Task, TaskEvent, TaskPlan
@@ -56,6 +57,18 @@ class TaskPlanNotApprovable(Exception):
     """Raised when a task has no latest ready plan to approve."""
 
 
+class TaskQueueLimitExceeded(Exception):
+    """Raised when a project already has too many queued tasks."""
+
+
+def _max_queued_tasks_per_project() -> int:
+    raw = os.environ.get("NIWA_MAX_QUEUED_TASKS_PER_PROJECT", "100")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 100
+
+
 def list_tasks_for_project(session: Session, slug: str) -> list[Task]:
     """Return every task for ``slug`` ordered by creation time.
 
@@ -92,6 +105,13 @@ def create_task(session: Session, slug: str, payload: TaskCreate) -> Task:
     """
 
     project = get_project(session, slug)
+    queued = session.scalar(
+        select(func.count())
+        .select_from(Task)
+        .where(Task.project_id == project.id, Task.status == "queued")
+    ) or 0
+    if queued >= _max_queued_tasks_per_project():
+        raise TaskQueueLimitExceeded(project.slug)
 
     # The DB column is NOT NULL (PR-V1-02 migration); store an empty string
     # when the caller omits the description. TaskRead exposes the field as
@@ -279,6 +299,7 @@ __all__ = [
     "TaskNotCancellable",
     "TaskNotDeletable",
     "TaskNotFound",
+    "TaskQueueLimitExceeded",
     "TaskNotRetryable",
     "TaskNotWaitingInput",
     "TaskPlanNotApprovable",

@@ -74,6 +74,14 @@ must not be changed until the human reviews this file and gives one explicit:
 - 2026-05-02: PR-CLOSE-05 implemented locally with added Caddy/CLI coverage
   and `docs/runbooks/ONLINE_PUBLICATION.md`. Targeted publication tests,
   backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-05 pushed and opened as draft PR #173, stacked on
+  PR-CLOSE-04. PR-CLOSE-06 started on
+  `codex/close-06-security-locks-limits-sandbox` for operational locks,
+  queue/attachment limits, and the security model update.
+- 2026-05-02: PR-CLOSE-06 implemented locally with queued-task limits,
+  attachment size limits, run-level project/concurrency claim guards, MCP
+  error mapping, backend tests, and `docs/SECURITY.md` updates. Targeted
+  security/ops tests, backend, frontend, and smoke gates passed before commit.
 
 ## Current Repo State
 
