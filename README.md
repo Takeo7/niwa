@@ -149,11 +149,10 @@ running Niwa. Before exposing Niwa beyond localhost, enable auth with
 
 ## Known Gaps
 
-- Pipeline states exist but PR-CLOSE-02 must make the full state machine,
-  manual plan approval, and bounded `request_changes` loop real.
-- Planner/reviewer real LLM mode is planned for PR-CLOSE-03.
-- Clean-machine release gates and optional smoke-live are planned for
-  PR-CLOSE-04.
+- Pipeline states, manual plan approval, bounded `request_changes`, and
+  configurable planner/reviewer modes are implemented in the close PR stack.
+- Clean-machine `make release-gate` and optional `make smoke-live` are
+  available for release candidates.
 - Online publication has deterministic Caddy support, but DNS/TLS/Caddy reloads
   remain manual operator steps.
 - MCP is an HTTP JSON-RPC surface, not stdio. PR-CLOSE-07 will add stricter MCP

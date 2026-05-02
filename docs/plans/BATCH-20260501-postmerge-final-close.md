@@ -59,6 +59,14 @@ must not be changed until the human reviews this file and gives one explicit:
   `claude-code` planner/reviewer modes, fake-CLI tests for valid/invalid
   JSON, and executor integration. Full gates passed before commit and will be
   repeated on the pushed SHA.
+- 2026-05-02: PR-CLOSE-03 pushed and opened as draft PR #171, stacked on
+  PR-CLOSE-02b. PR-CLOSE-04 started on
+  `codex/close-04-clean-machine-release-gates` for `make release-gate`, manual
+  CI dispatch, and opt-in `make smoke-live`.
+- 2026-05-02: PR-CLOSE-04 release-gate initially exposed the existing
+  timing-sensitive runs SSE test; the test was stabilized and `make
+  release-gate` then passed with clean HOME bootstrap, `make test`,
+  `make smoke`, doctor, backup, and restore.
 
 ## Current Repo State
 
