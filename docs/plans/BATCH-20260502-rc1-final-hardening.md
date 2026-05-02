@@ -302,3 +302,6 @@ Each PR body must include:
 - 2026-05-02: Batch plan created after reading required files. Waiting for explicit human `go ahead` before any product-code changes.
 - 2026-05-02: PR-RC1-HARDEN-01 implementation started on `codex/rc1-harden-01-release-gate-permissions`.
 - 2026-05-02: PR-RC1-HARDEN-01 updated bootstrap to enforce `0700` on `NIWA_HOME`, switched release gate to `doctor --strict`, and added bootstrap/docs coverage.
+- 2026-05-02: PR-RC1-HARDEN-01 opened as https://github.com/Takeo7/niwa/pull/178 after backend/frontend/smoke/release-gate passed on `a5d29625031da9608fb69290c83a9e9b11229cb1`.
+- 2026-05-02: PR-RC1-HARDEN-02 implementation started on `codex/rc1-harden-02-reviewer-diff-awareness`.
+- 2026-05-02: PR-RC1-HARDEN-02 added bounded git status/diff context to `claude-code` reviewer prompts, fallback tests, and reviewer capability docs.

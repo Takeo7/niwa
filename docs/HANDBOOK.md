@@ -56,16 +56,18 @@ Campos de run relevantes:
 Flujo real hoy:
 
 ```
-claim queued -> triage -> fake-json TaskPlan -> adapter execution ->
-verify_run -> fake-json TaskReview -> finalize_task -> optional deploy
+claim queued -> triage -> TaskPlan -> adapter execution -> verify_run ->
+TaskReview -> finalize_task -> optional deploy
 ```
 
 Limitación importante: aunque `Task.status` acepta `triaging`, `planning`,
 `waiting_approval`, `executing`, `verifying` y `reviewing`, el executor todavía
 no los usa como state machine completa. PR-CLOSE-02 debe cerrar esa brecha.
 
-Planner/reviewer son deterministas. PR-CLOSE-03 debe añadir modo configurable
-real LLM manteniendo fake-json como default para tests/smoke.
+Planner/reviewer usan `fake-json` por defecto para tests/smoke y pueden usar
+`claude-code` si el operador lo configura. El reviewer `claude-code` recibe
+evidencia de verificación y un contexto acotado de `git status`/`git diff`; no
+promete una auditoría semántica o de seguridad completa.
 
 ### Auth/scopes por superficie
 

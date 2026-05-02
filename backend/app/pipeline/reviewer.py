@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.config import load_settings
 from app.pipeline.planner import _call_claude_json, _required_str, _str_list
+
+_DIFF_CONTEXT_LIMIT = 20_000
+_GIT_TIMEOUT_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -84,12 +89,59 @@ def _forced_decision(iteration: int) -> str | None:
 
 def _review_prompt(task: Any, run: Any, verification: Any) -> str:
     evidence = json.dumps(verification.evidence, sort_keys=True)
+    diff_context = _diff_context(getattr(run, "artifact_root", None))
     return f"""You are Niwa's reviewer. Return JSON only in a ```json fence`.
 Task: {task.title}
 Run id: {run.id}
 Verification passed: {verification.passed}
 Evidence: {evidence}
+Git change context:
+{diff_context}
 
 Schema:
 {{"decision":"approved|request_changes", "summary":"...", "findings":["..."]}}
 """
+
+
+def _diff_context(artifact_root: str | None) -> str:
+    if not artifact_root:
+        return "unavailable: run has no artifact_root"
+    root = Path(artifact_root)
+    if not root.exists():
+        return f"unavailable: artifact_root does not exist: {root}"
+
+    sections = [
+        ("git status --short", _git_output(root, ["status", "--short"])),
+        ("git diff --stat", _git_output(root, ["diff", "--stat"])),
+        (
+            "git diff --patch --no-color --no-ext-diff",
+            _git_output(root, ["diff", "--patch", "--no-color", "--no-ext-diff"]),
+        ),
+    ]
+    text = "\n\n".join(f"{title}:\n{body or '(none)'}" for title, body in sections)
+    if len(text) <= _DIFF_CONTEXT_LIMIT:
+        return text
+    return (
+        text[:_DIFF_CONTEXT_LIMIT]
+        + f"\n\n[diff context truncated at {_DIFF_CONTEXT_LIMIT} characters]"
+    )
+
+
+def _git_output(root: Path, args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "unavailable: git binary not found"
+    except subprocess.TimeoutExpired:
+        return f"unavailable: git command timed out after {_GIT_TIMEOUT_SECONDS}s"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        message = detail[0] if detail else f"exit {result.returncode}"
+        return f"unavailable: {message}"
+    return result.stdout.strip()
