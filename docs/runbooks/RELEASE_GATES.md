@@ -15,12 +15,16 @@ The gate creates a temporary `HOME`, runs `./bootstrap.sh` with
 
 - `make test`
 - `make smoke`
-- `niwa-executor doctor`
+- `niwa-executor doctor --strict`
 - `niwa-executor backup`
 - `niwa-executor restore --yes`
 
 It does not require real Claude, GitHub auth, DNS, Caddy, or external network
 services beyond normal package installation.
+
+`bootstrap.sh` must leave `~/.niwa` with `0700` permissions. The strict doctor
+step fails the release gate if the temporary `NIWA_HOME` is missing, has loose
+permissions, or reports another operational warning.
 
 ## Live Tool Check
 

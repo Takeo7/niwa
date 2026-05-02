@@ -39,6 +39,8 @@ fi
     || _die "python 3.11+ required, found $(${PYTHON_BIN} --version 2>&1)"
 
 # 2. Layout.
+mkdir -p "${NIWA_HOME}"
+chmod 700 "${NIWA_HOME}"
 mkdir -p "${NIWA_HOME}/logs" "${NIWA_HOME}/data"
 
 # 3. Venv.
