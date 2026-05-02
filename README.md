@@ -8,10 +8,10 @@ deployments through the Claude Code CLI.
 machine or self-hosted VPS. Smoke, auth scopes, deployments, MCP HTTP JSON-RPC,
 Caddy config generation, task plans/reviews, doctor, backup, and restore exist.
 
-Important truth boundary: the current planner and reviewer are deterministic
-`fake-json` components. They persist `TaskPlan` and `TaskReview` evidence, but
-they are not real LLM planning/review yet. Configurable real LLM
-planner/reviewer support is planned in PR-CLOSE-03.
+Important truth boundary: planner and reviewer default to deterministic
+`fake-json` for tests and smoke. Operators can opt into configurable
+`claude-code` planner/reviewer modes; invalid LLM JSON falls back safely rather
+than leaving runs hanging.
 
 See `docs/SPEC.md` for the product contract and `docs/HANDBOOK.md` for the code
 map.
@@ -92,6 +92,7 @@ Local gates:
 ```bash
 make test
 make smoke
+make release-gate
 ```
 
 `make smoke` is deterministic: it uses fake Claude and fake `gh`, an isolated
@@ -105,6 +106,8 @@ It writes:
 Generated `.smoke/` output is ignored by git.
 
 CI runs backend tests, frontend tests, and smoke on Python 3.12 and Node 22.
+`make smoke-live` is optional and skips clearly unless real Claude/GitHub
+credentials are available.
 
 ## Operator CLI
 
@@ -149,14 +152,12 @@ running Niwa. Before exposing Niwa beyond localhost, enable auth with
 
 ## Known Gaps
 
-- Pipeline states, manual plan approval, bounded `request_changes`, and
-  configurable planner/reviewer modes are implemented in the close PR stack.
-- Clean-machine `make release-gate` and optional `make smoke-live` are
-  available for release candidates.
+- `fake-json` remains the default planner/reviewer for deterministic local and
+  CI gates; real `claude-code` modes require operator CLI credentials.
 - Online publication has deterministic Caddy support, but DNS/TLS/Caddy reloads
   remain manual operator steps.
-- MCP is an HTTP JSON-RPC surface, not stdio. PR-CLOSE-07 will add stricter MCP
-  conformance (`initialize`, stable examples, enriched status).
+- MCP is HTTP JSON-RPC request/response, not stdio or streaming MCP.
+- Niwa does not provide a strong OS sandbox; Claude runs as the Niwa user.
 
 ## Architecture
 
