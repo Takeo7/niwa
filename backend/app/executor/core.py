@@ -132,7 +132,11 @@ def run_adapter(session: Session, task: Task) -> Run:
     # ``git_setup_failed`` — the task never gets to mutate the working
     # tree, and ``task.branch_name`` stays ``None``.
     try:
-        branch_name = prepare_task_branch(artifact_root or ".", task)
+        branch_name = prepare_task_branch(
+            artifact_root or ".",
+            task,
+            allow_dirty_existing_branch=bool(task.branch_name),
+        )
     except GitWorkspaceError as exc:
         logger.warning("git setup failed for task_id=%s: %s", task.id, exc)
         session.add(
@@ -238,6 +242,10 @@ def run_adapter(session: Session, task: Task) -> Run:
     if result.outcome != "needs_input":
         _set_task_status(session, task, "reviewing", reason="review_start")
         review = _create_task_review(session, task, run, result)
+        if result.passed and review.decision == "request_changes":
+            if _handle_review_request_changes(session, task, run, project, review):
+                session.refresh(run)
+                return run
 
     # PR-V1-13: safe-mode finalize runs on verified runs only. It is
     # best-effort — ``finalize_task`` swallows subprocess failures and
@@ -485,18 +493,25 @@ def _create_task_plan(
 def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskReview:
     """Persist a deterministic JSON review after verification completes."""
 
-    decision = "approved" if result.passed else "request_changes"
+    iteration = _next_review_iteration(session, task.id)
+    decision = _fake_review_decision(iteration)
+    if decision is None:
+        decision = "approved" if result.passed else "request_changes"
     findings = [] if result.passed else [
         f"Verification did not pass: {result.error_code or result.outcome}"
     ]
     payload = {
         "decision": decision,
         "summary": (
+            "Review requested changes before finalize."
+            if decision == "request_changes" and result.passed
+            else
             "Verification passed; finalize is allowed."
             if result.passed
             else "Verification failed; changes are required before finalize."
         ),
         "findings": findings,
+        "iteration": iteration,
         "reviewer": "fake-json",
         "verification": result.evidence,
     }
@@ -504,6 +519,7 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
         task_id=task.id,
         run_id=run.id,
         decision=decision,
+        iteration=iteration,
         summary=payload["summary"],
         findings_json=json.dumps(findings),
         reviewer="fake-json",
@@ -535,6 +551,79 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
     session.commit()
     session.refresh(review)
     return review
+
+
+def _next_review_iteration(session: Session, task_id: int) -> int:
+    latest = (
+        session.query(TaskReview)
+        .filter(TaskReview.task_id == task_id)
+        .order_by(TaskReview.iteration.desc(), TaskReview.id.desc())
+        .first()
+    )
+    return 1 if latest is None else latest.iteration + 1
+
+
+def _fake_review_decision(iteration: int) -> str | None:
+    raw = os.environ.get("NIWA_FAKE_REVIEW_DECISIONS", "").strip()
+    if not raw:
+        return None
+    decisions = [item.strip() for item in raw.split(",") if item.strip()]
+    if iteration > len(decisions):
+        return None
+    decision = decisions[iteration - 1]
+    if decision not in {"approved", "request_changes"}:
+        return None
+    return decision
+
+
+def _handle_review_request_changes(
+    session: Session,
+    task: Task,
+    run: Run,
+    project: Project | None,
+    review: TaskReview,
+) -> bool:
+    """Return True when the task was requeued or exhausted by review."""
+
+    max_iterations = (
+        getattr(project, "max_review_iterations", 1) if project else 1
+    )
+    if review.iteration <= max_iterations:
+        now = datetime.now(timezone.utc)
+        run.finished_at = now
+        run.status = "completed"
+        run.outcome = "review_request_changes"
+        session.add(
+            RunEvent(
+                run_id=run.id,
+                event_type="review_request_changes",
+                payload_json=_event_payload(
+                    {
+                        "review_id": review.id,
+                        "iteration": review.iteration,
+                        "max_review_iterations": max_iterations,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        _set_task_status(
+            session,
+            task,
+            "queued",
+            reason="review_request_changes",
+        )
+        return True
+
+    _finalize(
+        session,
+        task,
+        run,
+        outcome="review_changes_exhausted",
+        exit_code=run.exit_code,
+        error_code="review_changes_exhausted",
+    )
+    return True
 
 
 def _maybe_trigger_deploy(

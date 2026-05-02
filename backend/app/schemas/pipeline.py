@@ -33,6 +33,7 @@ class TaskReviewRead(BaseModel):
     task_id: int
     run_id: int | None
     decision: ReviewDecision
+    iteration: int
     summary: str
     findings: list[str]
     reviewer: str

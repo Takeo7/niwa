@@ -167,6 +167,7 @@ def test_get_task_plan_and_review(client, app) -> None:
     review_resp = client.get(f"/api/tasks/{created['id']}/review")
     assert review_resp.status_code == 200
     assert review_resp.json()["decision"] == "approved"
+    assert review_resp.json()["iteration"] == 1
 
 
 def test_approve_plan_requeues_waiting_approval_task(client, app) -> None:

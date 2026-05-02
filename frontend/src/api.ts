@@ -70,6 +70,7 @@ export interface Project {
   deploy_trigger: DeployTrigger;
   public_enabled: boolean;
   plan_approval_mode: PlanApprovalMode;
+  max_review_iterations: number;
   created_at: string;
   updated_at: string;
 }
@@ -90,6 +91,7 @@ export interface ProjectCreatePayload {
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
   plan_approval_mode?: PlanApprovalMode;
+  max_review_iterations?: number;
 }
 
 export interface ProjectPatchPayload {
@@ -107,6 +109,7 @@ export interface ProjectPatchPayload {
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
   plan_approval_mode?: PlanApprovalMode;
+  max_review_iterations?: number;
 }
 
 // ---- Tasks wire types (mirror backend app/schemas/task.py) --------------
@@ -163,6 +166,7 @@ export interface TaskReview {
   task_id: number;
   run_id: number | null;
   decision: "approved" | "request_changes";
+  iteration: number;
   summary: string;
   findings: string[];
   reviewer: string;

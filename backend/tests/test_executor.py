@@ -191,6 +191,7 @@ def test_process_pending_single_task(
     review = session.query(TaskReview).filter(TaskReview.task_id == task.id).one()
     assert review.run_id == run.id
     assert review.decision == "approved"
+    assert review.iteration == 1
 
 
 def test_manual_plan_approval_blocks_until_approved(
@@ -227,6 +228,79 @@ def test_manual_plan_approval_blocks_until_approved(
     assert refreshed.status == "done"
     session.refresh(plan)
     assert plan.status == "approved"
+
+
+def test_request_changes_review_retries_once_then_approves(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    monkeypatch.setenv("NIWA_FAKE_REVIEW_DECISIONS", "request_changes,approved")
+    project = _make_project(
+        session,
+        local_path=git_project,
+        max_review_iterations=1,
+    )
+    task = _make_task(session, project, title="review loop")
+
+    assert process_pending(session) == 2
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "done"
+    reviews = (
+        session.query(TaskReview)
+        .filter(TaskReview.task_id == task.id)
+        .order_by(TaskReview.iteration.asc())
+        .all()
+    )
+    assert [(r.iteration, r.decision) for r in reviews] == [
+        (1, "request_changes"),
+        (2, "approved"),
+    ]
+    runs = (
+        session.query(Run)
+        .filter(Run.task_id == task.id)
+        .order_by(Run.id.asc())
+        .all()
+    )
+    assert [r.outcome for r in runs] == ["review_request_changes", "verified"]
+
+
+def test_request_changes_review_exhausts_limit(
+    session: Session,
+    git_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_TOUCH", str(git_project / "touch-{pid}.txt"))
+    monkeypatch.setenv(
+        "NIWA_FAKE_REVIEW_DECISIONS",
+        "request_changes,request_changes",
+    )
+    project = _make_project(
+        session,
+        local_path=git_project,
+        max_review_iterations=1,
+    )
+    task = _make_task(session, project, title="review exhausted")
+
+    assert process_pending(session) == 2
+
+    session.expire_all()
+    refreshed = session.get(Task, task.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    run = (
+        session.query(Run)
+        .filter(Run.task_id == task.id)
+        .order_by(Run.id.desc())
+        .first()
+    )
+    assert run is not None
+    assert run.outcome == "review_changes_exhausted"
+
 
 def test_on_done_deploy_trigger_creates_deployment(
     session: Session,

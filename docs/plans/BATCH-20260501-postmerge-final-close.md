@@ -45,6 +45,12 @@ must not be changed until the human reviews this file and gives one explicit:
 - 2026-05-02: PR-CLOSE-02a targeted gates passed locally for models,
   executor, task/project APIs, and the frontend test suite. Full PR gates are
   being measured before commit/push.
+- 2026-05-02: PR-CLOSE-02a pushed and opened as draft PR #169, stacked on
+  PR-CLOSE-01. PR-CLOSE-02b started on `codex/close-02b-review-loop-ui` for
+  bounded review retries, review iterations, and operator UI/settings.
+- 2026-05-02: PR-CLOSE-02b implemented locally and full gates passed before
+  commit: `cd backend && pytest -q`, `cd frontend && npm test -- --run`, and
+  `make smoke`. Gates will be repeated on the pushed SHA.
 
 ## Current Repo State
 

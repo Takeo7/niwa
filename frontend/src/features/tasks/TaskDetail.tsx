@@ -10,6 +10,7 @@ import { ApiError, type TaskStatus } from "../../api";
 import { TaskEventStream } from "./TaskEventStream";
 import {
   useDeleteAttachment,
+  useApprovePlan,
   useLatestRun,
   useRespondTask,
   useTask,
@@ -47,6 +48,7 @@ export function TaskDetail({ taskId }: Props) {
   const runQuery = useLatestRun(taskId);
   const planQuery = useTaskPlan(taskId);
   const reviewQuery = useTaskReview(taskId);
+  const approvePlan = useApprovePlan(taskId);
   const respondMutation = useRespondTask(taskId);
   const attachmentsQuery = useTaskAttachments(taskId);
   const deleteAttachment = useDeleteAttachment(taskId);
@@ -115,6 +117,15 @@ export function TaskDetail({ taskId }: Props) {
               {index + 1}. {step}
             </Text>
           ))}
+          {task.status === "waiting_approval" && planQuery.data.status === "ready" ? (
+            <Button
+              w="fit-content"
+              onClick={() => approvePlan.mutate()}
+              loading={approvePlan.isPending}
+            >
+              Approve plan
+            </Button>
+          ) : null}
         </Stack>
       ) : null}
 
@@ -128,6 +139,7 @@ export function TaskDetail({ taskId }: Props) {
             >
               {reviewQuery.data.decision}
             </Badge>
+            <Badge variant="light">iteration {reviewQuery.data.iteration}</Badge>
             <Text size="sm">{reviewQuery.data.summary}</Text>
           </Group>
           {reviewQuery.data.findings.map((finding, index) => (
