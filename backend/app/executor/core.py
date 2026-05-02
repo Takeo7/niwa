@@ -38,6 +38,7 @@ from ..models import (
     TaskPlan,
     TaskReview,
 )
+from ..pipeline import plan_task, review_task
 from ..security.redaction import redact
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
@@ -447,26 +448,18 @@ def _create_task_plan(
     *,
     status: str = "approved",
 ) -> TaskPlan:
-    """Persist a deterministic JSON plan before code execution begins."""
+    """Persist a JSON plan before code execution begins."""
 
-    payload = {
-        "summary": f"Execute task: {task.title}",
-        "steps": [
-            "Inspect the assigned task and attached context.",
-            "Apply the smallest code or content change that satisfies the task.",
-            "Run verification and finalize only if evidence passes.",
-        ],
-        "risks": [],
-        "planner": "fake-json",
-    }
+    project = session.get(Project, task.project_id)
+    result = plan_task(task, project)
     plan = TaskPlan(
         task_id=task.id,
         status=status,
-        summary=payload["summary"],
-        steps_json=json.dumps(payload["steps"]),
-        risks_json=json.dumps(payload["risks"]),
-        planner="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        summary=result.summary,
+        steps_json=json.dumps(result.steps),
+        risks_json=json.dumps(result.risks),
+        planner=result.planner,
+        raw_json=result.raw_json,
     )
     session.add(plan)
     session.flush()
@@ -491,39 +484,27 @@ def _create_task_plan(
 
 
 def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskReview:
-    """Persist a deterministic JSON review after verification completes."""
+    """Persist a JSON review after verification completes."""
 
     iteration = _next_review_iteration(session, task.id)
-    decision = _fake_review_decision(iteration)
-    if decision is None:
-        decision = "approved" if result.passed else "request_changes"
-    findings = [] if result.passed else [
-        f"Verification did not pass: {result.error_code or result.outcome}"
-    ]
+    review_result = review_task(task, run, result, iteration=iteration)
     payload = {
-        "decision": decision,
-        "summary": (
-            "Review requested changes before finalize."
-            if decision == "request_changes" and result.passed
-            else
-            "Verification passed; finalize is allowed."
-            if result.passed
-            else "Verification failed; changes are required before finalize."
-        ),
-        "findings": findings,
+        "decision": review_result.decision,
+        "summary": review_result.summary,
+        "findings": review_result.findings,
         "iteration": iteration,
-        "reviewer": "fake-json",
+        "reviewer": review_result.reviewer,
         "verification": result.evidence,
     }
     review = TaskReview(
         task_id=task.id,
         run_id=run.id,
-        decision=decision,
+        decision=review_result.decision,
         iteration=iteration,
-        summary=payload["summary"],
-        findings_json=json.dumps(findings),
-        reviewer="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        summary=review_result.summary,
+        findings_json=json.dumps(review_result.findings),
+        reviewer=review_result.reviewer,
+        raw_json=review_result.raw_json,
     )
     session.add(review)
     session.flush()
@@ -537,6 +518,7 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
                     "event": "review_completed",
                     "review_id": review.id,
                     "decision": review.decision,
+                    "reviewer": review.reviewer,
                 }
             ),
         )
@@ -561,19 +543,6 @@ def _next_review_iteration(session: Session, task_id: int) -> int:
         .first()
     )
     return 1 if latest is None else latest.iteration + 1
-
-
-def _fake_review_decision(iteration: int) -> str | None:
-    raw = os.environ.get("NIWA_FAKE_REVIEW_DECISIONS", "").strip()
-    if not raw:
-        return None
-    decisions = [item.strip() for item in raw.split(",") if item.strip()]
-    if iteration > len(decisions):
-        return None
-    decision = decisions[iteration - 1]
-    if decision not in {"approved", "request_changes"}:
-        return None
-    return decision
 
 
 def _handle_review_request_changes(

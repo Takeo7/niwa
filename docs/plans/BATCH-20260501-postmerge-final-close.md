@@ -51,6 +51,14 @@ must not be changed until the human reviews this file and gives one explicit:
 - 2026-05-02: PR-CLOSE-02b implemented locally and full gates passed before
   commit: `cd backend && pytest -q`, `cd frontend && npm test -- --run`, and
   `make smoke`. Gates will be repeated on the pushed SHA.
+- 2026-05-02: PR-CLOSE-02b pushed and opened as draft PR #170, stacked on
+  PR-CLOSE-02a. PR-CLOSE-03 started on
+  `codex/close-03-real-llm-planner-reviewer` for configurable fake/Claude
+  planner and reviewer services.
+- 2026-05-02: PR-CLOSE-03 implemented locally with `fake-json` defaults,
+  `claude-code` planner/reviewer modes, fake-CLI tests for valid/invalid
+  JSON, and executor integration. Full gates passed before commit and will be
+  repeated on the pushed SHA.
 
 ## Current Repo State
 
