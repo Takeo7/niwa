@@ -18,6 +18,22 @@ PROJECT_PAYLOAD = {
 }
 
 _RPC = {"jsonrpc": "2.0", "id": 1}
+EXPECTED_TOOLS = {
+    "ping",
+    "project_list",
+    "project_get",
+    "task_list",
+    "task_create",
+    "task_attach",
+    "task_status",
+    "task_respond",
+    "task_cancel",
+    "task_retry",
+    "pull_list",
+    "pull_merge",
+    "deploy_trigger",
+    "deployment_status",
+}
 
 
 def _call(client, method: str, params: dict = {}, *, token: str | None = None) -> dict:
@@ -50,6 +66,12 @@ def test_ping_requires_no_auth(client) -> None:
     resp = _call(client, "ping")
     assert resp["result"]["pong"] is True
     assert "version" in resp["result"]
+
+
+def test_initialize_requires_no_auth(client) -> None:
+    resp = _call(client, "initialize")
+    assert resp["result"]["serverInfo"]["name"] == "niwa"
+    assert resp["result"]["capabilities"]["tools"]["listChanged"] is False
 
 
 def test_project_list_requires_token(client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,14 +122,18 @@ def test_token_without_write_scope_denied(client, monkeypatch: pytest.MonkeyPatc
 def test_tools_list(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "tools/list", token="tok")
-    names = [t["name"] for t in resp["result"]["tools"]]
-    assert "ping" in names
-    assert "project_list" in names
-    assert "task_create" in names
-    assert "task_attach" in names
-    assert "task_respond" in names
-    assert "deploy_trigger" in names
-    assert "deployment_status" in names
+    names = {t["name"] for t in resp["result"]["tools"]}
+    assert names == EXPECTED_TOOLS
+    for tool in resp["result"]["tools"]:
+        assert "inputSchema" in tool
+
+
+def test_openclaw_doc_lists_every_tool(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
+    documented = (Path(__file__).resolve().parents[2] / "docs/integrations/OPENCLAW.md").read_text()
+    resp = _call(client, "tools/list", token="tok")
+    for tool in resp["result"]["tools"]:
+        assert f"`{tool['name']}`" in documented
 
 
 # ── project tools ─────────────────────────────────────────────────────────────
@@ -374,6 +400,8 @@ def test_missing_required_param_returns_error(client, monkeypatch: pytest.Monkey
     monkeypatch.setenv("NIWA_MCP_TOKEN", "tok")
     resp = _call(client, "project_get", {}, token="tok")
     assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "Missing param" in resp["error"]["message"]
 
 
 def test_tools_call_dispatch(client, monkeypatch: pytest.MonkeyPatch) -> None:
