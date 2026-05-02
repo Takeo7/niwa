@@ -281,14 +281,12 @@ def test_events_stream_emits_new_events_for_running_run(client, app) -> None:
         s.commit()
 
     def _writer() -> None:
-        time.sleep(0.4)
+        time.sleep(0.1)
         gen = override()
         s: Session = next(gen)
         try:
             _add(s, "assistant", {"text": "msg-1"})
-            time.sleep(0.4)
             _add(s, "assistant", {"text": "msg-2"})
-            time.sleep(0.4)
             _add(s, "completed", None)
             run_row = s.get(Run, run_id)
             assert run_row is not None
