@@ -5,6 +5,128 @@ en cada PR que añade/quita módulo backend, feature frontend, tabla DB o
 cambia el pipeline. El SPEC vive en `docs/SPEC.md` — este documento
 es el "cómo" práctico, no el "qué" del producto.
 
+## Snapshot actual postmerge WS-01..WS-10
+
+Este handbook conserva muchas secciones históricas PR-V1-* porque explican la
+evolución del sistema. El contrato actual de `main` después del batch
+WS-01..WS-10 es:
+
+- Backend FastAPI + SQLAlchemy 2 + Alembic + SQLite.
+- Frontend React 19 + Vite + Mantine 7 + TanStack Query.
+- Smoke determinista: `make smoke` ejecuta `scripts/smoke_v1_1.py` con fake
+  Claude, fake `gh`, `NIWA_HOME` temporal, SQLite temporal y reportes en
+  `.smoke/`.
+- Auth opcional local-first: sin password, las dependencias auth hacen bypass;
+  con password, rutas críticas requieren scopes.
+- Scopes actuales: `read`, `task:create`, `task:write`, `deploy`, `merge`,
+  `admin`.
+- Operabilidad CLI: `start|stop|restart|status|logs|update`, `dev start
+  --detach|stop|status`, `cleanup`, `doctor`, `backup`, `restore`,
+  `set-password`, `proxy render|validate`.
+
+### Modelos actuales añadidos al MVP
+
+Además de `Project`, `Task`, `TaskEvent`, `Run` y `RunEvent`, main incluye:
+
+- `Attachment` — ficheros de contexto por task.
+- `Deployment` — deployments versionados static/process con build/process logs,
+  healthcheck, stop y rollback.
+- `TaskPlan` — plan persistido antes de ejecución. Hoy se genera con
+  `planner="fake-json"`.
+- `TaskReview` — review persistida tras verificación. Hoy se genera con
+  `reviewer="fake-json"`.
+- `AuditEvent` — auditoría de mutaciones/auth/MCP/ops.
+- `Session` y `ApiToken` — auth browser/API token.
+
+Campos de proyecto relevantes:
+
+- `deploy_type`: `static|process`.
+- `build_command`, `dist_dir`, `start_command`, `healthcheck_path`.
+- `deploy_trigger`: `manual|on_done|on_merge`, default `manual`.
+- `public_enabled`: boolean default false.
+
+Campos de run relevantes:
+
+- `pid`: PID del subprocess registrado para kill switch/cancelación.
+- `session_handle`: handle de Claude para resume tras `waiting_input`.
+- `verification_json`: evidencia estructurada del verifier.
+
+### Pipeline actual
+
+Flujo real hoy:
+
+```
+claim queued -> triage -> fake-json TaskPlan -> adapter execution ->
+verify_run -> fake-json TaskReview -> finalize_task -> optional deploy
+```
+
+Limitación importante: aunque `Task.status` acepta `triaging`, `planning`,
+`waiting_approval`, `executing`, `verifying` y `reviewing`, el executor todavía
+no los usa como state machine completa. PR-CLOSE-02 debe cerrar esa brecha.
+
+Planner/reviewer son deterministas. PR-CLOSE-03 debe añadir modo configurable
+real LLM manteniendo fake-json como default para tests/smoke.
+
+### Auth/scopes por superficie
+
+- Projects list/get: `read`.
+- Project create/patch/delete: `admin`.
+- Task list/get/runs/plan/review/attachments list: `read`.
+- Task create/attachments create: `task:create` or `task:write` depending on
+  endpoint semantics.
+- Task respond/cancel/retry/delete: `task:write`.
+- Deployments list/get: `read`.
+- Deployment create/stop/rollback/healthcheck: `deploy`.
+- Pull list: `read`.
+- Pull merge: `merge`.
+- Metrics/audit/admin operations: protected by appropriate read/admin scopes.
+- Static deployment serving is anonymous only for `public_enabled=true`; private
+  projects require `read`.
+
+### Deployment/Caddy model
+
+`backend/app/deployments/` owns deploy records and static/process activation.
+`backend/app/network/caddy.py` renders a Caddyfile for:
+
+- UI/API domain -> backend port.
+- Public static project -> `/api/deploy/{slug}{uri}` rewrite to backend.
+- Public process project -> `localhost:{active.port}`.
+
+Routes are generated only for `Project.public_enabled == true`.
+`niwa-executor proxy render` writes `~/.niwa/caddy/Caddyfile`; `proxy validate`
+requires a local Caddy binary.
+
+### MCP current surface
+
+`POST /api/mcp` is HTTP JSON-RPC 2.0 with Bearer token auth. Current methods:
+
+- `ping`
+- `tools/list`
+- `tools/call`
+- `project_list`
+- `project_get`
+- `task_list`
+- `task_create`
+- `task_attach`
+- `task_status`
+- `task_respond`
+- `task_cancel`
+- `task_retry`
+- `pull_list`
+- `pull_merge`
+- `deploy_trigger`
+- `deployment_status`
+
+This is an HTTP JSON-RPC surface, not stdio MCP. PR-CLOSE-07 will add minimal
+`initialize` behavior and stricter conformance docs/tests.
+
+### Security/ops current truth
+
+Niwa has auth, token scopes, audit logging, redaction helpers, run-event
+redaction, kill switch, PID tracking, backup/restore and doctor. It does not
+have a strong OS sandbox; Claude Code runs as the Niwa OS user. Project locks,
+attachment size limits and stronger exposure checks are PR-CLOSE-06 work.
+
 ## Layout actual (tras PR-V1-11c)
 
 ```

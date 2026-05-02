@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 
-PlanStatus = Literal["ready"]
+PlanStatus = Literal["ready", "approved", "rejected", "superseded"]
 ReviewDecision = Literal["approved", "request_changes"]
 
 
@@ -33,6 +33,7 @@ class TaskReviewRead(BaseModel):
     task_id: int
     run_id: int | None
     decision: ReviewDecision
+    iteration: int
     summary: str
     findings: list[str]
     reviewer: str

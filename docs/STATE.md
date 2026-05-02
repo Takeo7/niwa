@@ -1,17 +1,73 @@
 # Niwa — Orchestrator state
 
-Estado operativo de Niwa post-MVP. `main` es la rama oficial.
-**Ciclo v1.1 cerrado** — Tier 1 (29-32) + Tier 2 (33, 34, 35).
-Próximo: smoke completo de todo v1.1 antes de retro post-ciclo.
+Estado operativo de Niwa postmerge. `main` es la rama oficial.
+
+**WS-01..WS-10 mergeados en main el 2026-05-01.** Niwa ya tiene smoke
+determinista, auth/scopes, TaskPlan/TaskReview fake-json, deployments,
+`deploy_trigger`, `public_enabled`, Caddy CLI, MCP tools, UI ampliada,
+doctor, backup y restore.
+
+El cierre actual es postmerge final-close. PR-CLOSE-01..08 están preparados en
+una pila de PRs batch; PR-CLOSE-09 empaqueta la release candidate y deja la
+aceptación final documentada.
 
 ```
-pr_merged: PR-V1-35
-date: 2026-04-27
-week: v1.1
-next_pr: smoke-v1.1
-week_status: v1.1-cycle-complete
+last_batch_merged: WS-01..WS-10 (#159..#167)
+last_merge_sha: fe3800aaf66352bc27307296b25cde20a6572179
+date: 2026-05-01
+week: postmerge-final-close
+next_pr: PR-CLOSE-09-release-packaging-final-acceptance
+week_status: release-candidate-stack-open
 blockers: []
 ```
+
+## Estado actual resumido
+
+### Implementado
+
+- Backend local-first FastAPI/SQLite y frontend React/Mantine.
+- Smoke determinista con fake Claude/fake GitHub CLI: `make smoke`.
+- CI con Python 3.12, Node 22, backend tests, frontend tests y smoke.
+- Auth local opcional: si no hay password, modo local sin auth; si existe,
+  routers críticos exigen scopes.
+- API tokens con scopes `read`, `task:create`, `task:write`, `deploy`, `merge`,
+  `admin`.
+- Pipeline explícito con `TaskPlan`, `TaskReview`, aprobación manual opcional,
+  request-changes bounded loop, y planner/reviewer configurable
+  `fake-json|claude-code`.
+- Deploy static/process con versioned deployments, stop/rollback/healthcheck,
+  logs y triggers `manual|on_done|on_merge`.
+- Publicación opt-in con `public_enabled=false` por defecto y Caddyfile
+  generado vía `niwa-executor proxy render|validate`.
+- MCP HTTP JSON-RPC con project/task/attachment/pull/deploy tools.
+- UI con dashboard/backlog básico, filtros, subtareas, plan/review, settings,
+  deploys, cancel/retry, admin y system views.
+- Operabilidad: `niwa-executor dev start --detach`, `doctor`, `backup`,
+  `restore`, `cleanup`, kill switch.
+
+### Limitaciones conocidas
+
+- Planner/reviewer `claude-code` requieren credenciales CLI reales; `fake-json`
+  sigue siendo el default determinista para CI/smoke.
+- DNS, TLS, Caddy reloads y túneles reales siguen siendo pasos manuales del
+  operador; los tests cubren generación/configuración determinista.
+- MCP es HTTP JSON-RPC request/response, no stdio ni streaming.
+- No hay sandbox fuerte de sistema operativo; Claude corre con permisos del
+  usuario que ejecuta Niwa.
+- Project locking y límites son guardas locales, no un sistema distribuido de
+  cuotas/locks para flotas de workers.
+
+## Batch WS-01..WS-10
+
+- **2026-05-01** — #159 WS-01 smoke reproducible base mergeado.
+- **2026-05-01** — #160 WS-02 auth global scopes mergeado.
+- **2026-05-01** — #161 WS-03 persisted task plans/reviews mergeado.
+- **2026-05-01** — #162 WS-04 deploy triggers/process logs mergeado.
+- **2026-05-01** — #163 WS-05 public deployment proxy controls mergeado.
+- **2026-05-01** — #164 WS-06 MCP OpenClaw tools mergeado.
+- **2026-05-01** — #165 WS-07 project management UI controls mergeado.
+- **2026-05-01** — #166 WS-08 operational security hardening mergeado.
+- **2026-05-01** — #167 WS-09/10 operability commands/runbooks mergeado.
 
 ## Historial
 

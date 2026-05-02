@@ -42,7 +42,12 @@ def build_branch_name(task: "Task") -> str:
     return f"niwa/task-{task.id}-{slug or 'untitled'}"
 
 
-def prepare_task_branch(local_path: str, task: "Task") -> str:
+def prepare_task_branch(
+    local_path: str,
+    task: "Task",
+    *,
+    allow_dirty_existing_branch: bool = False,
+) -> str:
     """Create or reuse the task branch and check it out. Returns the name.
 
     Raises :class:`GitWorkspaceError` when ``local_path`` is not a git
@@ -66,10 +71,16 @@ def prepare_task_branch(local_path: str, task: "Task") -> str:
     if inside != "true":
         raise GitWorkspaceError(f"not a git repository: {local_path}")
 
-    if _run_git(["status", "--porcelain"], cwd=local_path).stdout.strip():
-        raise GitWorkspaceError(
-            "dirty working tree — clean the repo before queuing tasks"
-        )
+    dirty = _run_git(["status", "--porcelain"], cwd=local_path).stdout.strip()
+    if dirty:
+        current_branch = _run_git(
+            ["branch", "--show-current"], cwd=local_path
+        ).stdout.strip()
+        if not (allow_dirty_existing_branch and current_branch == branch):
+            raise GitWorkspaceError(
+                "dirty working tree — clean the repo before queuing tasks"
+            )
+        return branch
 
     # ``show-ref --verify --quiet`` exits non-zero when the ref is
     # missing; that's the expected "create new branch" signal, so we

@@ -26,6 +26,7 @@ ProjectKind = Literal["web-deployable", "library", "script"]
 AutonomyMode = Literal["safe", "dangerous"]
 DeployType = Literal["static", "process"]
 DeployTrigger = Literal["manual", "on_done", "on_merge"]
+PlanApprovalMode = Literal["auto", "manual"]
 
 
 class ProjectCreate(BaseModel):
@@ -48,6 +49,8 @@ class ProjectCreate(BaseModel):
     healthcheck_path: str | None = None
     deploy_trigger: DeployTrigger = "manual"
     public_enabled: bool = False
+    plan_approval_mode: PlanApprovalMode = "auto"
+    max_review_iterations: int = Field(default=1, ge=0, le=5)
 
 
 class ProjectPatch(BaseModel):
@@ -68,6 +71,8 @@ class ProjectPatch(BaseModel):
     healthcheck_path: str | None = None
     deploy_trigger: DeployTrigger | None = None
     public_enabled: bool | None = None
+    plan_approval_mode: PlanApprovalMode | None = None
+    max_review_iterations: int | None = Field(default=None, ge=0, le=5)
 
 
 class ProjectRead(BaseModel):
@@ -90,5 +95,7 @@ class ProjectRead(BaseModel):
     healthcheck_path: str | None
     deploy_trigger: str
     public_enabled: bool
+    plan_approval_mode: str
+    max_review_iterations: int
     created_at: datetime
     updated_at: datetime

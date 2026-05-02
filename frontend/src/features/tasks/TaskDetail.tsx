@@ -5,11 +5,13 @@ import {
   Textarea, Title,
 } from "@mantine/core";
 import { IconAlertCircle, IconFile, IconX } from "@tabler/icons-react";
+import { useQuery } from "@tanstack/react-query";
 
-import { ApiError, type TaskStatus } from "../../api";
+import { ApiError, listDeployments, type Deployment, type Run, type TaskPlan, type TaskReview, type TaskStatus } from "../../api";
 import { TaskEventStream } from "./TaskEventStream";
 import {
   useDeleteAttachment,
+  useApprovePlan,
   useLatestRun,
   useRespondTask,
   useTask,
@@ -18,7 +20,10 @@ import {
   useTaskReview,
 } from "./api";
 
-interface Props { taskId: number }
+interface Props {
+  taskId: number;
+  projectSlug?: string;
+}
 
 // Mirrors TaskList.STATUS_COLOR; cancelled also gets a strikethrough title.
 const TASK_STATUS_COLOR: Record<TaskStatus, string> = {
@@ -42,11 +47,50 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function TaskDetail({ taskId }: Props) {
+function prettyJson(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try { return JSON.stringify(JSON.parse(raw), null, 2); } catch { return raw; }
+}
+
+function Timeline({ plan, run, review, deployment }: {
+  plan: TaskPlan | null | undefined;
+  run: Run | null | undefined;
+  review: TaskReview | null | undefined;
+  deployment: Deployment | null | undefined;
+}) {
+  const rows = [
+    plan && { label: "plan", detail: `${plan.status} by ${plan.planner}`, time: plan.created_at },
+    run && { label: "run", detail: `${run.status}${run.outcome ? ` · ${run.outcome}` : ""}`, time: run.started_at },
+    review && { label: "review", detail: `${review.decision} · iteration ${review.iteration}`, time: review.created_at },
+    deployment && { label: "deploy", detail: `${deployment.status}${deployment.url_local ? ` · ${deployment.url_local}` : ""}`, time: deployment.created_at },
+  ].filter(Boolean) as { label: string; detail: string; time: string }[];
+
+  if (rows.length === 0) return null;
+  return (
+    <Stack gap="xs">
+      <Title order={4}>Timeline</Title>
+      {rows.map((row) => (
+        <Group key={`${row.label}-${row.time}`} gap="xs" wrap="nowrap">
+          <Badge variant="light">{row.label}</Badge>
+          <Text size="sm" style={{ flex: 1 }}>{row.detail}</Text>
+          <Text size="xs" c="dimmed">{formatDate(row.time)}</Text>
+        </Group>
+      ))}
+    </Stack>
+  );
+}
+
+export function TaskDetail({ taskId, projectSlug }: Props) {
   const taskQuery = useTask(taskId);
   const runQuery = useLatestRun(taskId);
   const planQuery = useTaskPlan(taskId);
   const reviewQuery = useTaskReview(taskId);
+  const deploymentsQuery = useQuery({
+    queryKey: ["project", projectSlug, "deployments"],
+    queryFn: () => listDeployments(projectSlug!),
+    enabled: Boolean(projectSlug),
+  });
+  const approvePlan = useApprovePlan(taskId);
   const respondMutation = useRespondTask(taskId);
   const attachmentsQuery = useTaskAttachments(taskId);
   const deleteAttachment = useDeleteAttachment(taskId);
@@ -73,6 +117,9 @@ export function TaskDetail({ taskId }: Props) {
   const waitingInput = task.status === "waiting_input" && task.pending_question;
   const attachments = attachmentsQuery.data ?? [];
   const canEditAttachments = ATTACHMENT_EDITABLE.includes(task.status);
+  const latestRun = runQuery.data ?? null;
+  const verificationJson = prettyJson(latestRun?.verification_json);
+  const taskDeployment = deploymentsQuery.data?.find((d) => d.task_id === task.id) ?? null;
 
   return (
     <Stack gap="md">
@@ -108,12 +155,22 @@ export function TaskDetail({ taskId }: Props) {
       {planQuery.data ? (
         <Stack gap="xs">
           <Title order={4}>Plan</Title>
+          <Badge variant="light" w="fit-content">{planQuery.data.status}</Badge>
           <Text size="sm">{planQuery.data.summary}</Text>
           {planQuery.data.steps.map((step, index) => (
             <Text key={`${index}-${step}`} size="sm">
               {index + 1}. {step}
             </Text>
           ))}
+          {task.status === "waiting_approval" && planQuery.data.status === "ready" ? (
+            <Button
+              w="fit-content"
+              onClick={() => approvePlan.mutate()}
+              loading={approvePlan.isPending}
+            >
+              Approve plan
+            </Button>
+          ) : null}
         </Stack>
       ) : null}
 
@@ -127,6 +184,7 @@ export function TaskDetail({ taskId }: Props) {
             >
               {reviewQuery.data.decision}
             </Badge>
+            <Badge variant="light">iteration {reviewQuery.data.iteration}</Badge>
             <Text size="sm">{reviewQuery.data.summary}</Text>
           </Group>
           {reviewQuery.data.findings.map((finding, index) => (
@@ -134,6 +192,48 @@ export function TaskDetail({ taskId }: Props) {
               {finding}
             </Text>
           ))}
+        </Stack>
+      ) : null}
+
+      <Timeline
+        plan={planQuery.data}
+        run={latestRun}
+        review={reviewQuery.data}
+        deployment={taskDeployment}
+      />
+
+      {latestRun ? (
+        <Stack gap="xs">
+          <Title order={4}>Latest run</Title>
+          <Group gap="xs">
+            <Badge variant="light">{latestRun.status}</Badge>
+            <Badge variant="light">{latestRun.model}</Badge>
+            {latestRun.outcome ? <Badge variant="light">{latestRun.outcome}</Badge> : null}
+            {latestRun.pid ? <Text size="sm">pid {latestRun.pid}</Text> : null}
+          </Group>
+          <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>
+            {latestRun.artifact_root}
+          </Text>
+          {verificationJson ? (
+            <Code block style={{ maxHeight: 220, overflow: "auto" }}>
+              {verificationJson}
+            </Code>
+          ) : null}
+        </Stack>
+      ) : null}
+
+      {taskDeployment ? (
+        <Stack gap="xs">
+          <Title order={4}>Task deployment</Title>
+          <Group gap="xs">
+            <Badge variant="light">{taskDeployment.status}</Badge>
+            <Badge variant="light">{taskDeployment.deploy_type}</Badge>
+            {taskDeployment.url_local ? (
+              <Anchor href={taskDeployment.url_local} target="_blank" rel="noreferrer" size="sm">
+                {taskDeployment.url_local}
+              </Anchor>
+            ) : null}
+          </Group>
         </Stack>
       ) : null}
 

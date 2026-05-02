@@ -1,7 +1,7 @@
 """Executor pipeline — claim queued tasks and drive the Claude adapter.
 
 * ``claim_next_task`` atomically flips the oldest ``queued`` task to
-  ``running`` using ``BEGIN IMMEDIATE`` + conditional ``UPDATE``.
+  ``triaging`` using ``BEGIN IMMEDIATE`` + conditional ``UPDATE``.
 * ``run_adapter`` creates the ``Run``, streams ``AdapterEvent`` rows into
   ``run_events`` (one commit per event — see PR-V1-07 brief, batch is a
   follow-up tunable), and finalizes run+task based on ``adapter.outcome``.
@@ -17,7 +17,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from ..adapters import (
@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_cli_path,
     resolve_timeout,
 )
+from ..config import load_settings
 from ..deployments.service import trigger_deploy
 from ..finalize import finalize_task
 from ..models import (
@@ -38,6 +39,7 @@ from ..models import (
     TaskPlan,
     TaskReview,
 )
+from ..pipeline import plan_task, review_task
 from ..security.redaction import redact
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
@@ -53,6 +55,12 @@ ADAPTER_MODEL = "claude-code"
 _TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
 
 
+def _running_run_count(session: Session) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Run).where(Run.status == "running")
+    ) or 0
+
+
 def claim_next_task(session: Session) -> Task | None:
     """Atomically take ownership of the oldest ``queued`` task."""
 
@@ -61,10 +69,20 @@ def claim_next_task(session: Session) -> Task | None:
     session.execute(text("BEGIN IMMEDIATE"))
 
     try:
+        if _running_run_count(session) >= max(1, load_settings().max_concurrent_runs):
+            session.commit()
+            return None
         row = session.execute(
             text(
-                "SELECT id FROM tasks WHERE status = 'queued' "
-                "ORDER BY created_at ASC, id ASC LIMIT 1"
+                "SELECT t.id FROM tasks t "
+                "WHERE t.status = 'queued' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM tasks active "
+                "  JOIN runs r ON r.task_id = active.id "
+                "  WHERE active.project_id = t.project_id "
+                "  AND r.status = 'running'"
+                ") "
+                "ORDER BY t.created_at ASC, t.id ASC LIMIT 1"
             )
         ).first()
         if row is None:
@@ -75,7 +93,7 @@ def claim_next_task(session: Session) -> Task | None:
         result = session.execute(
             update(Task)
             .where(Task.id == task_id, Task.status == "queued")
-            .values(status="running")
+            .values(status="triaging")
         )
         if result.rowcount == 0:
             session.commit()
@@ -86,7 +104,7 @@ def claim_next_task(session: Session) -> Task | None:
                 task_id=task_id,
                 kind="status_changed",
                 message=None,
-                payload_json=json.dumps({"from": "queued", "to": "running"}),
+                payload_json=json.dumps({"from": "queued", "to": "triaging"}),
             )
         )
         session.commit()
@@ -113,6 +131,7 @@ def run_adapter(session: Session, task: Task) -> Run:
 
     project = session.get(Project, task.project_id)
     artifact_root = project.local_path if project is not None else ""
+    _set_task_status(session, task, "executing", reason="adapter_start")
 
     run = Run(
         task_id=task.id,
@@ -131,7 +150,11 @@ def run_adapter(session: Session, task: Task) -> Run:
     # ``git_setup_failed`` — the task never gets to mutate the working
     # tree, and ``task.branch_name`` stays ``None``.
     try:
-        branch_name = prepare_task_branch(artifact_root or ".", task)
+        branch_name = prepare_task_branch(
+            artifact_root or ".",
+            task,
+            allow_dirty_existing_branch=bool(task.branch_name),
+        )
     except GitWorkspaceError as exc:
         logger.warning("git setup failed for task_id=%s: %s", task.id, exc)
         session.add(
@@ -223,6 +246,7 @@ def run_adapter(session: Session, task: Task) -> Run:
         session.refresh(run)
         return run
 
+    _set_task_status(session, task, "verifying", reason="verify_start")
     result = verify_run(
         session, run, task, project,
         cwd=artifact_root or ".",
@@ -234,7 +258,12 @@ def run_adapter(session: Session, task: Task) -> Run:
 
     review = None
     if result.outcome != "needs_input":
+        _set_task_status(session, task, "reviewing", reason="review_start")
         review = _create_task_review(session, task, run, result)
+        if result.passed and review.decision == "request_changes":
+            if _handle_review_request_changes(session, task, run, project, review):
+                session.refresh(run)
+                return run
 
     # PR-V1-13: safe-mode finalize runs on verified runs only. It is
     # best-effort — ``finalize_task`` swallows subprocess failures and
@@ -294,6 +323,13 @@ def process_pending(session: Session) -> int:
             break
 
         project = session.get(Project, task.project_id)
+        approved_plan = _latest_task_plan(session, task.id, status="approved")
+        if approved_plan is not None:
+            run_adapter(session, task)
+            processed += 1
+            logger.info("ran adapter for approved task_id=%s", task.id)
+            continue
+
         try:
             decision = triage_task(project, task)
         except TriageError as exc:
@@ -308,11 +344,30 @@ def process_pending(session: Session) -> int:
                 task.id,
                 len(decision.subtasks),
             )
+            _set_task_status(session, task, "executing", reason="triage_split")
             _apply_split(session, task, decision)
             processed += 1
             continue
 
-        _create_task_plan(session, task)
+        _set_task_status(session, task, "planning", reason="plan_start")
+        approval_mode = (
+            getattr(project, "plan_approval_mode", "auto") if project else "auto"
+        ) or "auto"
+        plan = _create_task_plan(
+            session,
+            task,
+            status="ready" if approval_mode == "manual" else "approved",
+        )
+        if approval_mode == "manual":
+            _set_task_status(
+                session,
+                task,
+                "waiting_approval",
+                reason="plan_waiting_approval",
+            )
+            logger.info("task_id=%s waiting for plan approval plan_id=%s", task.id, plan.id)
+            processed += 1
+            continue
 
         # ``run_adapter`` swallows adapter exceptions internally (see its
         # try/except/finally), so nothing we handle here would ever fire.
@@ -320,6 +375,45 @@ def process_pending(session: Session) -> int:
         processed += 1
         logger.info("ran adapter for task_id=%s", task.id)
     return processed
+
+
+def _set_task_status(
+    session: Session,
+    task: Task,
+    new_status: str,
+    *,
+    reason: str | None = None,
+) -> None:
+    """Set task status and append the matching ``status_changed`` event."""
+
+    from_status = task.status
+    if from_status == new_status:
+        return
+    task.status = new_status
+    payload: dict[str, object] = {"from": from_status, "to": new_status}
+    if reason:
+        payload["reason"] = reason
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps(payload),
+        )
+    )
+    session.commit()
+
+
+def _latest_task_plan(
+    session: Session,
+    task_id: int,
+    *,
+    status: str | None = None,
+) -> TaskPlan | None:
+    query = session.query(TaskPlan).filter(TaskPlan.task_id == task_id)
+    if status is not None:
+        query = query.filter(TaskPlan.status == status)
+    return query.order_by(TaskPlan.id.desc()).first()
 
 
 def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None:
@@ -365,27 +459,24 @@ def _apply_split(session: Session, task: Task, decision: TriageDecision) -> None
     session.commit()
 
 
-def _create_task_plan(session: Session, task: Task) -> TaskPlan:
-    """Persist a deterministic JSON plan before code execution begins."""
+def _create_task_plan(
+    session: Session,
+    task: Task,
+    *,
+    status: str = "approved",
+) -> TaskPlan:
+    """Persist a JSON plan before code execution begins."""
 
-    payload = {
-        "summary": f"Execute task: {task.title}",
-        "steps": [
-            "Inspect the assigned task and attached context.",
-            "Apply the smallest code or content change that satisfies the task.",
-            "Run verification and finalize only if evidence passes.",
-        ],
-        "risks": [],
-        "planner": "fake-json",
-    }
+    project = session.get(Project, task.project_id)
+    result = plan_task(task, project)
     plan = TaskPlan(
         task_id=task.id,
-        status="ready",
-        summary=payload["summary"],
-        steps_json=json.dumps(payload["steps"]),
-        risks_json=json.dumps(payload["risks"]),
-        planner="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        status=status,
+        summary=result.summary,
+        steps_json=json.dumps(result.steps),
+        risks_json=json.dumps(result.risks),
+        planner=result.planner,
+        raw_json=result.raw_json,
     )
     session.add(plan)
     session.flush()
@@ -399,6 +490,7 @@ def _create_task_plan(session: Session, task: Task) -> TaskPlan:
                     "event": "plan_created",
                     "plan_id": plan.id,
                     "planner": plan.planner,
+                    "status": plan.status,
                 }
             ),
         )
@@ -409,31 +501,27 @@ def _create_task_plan(session: Session, task: Task) -> TaskPlan:
 
 
 def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskReview:
-    """Persist a deterministic JSON review after verification completes."""
+    """Persist a JSON review after verification completes."""
 
-    decision = "approved" if result.passed else "request_changes"
-    findings = [] if result.passed else [
-        f"Verification did not pass: {result.error_code or result.outcome}"
-    ]
+    iteration = _next_review_iteration(session, task.id)
+    review_result = review_task(task, run, result, iteration=iteration)
     payload = {
-        "decision": decision,
-        "summary": (
-            "Verification passed; finalize is allowed."
-            if result.passed
-            else "Verification failed; changes are required before finalize."
-        ),
-        "findings": findings,
-        "reviewer": "fake-json",
+        "decision": review_result.decision,
+        "summary": review_result.summary,
+        "findings": review_result.findings,
+        "iteration": iteration,
+        "reviewer": review_result.reviewer,
         "verification": result.evidence,
     }
     review = TaskReview(
         task_id=task.id,
         run_id=run.id,
-        decision=decision,
-        summary=payload["summary"],
-        findings_json=json.dumps(findings),
-        reviewer="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        decision=review_result.decision,
+        iteration=iteration,
+        summary=review_result.summary,
+        findings_json=json.dumps(review_result.findings),
+        reviewer=review_result.reviewer,
+        raw_json=review_result.raw_json,
     )
     session.add(review)
     session.flush()
@@ -447,20 +535,81 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
                     "event": "review_completed",
                     "review_id": review.id,
                     "decision": review.decision,
+                    "reviewer": review.reviewer,
                 }
             ),
         )
     )
     session.add(
         RunEvent(
-                run_id=run.id,
-                event_type="review",
-                payload_json=_event_payload(payload, sort_keys=True),
-            )
+            run_id=run.id,
+            event_type="review",
+            payload_json=_event_payload(payload, sort_keys=True),
         )
+    )
     session.commit()
     session.refresh(review)
     return review
+
+
+def _next_review_iteration(session: Session, task_id: int) -> int:
+    latest = (
+        session.query(TaskReview)
+        .filter(TaskReview.task_id == task_id)
+        .order_by(TaskReview.iteration.desc(), TaskReview.id.desc())
+        .first()
+    )
+    return 1 if latest is None else latest.iteration + 1
+
+
+def _handle_review_request_changes(
+    session: Session,
+    task: Task,
+    run: Run,
+    project: Project | None,
+    review: TaskReview,
+) -> bool:
+    """Return True when the task was requeued or exhausted by review."""
+
+    max_iterations = (
+        getattr(project, "max_review_iterations", 1) if project else 1
+    )
+    if review.iteration <= max_iterations:
+        now = datetime.now(timezone.utc)
+        run.finished_at = now
+        run.status = "completed"
+        run.outcome = "review_request_changes"
+        session.add(
+            RunEvent(
+                run_id=run.id,
+                event_type="review_request_changes",
+                payload_json=_event_payload(
+                    {
+                        "review_id": review.id,
+                        "iteration": review.iteration,
+                        "max_review_iterations": max_iterations,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        _set_task_status(
+            session,
+            task,
+            "queued",
+            reason="review_request_changes",
+        )
+        return True
+
+    _finalize(
+        session,
+        task,
+        run,
+        outcome="review_changes_exhausted",
+        exit_code=run.exit_code,
+        error_code="review_changes_exhausted",
+    )
+    return True
 
 
 def _maybe_trigger_deploy(

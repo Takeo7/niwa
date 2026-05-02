@@ -102,7 +102,7 @@ def test_stream_ending_in_question_puts_task_in_waiting_input(
         .all()
     )
     transitions = [json.loads(e.payload_json or "{}") for e in events]
-    assert {"from": "running", "to": "waiting_input"} in transitions
+    assert {"from": "verifying", "to": "waiting_input"} in transitions
 
 
 def _tool_use_write(file_path: str) -> dict:

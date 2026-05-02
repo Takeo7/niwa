@@ -22,6 +22,7 @@ from .tasks import TaskNotFound, get_task
 # executor took over, disk layout is frozen for the adapter cwd.
 EDITABLE_STATUSES: frozenset[str] = frozenset({"inbox", "queued"})
 _FORBIDDEN = ("..", "/", "\\", "\x00")
+DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
 class AttachmentError(Exception):
@@ -38,6 +39,18 @@ class TaskNotAcceptingAttachments(AttachmentError):
 
 class AttachmentNotFound(AttachmentError):
     """Lookup by attachment id missed."""
+
+
+class AttachmentTooLarge(AttachmentError):
+    """Upload exceeded the configured attachment size limit."""
+
+
+def _max_attachment_bytes() -> int:
+    raw = os.environ.get("NIWA_MAX_ATTACHMENT_BYTES", str(DEFAULT_MAX_ATTACHMENT_BYTES))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_ATTACHMENT_BYTES
 
 
 def sanitize_filename(name: str) -> str:
@@ -98,10 +111,14 @@ def create_attachment(
             n += 1
 
     size = 0
+    limit = _max_attachment_bytes()
     with target.open("wb") as fh:
         while chunk := stream.read(64 * 1024):
             fh.write(chunk)
             size += len(chunk)
+            if size > limit:
+                target.unlink(missing_ok=True)
+                raise AttachmentTooLarge(f"attachment exceeds {limit} bytes")
 
     row = Attachment(
         task_id=task_id,
@@ -134,6 +151,7 @@ def delete_attachment(session: Session, task_id: int, attachment_id: int) -> Non
 __all__ = [
     "AttachmentError",
     "AttachmentNotFound",
+    "AttachmentTooLarge",
     "EDITABLE_STATUSES",
     "InvalidFilename",
     "TaskNotAcceptingAttachments",

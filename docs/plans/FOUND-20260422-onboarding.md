@@ -14,7 +14,7 @@ para el MVP.
   launcher controla solo el servicio launchd/systemd; `make dev`
   corre backend + frontend en el shell donde se invocó y queda
   huérfano al llamar `stop`. Fix = rediseño de control (PID file
-  compartido, o `make dev-daemon` con nohup + pidfile). No-trivial:
+  compartido, o helper detached con nohup + pidfile). No-trivial:
   cruza executor + Makefile + UI readiness. v1.1.
 
 - **8 — `~/.niwa` es singleton por usuario, no hay per-clone
@@ -36,7 +36,7 @@ para el MVP.
 
 - **10 — `make dev` corre en foreground.** Cerrar el terminal
   mata backend + frontend sin warning. Fix parche (README warning)
-  aplicado en PR-V1-26. Fix real = `make dev-daemon` con nohup
+  aplicado en PR-V1-26. Fix real = helper detached con nohup
   + pidfile + `make dev-logs` para seguir el stderr. v1.1.
 
 ## Fricciones cerradas en PR-V1-26

@@ -79,6 +79,11 @@ def create_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="project not found",
         )
+    except service.TaskQueueLimitExceeded:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="project task queue limit reached",
+        )
     return TaskRead.model_validate(task)
 
 
@@ -211,6 +216,31 @@ def delete_task(
 
 
 @tasks_router.post(
+    "/{task_id}/approve-plan",
+    response_model=TaskRead,
+    dependencies=[Depends(require_scope("task:write"))],
+)
+def approve_task_plan(
+    task_id: int,
+    session: Session = Depends(get_session),
+) -> TaskRead:
+    """Approve the latest ready plan for a task in ``waiting_approval``."""
+    try:
+        task = service.approve_task_plan(session, task_id)
+    except service.TaskNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="task not found",
+        )
+    except service.TaskPlanNotApprovable:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="task plan cannot be approved",
+        )
+    return TaskRead.model_validate(task)
+
+
+@tasks_router.post(
     "/{task_id}/respond",
     response_model=TaskRead,
     dependencies=[Depends(require_scope("task:write"))],
@@ -224,9 +254,9 @@ def respond_to_task(
 
     PR-V1-19 closes the clarification round-trip: the endpoint moves the
     task back to ``queued`` and logs the user text as a ``message``
-    event. Known limitation: the next adapter run does **not** receive
-    this response — composite prompt is deferred to a follow-up, the
-    event is stored for audit only.
+    event. The executor reads the latest ``user_response`` event and,
+    when a previous run has a ``session_handle``, resumes that Claude
+    session with the user's response as the prompt.
     """
 
     try:
@@ -337,6 +367,11 @@ def create_attachment(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="task already started; attachments are frozen",
+        )
+    except attachments_service.AttachmentTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=str(exc),
         )
     return AttachmentRead.model_validate(row)
 

@@ -51,6 +51,7 @@ export type ProjectKind = "web-deployable" | "library" | "script";
 export type AutonomyMode = "safe" | "dangerous";
 export type DeployType = "static" | "process";
 export type DeployTrigger = "manual" | "on_done" | "on_merge";
+export type PlanApprovalMode = "auto" | "manual";
 
 export interface Project {
   id: number;
@@ -68,6 +69,8 @@ export interface Project {
   healthcheck_path: string | null;
   deploy_trigger: DeployTrigger;
   public_enabled: boolean;
+  plan_approval_mode: PlanApprovalMode;
+  max_review_iterations: number;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +90,8 @@ export interface ProjectCreatePayload {
   healthcheck_path?: string | null;
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
+  plan_approval_mode?: PlanApprovalMode;
+  max_review_iterations?: number;
 }
 
 export interface ProjectPatchPayload {
@@ -103,6 +108,8 @@ export interface ProjectPatchPayload {
   healthcheck_path?: string | null;
   deploy_trigger?: DeployTrigger;
   public_enabled?: boolean;
+  plan_approval_mode?: PlanApprovalMode;
+  max_review_iterations?: number;
 }
 
 // ---- Tasks wire types (mirror backend app/schemas/task.py) --------------
@@ -145,7 +152,7 @@ export interface TaskCreatePayload {
 export interface TaskPlan {
   id: number;
   task_id: number;
-  status: "ready";
+  status: "ready" | "approved" | "rejected" | "superseded";
   summary: string;
   steps: string[];
   risks: string[];
@@ -159,6 +166,7 @@ export interface TaskReview {
   task_id: number;
   run_id: number | null;
   decision: "approved" | "request_changes";
+  iteration: number;
   summary: string;
   findings: string[];
   reviewer: string;
@@ -403,6 +411,10 @@ export function stopDeployment(id: number): Promise<Deployment> {
 
 export function rollbackDeployment(id: number): Promise<Deployment> {
   return apiFetch<Deployment>(`/deployments/${id}/rollback`, { method: "POST" });
+}
+
+export function healthcheckDeployment(id: number): Promise<Deployment> {
+  return apiFetch<Deployment>(`/deployments/${id}/healthcheck`, { method: "POST" });
 }
 
 // ---- Readiness wire types (mirror backend app/api/readiness.py) --------

@@ -149,6 +149,18 @@ export function useTaskReview(taskId: number | undefined) {
   });
 }
 
+export function useApprovePlan(taskId: number) {
+  const qc = useQueryClient();
+  return useMutation<Task, Error, void>({
+    mutationFn: () =>
+      apiFetch<Task>(`/tasks/${taskId}/approve-plan`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["task", taskId] });
+      qc.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+    },
+  });
+}
+
 export function useDeleteTask(slug: string) {
   const qc = useQueryClient();
   return useMutation<void, Error, number>({
