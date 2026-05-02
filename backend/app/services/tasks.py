@@ -9,18 +9,28 @@ the task itself — the API should never see an event without its task.
 from __future__ import annotations
 
 import json
+import os
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Project, Task, TaskEvent
+from ..models import Project, Task, TaskEvent, TaskPlan
 from ..schemas import TaskCreate
 from .projects import ProjectNotFound, get_project
 
 
 # Statuses that block ``DELETE`` — the executor still owns the lifecycle,
 # so the user must cancel explicitly before removing an active task.
-ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting_input"})
+ACTIVE_STATUSES: frozenset[str] = frozenset({
+    "triaging",
+    "planning",
+    "waiting_approval",
+    "executing",
+    "verifying",
+    "reviewing",
+    "running",
+    "waiting_input",
+})
 
 
 class TaskNotFound(Exception):
@@ -41,6 +51,22 @@ class TaskNotCancellable(Exception):
 
 class TaskNotRetryable(Exception):
     """Raised when a task is not in a failed/cancelled state."""
+
+
+class TaskPlanNotApprovable(Exception):
+    """Raised when a task has no latest ready plan to approve."""
+
+
+class TaskQueueLimitExceeded(Exception):
+    """Raised when a project already has too many queued tasks."""
+
+
+def _max_queued_tasks_per_project() -> int:
+    raw = os.environ.get("NIWA_MAX_QUEUED_TASKS_PER_PROJECT", "100")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 100
 
 
 def list_tasks_for_project(session: Session, slug: str) -> list[Task]:
@@ -79,6 +105,13 @@ def create_task(session: Session, slug: str, payload: TaskCreate) -> Task:
     """
 
     project = get_project(session, slug)
+    queued = session.scalar(
+        select(func.count())
+        .select_from(Task)
+        .where(Task.project_id == project.id, Task.status == "queued")
+    ) or 0
+    if queued >= _max_queued_tasks_per_project():
+        raise TaskQueueLimitExceeded(project.slug)
 
     # The DB column is NOT NULL (PR-V1-02 migration); store an empty string
     # when the caller omits the description. TaskRead exposes the field as
@@ -175,7 +208,7 @@ def respond_to_task(session: Session, task_id: int, response: str) -> Task:
     return task
 
 
-_CANCELLABLE = frozenset({"inbox", "queued", "waiting_input"})
+_CANCELLABLE = frozenset({"inbox", "queued", "waiting_approval", "waiting_input"})
 _RETRYABLE = frozenset({"failed", "cancelled"})
 
 
@@ -219,14 +252,58 @@ def retry_task(session: Session, task_id: int) -> Task:
     return task
 
 
+def approve_task_plan(session: Session, task_id: int) -> Task:
+    """Approve the latest ready plan and return the task to the queue."""
+
+    task = get_task(session, task_id)
+    if task.status != "waiting_approval":
+        raise TaskPlanNotApprovable(task.status)
+    plan = (
+        session.query(TaskPlan)
+        .filter(TaskPlan.task_id == task.id)
+        .order_by(TaskPlan.id.desc())
+        .first()
+    )
+    if plan is None or plan.status != "ready":
+        raise TaskPlanNotApprovable("no ready plan")
+
+    plan.status = "approved"
+    from_status = task.status
+    task.status = "queued"
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="message",
+            message=None,
+            payload_json=json.dumps(
+                {"event": "plan_approved", "plan_id": plan.id}
+            ),
+        )
+    )
+    session.add(
+        TaskEvent(
+            task_id=task.id,
+            kind="status_changed",
+            message=None,
+            payload_json=json.dumps({"from": from_status, "to": "queued"}),
+        )
+    )
+    session.commit()
+    session.refresh(task)
+    return task
+
+
 __all__ = [
     "ACTIVE_STATUSES",
     "ProjectNotFound",
     "TaskNotCancellable",
     "TaskNotDeletable",
     "TaskNotFound",
+    "TaskQueueLimitExceeded",
     "TaskNotRetryable",
     "TaskNotWaitingInput",
+    "TaskPlanNotApprovable",
+    "approve_task_plan",
     "cancel_task",
     "create_task",
     "delete_task",

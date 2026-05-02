@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.api.deps import get_session
-from app.models import TaskPlan, TaskReview
+from app.models import Task, TaskPlan, TaskReview
 
 
 PROJECT_PAYLOAD: dict[str, Any] = {
@@ -59,6 +59,26 @@ def test_create_task_happy(client) -> None:
     assert body["updated_at"]
     assert isinstance(body["id"], int)
     assert isinstance(body["project_id"], int)
+
+
+def test_create_task_respects_project_queue_limit(
+    client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MAX_QUEUED_TASKS_PER_PROJECT", "1")
+    _create_project(client)
+    first = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "first"},
+    )
+    assert first.status_code == 201, first.text
+
+    second = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "second"},
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"] == "project task queue limit reached"
 
 
 def test_create_task_project_not_found(client) -> None:
@@ -167,6 +187,64 @@ def test_get_task_plan_and_review(client, app) -> None:
     review_resp = client.get(f"/api/tasks/{created['id']}/review")
     assert review_resp.status_code == 200
     assert review_resp.json()["decision"] == "approved"
+    assert review_resp.json()["iteration"] == 1
+
+
+def test_approve_plan_requeues_waiting_approval_task(client, app) -> None:
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "approve me"},
+    ).json()
+    override = app.dependency_overrides[get_session]
+    generator = override()
+    session = next(generator)
+    try:
+        task = session.get(Task, created["id"])
+        assert task is not None
+        task.status = "waiting_approval"
+        session.add(
+            TaskPlan(
+                task_id=created["id"],
+                status="ready",
+                summary="Plan summary",
+                steps_json=json.dumps(["Step one"]),
+                risks_json=json.dumps([]),
+                planner="fake-json",
+                raw_json=json.dumps({"summary": "Plan summary"}),
+            )
+        )
+        session.commit()
+    finally:
+        generator.close()
+
+    response = client.post(f"/api/tasks/{created['id']}/approve-plan")
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+
+    plan_resp = client.get(f"/api/tasks/{created['id']}/plan")
+    assert plan_resp.status_code == 200
+    assert plan_resp.json()["status"] == "approved"
+
+    events = _fetch_task_events(app, created["id"])
+    payloads = [
+        json.loads(e["payload_json"])
+        for e in events
+        if e["payload_json"]
+    ]
+    assert any(p.get("event") == "plan_approved" for p in payloads)
+    assert payloads[-1] == {"from": "waiting_approval", "to": "queued"}
+
+
+def test_approve_plan_conflict_when_not_waiting(client) -> None:
+    _create_project(client)
+    created = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "not waiting"},
+    ).json()
+
+    response = client.post(f"/api/tasks/{created['id']}/approve-plan")
+    assert response.status_code == 409
 
 
 def test_get_task_happy(client) -> None:

@@ -66,6 +66,21 @@ def test_post_attachment_writes_file_and_row(client, task_in_project, tmp_path: 
     assert len(listing.json()) == 1
 
 
+def test_post_attachment_rejects_oversized_file(
+    client,
+    task_in_project,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MAX_ATTACHMENT_BYTES", "3")
+    response = _upload(client, task_in_project["id"], "big.txt", b"1234")
+
+    assert response.status_code == 413, response.text
+    assert "attachment exceeds 3 bytes" in response.json()["detail"]
+    expected = tmp_path / ".niwa" / "attachments" / f"task-{task_in_project['id']}" / "big.txt"
+    assert not expected.exists()
+
+
 @pytest.mark.parametrize(
     "filename",
     ["../escape.txt", "..\\escape.txt", "/etc/passwd", "sub/path.txt"],

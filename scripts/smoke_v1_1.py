@@ -308,6 +308,14 @@ class Smoke:
         assert task["status"] == "done"
         assert task["branch_name"]
         assert task["pr_url"]
+        plan = self._request("get", f"/api/tasks/{task_id}/plan", log)
+        assert plan.status_code == 200
+        assert plan.json()["planner"] == "fake-json"
+        assert plan.json()["status"] == "approved"
+        review = self._request("get", f"/api/tasks/{task_id}/review", log)
+        assert review.status_code == 200
+        assert review.json()["reviewer"] == "fake-json"
+        assert review.json()["decision"] == "approved"
         log_out = subprocess.run(
             ["git", "log", "--oneline", "-2"],
             cwd=str(self.repo),

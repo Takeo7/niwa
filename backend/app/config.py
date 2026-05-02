@@ -22,6 +22,7 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "niwa-v1.sqlite
 DEFAULT_CLAUDE_TIMEOUT_S = 1800
 DEFAULT_EXECUTOR_POLL_INTERVAL_S = 5
 DEFAULT_MAX_CONCURRENT_RUNS = 1
+DEFAULT_PIPELINE_MODE = "fake-json"
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,8 @@ class Settings:
     public_scheme: str = "https"
     # Phase 8 / QA-07 concurrency limit
     max_concurrent_runs: int = DEFAULT_MAX_CONCURRENT_RUNS
+    pipeline_planner_mode: str = DEFAULT_PIPELINE_MODE
+    pipeline_reviewer_mode: str = DEFAULT_PIPELINE_MODE
 
 
 def _load_toml(path: Path) -> dict:
@@ -77,6 +80,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     claude = data.get("claude", {}) if isinstance(data, dict) else {}
     db = data.get("db", {}) if isinstance(data, dict) else {}
     executor = data.get("executor", {}) if isinstance(data, dict) else {}
+    pipeline = data.get("pipeline", {}) if isinstance(data, dict) else {}
     # ``[server]`` is not in the template today but we still read it when
     # present so operators who set host/port by hand don't regress.
     server = data.get("server", {}) if isinstance(data, dict) else {}
@@ -100,6 +104,14 @@ def load_settings(config_path: Path | None = None) -> Settings:
         ),
         max_concurrent_runs=int(
             executor.get("max_concurrent_runs", DEFAULT_MAX_CONCURRENT_RUNS)
+        ),
+        pipeline_planner_mode=str(
+            os.environ.get("NIWA_PIPELINE_PLANNER_MODE")
+            or pipeline.get("planner_mode", DEFAULT_PIPELINE_MODE)
+        ),
+        pipeline_reviewer_mode=str(
+            os.environ.get("NIWA_PIPELINE_REVIEWER_MODE")
+            or pipeline.get("reviewer_mode", DEFAULT_PIPELINE_MODE)
         ),
         config_source=candidate if candidate.is_file() else None,
         base_domain=base_domain,
