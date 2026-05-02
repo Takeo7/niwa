@@ -103,7 +103,7 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 - [ ] Set explicit `executor.max_concurrent_runs` for your host capacity
 - [ ] Tune `NIWA_MAX_ATTACHMENT_BYTES` and `NIWA_MAX_QUEUED_TASKS_PER_PROJECT`
 - [ ] Review `audit_events` table periodically
-- [ ] Use Caddy with TLS for any network exposure (Phase 5)
+- [ ] Use Caddy or an equivalent TLS-terminating proxy for any network exposure
 
 ## Reporting Vulnerabilities
 

@@ -9,6 +9,10 @@ Niwa can publish two surfaces:
 Projects are private by default. A project is routed publicly only when
 `public_enabled=true`.
 
+This runbook describes operator-owned infrastructure. Niwa can render and
+validate Caddy config, but CI/release gates do not prove real DNS propagation,
+TLS issuance, tunnel availability, or Caddy reload on a host.
+
 ## VPS Mode
 
 1. Point DNS at the VPS:

@@ -60,9 +60,10 @@ claim queued -> triage -> TaskPlan -> adapter execution -> verify_run ->
 TaskReview -> finalize_task -> optional deploy
 ```
 
-Limitación importante: aunque `Task.status` acepta `triaging`, `planning`,
-`waiting_approval`, `executing`, `verifying` y `reviewing`, el executor todavía
-no los usa como state machine completa. PR-CLOSE-02 debe cerrar esa brecha.
+El executor emite transiciones explícitas como task events:
+`triaging`, `planning`, `waiting_approval`, `executing`, `verifying`,
+`reviewing` y estados terminales. `waiting_approval` bloquea la ejecución hasta
+aprobación manual cuando el proyecto lo configura.
 
 Planner/reviewer usan `fake-json` por defecto para tests/smoke y pueden usar
 `claude-code` si el operador lo configura. El reviewer `claude-code` recibe
@@ -103,6 +104,7 @@ requires a local Caddy binary.
 `POST /api/mcp` is HTTP JSON-RPC 2.0 with Bearer token auth. Current methods:
 
 - `ping`
+- `initialize`
 - `tools/list`
 - `tools/call`
 - `project_list`
@@ -119,15 +121,15 @@ requires a local Caddy binary.
 - `deploy_trigger`
 - `deployment_status`
 
-This is an HTTP JSON-RPC surface, not stdio MCP. PR-CLOSE-07 will add minimal
-`initialize` behavior and stricter conformance docs/tests.
+This is an HTTP JSON-RPC surface. It does not provide stdio transport or
+streaming responses.
 
 ### Security/ops current truth
 
 Niwa has auth, token scopes, audit logging, redaction helpers, run-event
 redaction, kill switch, PID tracking, backup/restore and doctor. It does not
-have a strong OS sandbox; Claude Code runs as the Niwa OS user. Project locks,
-attachment size limits and stronger exposure checks are PR-CLOSE-06 work.
+have a strong OS sandbox; Claude Code runs as the Niwa OS user. Project locks
+and limits are local single-worker guards, not distributed fleet controls.
 
 ## Layout actual (tras PR-V1-11c)
 
@@ -2305,15 +2307,8 @@ Tests: `tests/test_mcp.py` (17 casos: auth, scope denial, project/task tools, er
 
 Tests: `tests/test_metrics.py` (6 casos)
 
-## Próximos PRs (SPEC §9)
+## Historical roadmap notes
 
-- Semana 5 (restante): instalación en la máquina de la pareja.
-- Semana 6: bugfix + jubilar v0.2. Follow-ups de PR-V1-22:
-  detectar expiración de sesión en el CLI con fallback a prompt
-  compuesto; UI para cancelar un `waiting_input` largo.
-- Phase 5 pendiente: UI login, NET-05 wildcard routing, NET-06..11 TLS/VPS/tunnel
-- Phase 6 pendiente: SEC-04..11 workspace isolation, process limits, kill switch, backup
-- Phase 7 pendiente: MCP resources/prompts (MCP-12), pull/deploy tools (MCP-10/11)
-- Phase 8 pendiente: QA-01..05, QA-07..12
-
-Ver `docs/plans/` para los briefs conforme se escriben.
+Older sections in this handbook may still reference PR-V1 or phase numbers for
+implementation history. The current release contract is `README.md`,
+`docs/SPEC.md`, `docs/STATE.md`, and `docs/ACCEPTANCE.md`.

@@ -3,21 +3,21 @@
 Estado operativo de Niwa postmerge. `main` es la rama oficial.
 
 **WS-01..WS-10 mergeados en main el 2026-05-01.** Niwa ya tiene smoke
-determinista, auth/scopes, TaskPlan/TaskReview fake-json, deployments,
-`deploy_trigger`, `public_enabled`, Caddy CLI, MCP tools, UI ampliada,
-doctor, backup y restore.
+determinista, auth/scopes, TaskPlan/TaskReview con `fake-json` por defecto y
+`claude-code` opt-in, deployments, `deploy_trigger`, `public_enabled`, Caddy
+CLI, MCP tools, UI ampliada, doctor, backup y restore.
 
-El cierre actual es postmerge final-close. PR-CLOSE-01..08 están preparados en
-una pila de PRs batch; PR-CLOSE-09 empaqueta la release candidate y deja la
-aceptación final documentada.
+El cierre actual es hardening final de `0.2.0-rc.1`: permisos estrictos de
+`NIWA_HOME` en release-gate, reviewer `claude-code` con contexto de diff
+acotado, y aceptación/live-smoke sin claims ambiguos.
 
 ```
 last_batch_merged: WS-01..WS-10 (#159..#167)
 last_merge_sha: fe3800aaf66352bc27307296b25cde20a6572179
 date: 2026-05-01
 week: postmerge-final-close
-next_pr: PR-CLOSE-09-release-packaging-final-acceptance
-week_status: release-candidate-stack-open
+next_pr: PR-RC1-HARDEN-03-acceptance-live-smoke
+week_status: rc1-final-hardening
 blockers: []
 ```
 
@@ -48,7 +48,8 @@ blockers: []
 ### Limitaciones conocidas
 
 - Planner/reviewer `claude-code` requieren credenciales CLI reales; `fake-json`
-  sigue siendo el default determinista para CI/smoke.
+  sigue siendo el default determinista para CI/smoke. El reviewer
+  `claude-code` recibe evidencia y diff acotado, no una auditoría completa.
 - DNS, TLS, Caddy reloads y túneles reales siguen siendo pasos manuales del
   operador; los tests cubren generación/configuración determinista.
 - MCP es HTTP JSON-RPC request/response, no stdio ni streaming.
