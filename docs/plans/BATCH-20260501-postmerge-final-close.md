@@ -101,6 +101,9 @@ must not be changed until the human reviews this file and gives one explicit:
   PR-CLOSE-07. PR-CLOSE-09 started on
   `codex/close-09-release-packaging-final-acceptance` for version, changelog,
   acceptance checklist, release notes template, and final gates.
+- 2026-05-02: PR-CLOSE-09 release packaging implemented locally and final
+  gates passed before commit: backend tests, frontend tests, deterministic
+  smoke, and clean-machine `make release-gate`.
 
 ## Current Repo State
 
