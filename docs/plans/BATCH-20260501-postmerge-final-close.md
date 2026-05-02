@@ -67,6 +67,13 @@ must not be changed until the human reviews this file and gives one explicit:
   timing-sensitive runs SSE test; the test was stabilized and `make
   release-gate` then passed with clean HOME bootstrap, `make test`,
   `make smoke`, doctor, backup, and restore.
+- 2026-05-02: PR-CLOSE-04 pushed and opened as draft PR #172, stacked on
+  PR-CLOSE-03. PR-CLOSE-05 started on
+  `codex/close-05-online-publication-e2e` for Caddy/publication tests and
+  operator runbook coverage.
+- 2026-05-02: PR-CLOSE-05 implemented locally with added Caddy/CLI coverage
+  and `docs/runbooks/ONLINE_PUBLICATION.md`. Targeted publication tests,
+  backend, frontend, and smoke gates passed before commit.
 
 ## Current Repo State
 
