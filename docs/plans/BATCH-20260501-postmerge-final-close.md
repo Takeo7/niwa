@@ -97,6 +97,10 @@ must not be changed until the human reviews this file and gives one explicit:
 - 2026-05-02: PR-CLOSE-08 implemented locally with TaskDetail plan/review/run/
   deployment timeline, deploy healthcheck/process-log UI, admin operator hints,
   and RTL coverage. Backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-08 pushed and opened as draft PR #176, stacked on
+  PR-CLOSE-07. PR-CLOSE-09 started on
+  `codex/close-09-release-packaging-final-acceptance` for version, changelog,
+  acceptance checklist, release notes template, and final gates.
 
 ## Current Repo State
 
