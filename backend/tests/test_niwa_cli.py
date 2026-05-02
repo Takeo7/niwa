@@ -346,6 +346,23 @@ apps_domain = "apps.example.com"
     assert f"wrote {output}" in capsys.readouterr().out
 
 
+def test_proxy_render_print_outputs_caddyfile(tmp_path, monkeypatch, capsys):
+    cli = _load_cli(monkeypatch, tmp_path)
+    config = tmp_path / "config.toml"
+    db_path = tmp_path / "missing.sqlite3"
+    config.write_text(
+        f'[db]\npath = "{db_path}"\n[network]\nbase_domain = "example.com"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(config))
+
+    assert cli.main(["proxy", "render", "--print"]) == 0
+
+    out = capsys.readouterr().out
+    assert "niwa.example.com" in out
+    assert "reverse_proxy localhost:8000" in out
+
+
 def test_proxy_validate_requires_caddy_binary(tmp_path, monkeypatch, capsys):
     cli = _load_cli(monkeypatch, tmp_path)
     monkeypatch.setattr(cli.shutil, "which", lambda _name: None)

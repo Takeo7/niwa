@@ -1,4 +1,4 @@
-.PHONY: install dev test smoke clean
+.PHONY: install dev test smoke smoke-live release-gate clean
 
 # Niwa v1 dev harness.
 
@@ -22,6 +22,12 @@ test:
 
 smoke:
 	$(PYTHON) scripts/smoke_v1_1.py
+
+smoke-live:
+	scripts/smoke_live.sh
+
+release-gate:
+	scripts/clean_machine_gate.sh
 
 clean:
 	rm -rf $(BACKEND_DIR)/.pytest_cache $(BACKEND_DIR)/**/__pycache__ \

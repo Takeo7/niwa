@@ -2,7 +2,9 @@
 
 Last updated: 2026-05-01
 
-This runbook covers production deployment of Niwa, including TLS, public exposure, and tunnel modes (NET-06/07/08).
+This runbook covers production deployment of Niwa, including TLS, public exposure, and tunnel modes (NET-06/07/08). See also
+`docs/runbooks/ONLINE_PUBLICATION.md` for the current Caddy/DNS publication
+contract.
 
 ## Prerequisites
 

@@ -413,6 +413,10 @@ export function rollbackDeployment(id: number): Promise<Deployment> {
   return apiFetch<Deployment>(`/deployments/${id}/rollback`, { method: "POST" });
 }
 
+export function healthcheckDeployment(id: number): Promise<Deployment> {
+  return apiFetch<Deployment>(`/deployments/${id}/healthcheck`, { method: "POST" });
+}
+
 // ---- Readiness wire types (mirror backend app/api/readiness.py) --------
 
 export interface ReadinessResponse {
