@@ -24,7 +24,7 @@ critical APIs require session/API-token auth and scopes.
 The postmerge flow is:
 
 ```
-triage -> deterministic plan -> execute -> verify -> deterministic review -> finalize -> optional deploy
+triage -> plan -> execute -> verify -> review -> finalize -> optional deploy
 ```
 
 Current truth:
@@ -32,8 +32,11 @@ Current truth:
 - Triage exists and can execute directly or split into subtasks.
 - `TaskPlan` exists and is persisted before code execution.
 - `TaskReview` exists and is persisted after verification.
-- Planner/reviewer are deterministic `fake-json` today. Real LLM
-  planner/reviewer mode is planned for PR-CLOSE-03.
+- Planner/reviewer default to deterministic `fake-json`; optional
+  `claude-code` modes can be enabled by operators with local CLI credentials.
+- The `claude-code` reviewer receives verification evidence plus bounded
+  `git status`/`git diff` context. It is not a complete semantic or security
+  audit.
 - Pipeline states (`triaging`, `planning`, `waiting_approval`, `executing`,
   `verifying`, `reviewing`) exist in the model. PR-CLOSE-02 is responsible for
   making them a real state machine throughout execution.

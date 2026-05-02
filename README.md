@@ -11,7 +11,9 @@ Caddy config generation, task plans/reviews, doctor, backup, and restore exist.
 Important truth boundary: planner and reviewer default to deterministic
 `fake-json` for tests and smoke. Operators can opt into configurable
 `claude-code` planner/reviewer modes; invalid LLM JSON falls back safely rather
-than leaving runs hanging.
+than leaving runs hanging. The `claude-code` reviewer receives verification
+evidence plus bounded `git status`/`git diff` context; it is not a complete
+semantic or security audit.
 
 See `docs/SPEC.md` for the product contract and `docs/HANDBOOK.md` for the code
 map.
@@ -74,8 +76,9 @@ Niwa works on existing git repositories with a clean working tree.
      by generated Caddy config.
 
 2. Create a task. Current flow:
-   triage -> deterministic plan -> execute -> verify -> deterministic review ->
-   finalize -> optional deploy.
+   triage -> plan -> execute -> verify -> review -> finalize -> optional
+   deploy. Plan/review use deterministic `fake-json` by default and optional
+   `claude-code` modes when configured.
 
 3. Watch task detail. If Claude asks a question, the task moves to
    `waiting_input`; respond in the UI and Niwa resumes the prior Claude session
@@ -153,7 +156,9 @@ running Niwa. Before exposing Niwa beyond localhost, enable auth with
 ## Known Gaps
 
 - `fake-json` remains the default planner/reviewer for deterministic local and
-  CI gates; real `claude-code` modes require operator CLI credentials.
+  CI gates; real `claude-code` modes require operator CLI credentials. The
+  `claude-code` reviewer sees bounded verification evidence and diff context,
+  not an exhaustive security review.
 - Online publication has deterministic Caddy support, but DNS/TLS/Caddy reloads
   remain manual operator steps.
 - MCP is HTTP JSON-RPC request/response, not stdio or streaming MCP.
