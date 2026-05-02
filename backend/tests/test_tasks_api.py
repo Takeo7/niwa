@@ -61,6 +61,26 @@ def test_create_task_happy(client) -> None:
     assert isinstance(body["project_id"], int)
 
 
+def test_create_task_respects_project_queue_limit(
+    client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NIWA_MAX_QUEUED_TASKS_PER_PROJECT", "1")
+    _create_project(client)
+    first = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "first"},
+    )
+    assert first.status_code == 201, first.text
+
+    second = client.post(
+        "/api/projects/demo/tasks",
+        json={"title": "second"},
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"] == "project task queue limit reached"
+
+
 def test_create_task_project_not_found(client) -> None:
     response = client.post(
         "/api/projects/ghost/tasks",
@@ -167,6 +187,7 @@ def test_get_task_plan_and_review(client, app) -> None:
     review_resp = client.get(f"/api/tasks/{created['id']}/review")
     assert review_resp.status_code == 200
     assert review_resp.json()["decision"] == "approved"
+    assert review_resp.json()["iteration"] == 1
 
 
 def test_approve_plan_requeues_waiting_approval_task(client, app) -> None:

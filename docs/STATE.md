@@ -7,18 +7,17 @@ determinista, auth/scopes, TaskPlan/TaskReview fake-json, deployments,
 `deploy_trigger`, `public_enabled`, Caddy CLI, MCP tools, UI ampliada,
 doctor, backup y restore.
 
-El cierre actual es postmerge final-close: alinear verdad pública, hacer real
-la state machine del pipeline, añadir planner/reviewer LLM configurable,
-probar release gates limpios, cerrar publicación online E2E, seguridad, MCP
-conformance, UI de operador y acceptance final.
+El cierre actual es postmerge final-close. PR-CLOSE-01..08 están preparados en
+una pila de PRs batch; PR-CLOSE-09 empaqueta la release candidate y deja la
+aceptación final documentada.
 
 ```
 last_batch_merged: WS-01..WS-10 (#159..#167)
 last_merge_sha: fe3800aaf66352bc27307296b25cde20a6572179
 date: 2026-05-01
 week: postmerge-final-close
-next_pr: PR-CLOSE-01-truth-alignment
-week_status: final-close-in-progress
+next_pr: PR-CLOSE-09-release-packaging-final-acceptance
+week_status: release-candidate-stack-open
 blockers: []
 ```
 
@@ -33,7 +32,9 @@ blockers: []
   routers críticos exigen scopes.
 - API tokens con scopes `read`, `task:create`, `task:write`, `deploy`, `merge`,
   `admin`.
-- Plan/review persistidos con `TaskPlan` y `TaskReview` usando fake-json.
+- Pipeline explícito con `TaskPlan`, `TaskReview`, aprobación manual opcional,
+  request-changes bounded loop, y planner/reviewer configurable
+  `fake-json|claude-code`.
 - Deploy static/process con versioned deployments, stop/rollback/healthcheck,
   logs y triggers `manual|on_done|on_merge`.
 - Publicación opt-in con `public_enabled=false` por defecto y Caddyfile
@@ -44,22 +45,17 @@ blockers: []
 - Operabilidad: `niwa-executor dev start --detach`, `doctor`, `backup`,
   `restore`, `cleanup`, kill switch.
 
-### Brechas conocidas
+### Limitaciones conocidas
 
-- Los estados de pipeline están en el modelo, pero el executor todavía no usa
-  la state machine completa.
-- Planner/reviewer son deterministic fake-json; el modo LLM real configurable
-  falta.
-- Manual plan approval y bounded request-changes loop faltan.
-- Release gate clean-machine y smoke-live opcional faltan.
-- Online publication requiere tests E2E deterministas y runbook exacto para
-  DNS/Caddy/túneles.
-- Seguridad necesita locks por proyecto, límites y declaración explícita de no
-  sandbox fuerte.
-- MCP necesita conformance mínima (`initialize`, errores estables, ejemplos
-  cliente).
-- UI necesita approval controls, timeline unificado, logs deploy, build command
-  y preview de URL pública.
+- Planner/reviewer `claude-code` requieren credenciales CLI reales; `fake-json`
+  sigue siendo el default determinista para CI/smoke.
+- DNS, TLS, Caddy reloads y túneles reales siguen siendo pasos manuales del
+  operador; los tests cubren generación/configuración determinista.
+- MCP es HTTP JSON-RPC request/response, no stdio ni streaming.
+- No hay sandbox fuerte de sistema operativo; Claude corre con permisos del
+  usuario que ejecuta Niwa.
+- Project locking y límites son guardas locales, no un sistema distribuido de
+  cuotas/locks para flotas de workers.
 
 ## Batch WS-01..WS-10
 

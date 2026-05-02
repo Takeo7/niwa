@@ -17,7 +17,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from ..adapters import (
@@ -26,6 +26,7 @@ from ..adapters import (
     resolve_cli_path,
     resolve_timeout,
 )
+from ..config import load_settings
 from ..deployments.service import trigger_deploy
 from ..finalize import finalize_task
 from ..models import (
@@ -38,6 +39,7 @@ from ..models import (
     TaskPlan,
     TaskReview,
 )
+from ..pipeline import plan_task, review_task
 from ..security.redaction import redact
 from ..triage import TriageDecision, TriageError, triage_task
 from ..verification import verify_run
@@ -53,6 +55,12 @@ ADAPTER_MODEL = "claude-code"
 _TERMINAL_STATUSES = frozenset({"done", "failed", "cancelled"})
 
 
+def _running_run_count(session: Session) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Run).where(Run.status == "running")
+    ) or 0
+
+
 def claim_next_task(session: Session) -> Task | None:
     """Atomically take ownership of the oldest ``queued`` task."""
 
@@ -61,10 +69,20 @@ def claim_next_task(session: Session) -> Task | None:
     session.execute(text("BEGIN IMMEDIATE"))
 
     try:
+        if _running_run_count(session) >= max(1, load_settings().max_concurrent_runs):
+            session.commit()
+            return None
         row = session.execute(
             text(
-                "SELECT id FROM tasks WHERE status = 'queued' "
-                "ORDER BY created_at ASC, id ASC LIMIT 1"
+                "SELECT t.id FROM tasks t "
+                "WHERE t.status = 'queued' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM tasks active "
+                "  JOIN runs r ON r.task_id = active.id "
+                "  WHERE active.project_id = t.project_id "
+                "  AND r.status = 'running'"
+                ") "
+                "ORDER BY t.created_at ASC, t.id ASC LIMIT 1"
             )
         ).first()
         if row is None:
@@ -132,7 +150,11 @@ def run_adapter(session: Session, task: Task) -> Run:
     # ``git_setup_failed`` — the task never gets to mutate the working
     # tree, and ``task.branch_name`` stays ``None``.
     try:
-        branch_name = prepare_task_branch(artifact_root or ".", task)
+        branch_name = prepare_task_branch(
+            artifact_root or ".",
+            task,
+            allow_dirty_existing_branch=bool(task.branch_name),
+        )
     except GitWorkspaceError as exc:
         logger.warning("git setup failed for task_id=%s: %s", task.id, exc)
         session.add(
@@ -238,6 +260,10 @@ def run_adapter(session: Session, task: Task) -> Run:
     if result.outcome != "needs_input":
         _set_task_status(session, task, "reviewing", reason="review_start")
         review = _create_task_review(session, task, run, result)
+        if result.passed and review.decision == "request_changes":
+            if _handle_review_request_changes(session, task, run, project, review):
+                session.refresh(run)
+                return run
 
     # PR-V1-13: safe-mode finalize runs on verified runs only. It is
     # best-effort — ``finalize_task`` swallows subprocess failures and
@@ -439,26 +465,18 @@ def _create_task_plan(
     *,
     status: str = "approved",
 ) -> TaskPlan:
-    """Persist a deterministic JSON plan before code execution begins."""
+    """Persist a JSON plan before code execution begins."""
 
-    payload = {
-        "summary": f"Execute task: {task.title}",
-        "steps": [
-            "Inspect the assigned task and attached context.",
-            "Apply the smallest code or content change that satisfies the task.",
-            "Run verification and finalize only if evidence passes.",
-        ],
-        "risks": [],
-        "planner": "fake-json",
-    }
+    project = session.get(Project, task.project_id)
+    result = plan_task(task, project)
     plan = TaskPlan(
         task_id=task.id,
         status=status,
-        summary=payload["summary"],
-        steps_json=json.dumps(payload["steps"]),
-        risks_json=json.dumps(payload["risks"]),
-        planner="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        summary=result.summary,
+        steps_json=json.dumps(result.steps),
+        risks_json=json.dumps(result.risks),
+        planner=result.planner,
+        raw_json=result.raw_json,
     )
     session.add(plan)
     session.flush()
@@ -483,31 +501,27 @@ def _create_task_plan(
 
 
 def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskReview:
-    """Persist a deterministic JSON review after verification completes."""
+    """Persist a JSON review after verification completes."""
 
-    decision = "approved" if result.passed else "request_changes"
-    findings = [] if result.passed else [
-        f"Verification did not pass: {result.error_code or result.outcome}"
-    ]
+    iteration = _next_review_iteration(session, task.id)
+    review_result = review_task(task, run, result, iteration=iteration)
     payload = {
-        "decision": decision,
-        "summary": (
-            "Verification passed; finalize is allowed."
-            if result.passed
-            else "Verification failed; changes are required before finalize."
-        ),
-        "findings": findings,
-        "reviewer": "fake-json",
+        "decision": review_result.decision,
+        "summary": review_result.summary,
+        "findings": review_result.findings,
+        "iteration": iteration,
+        "reviewer": review_result.reviewer,
         "verification": result.evidence,
     }
     review = TaskReview(
         task_id=task.id,
         run_id=run.id,
-        decision=decision,
-        summary=payload["summary"],
-        findings_json=json.dumps(findings),
-        reviewer="fake-json",
-        raw_json=json.dumps(payload, sort_keys=True),
+        decision=review_result.decision,
+        iteration=iteration,
+        summary=review_result.summary,
+        findings_json=json.dumps(review_result.findings),
+        reviewer=review_result.reviewer,
+        raw_json=review_result.raw_json,
     )
     session.add(review)
     session.flush()
@@ -521,6 +535,7 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
                     "event": "review_completed",
                     "review_id": review.id,
                     "decision": review.decision,
+                    "reviewer": review.reviewer,
                 }
             ),
         )
@@ -535,6 +550,66 @@ def _create_task_review(session: Session, task: Task, run: Run, result) -> TaskR
     session.commit()
     session.refresh(review)
     return review
+
+
+def _next_review_iteration(session: Session, task_id: int) -> int:
+    latest = (
+        session.query(TaskReview)
+        .filter(TaskReview.task_id == task_id)
+        .order_by(TaskReview.iteration.desc(), TaskReview.id.desc())
+        .first()
+    )
+    return 1 if latest is None else latest.iteration + 1
+
+
+def _handle_review_request_changes(
+    session: Session,
+    task: Task,
+    run: Run,
+    project: Project | None,
+    review: TaskReview,
+) -> bool:
+    """Return True when the task was requeued or exhausted by review."""
+
+    max_iterations = (
+        getattr(project, "max_review_iterations", 1) if project else 1
+    )
+    if review.iteration <= max_iterations:
+        now = datetime.now(timezone.utc)
+        run.finished_at = now
+        run.status = "completed"
+        run.outcome = "review_request_changes"
+        session.add(
+            RunEvent(
+                run_id=run.id,
+                event_type="review_request_changes",
+                payload_json=_event_payload(
+                    {
+                        "review_id": review.id,
+                        "iteration": review.iteration,
+                        "max_review_iterations": max_iterations,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        _set_task_status(
+            session,
+            task,
+            "queued",
+            reason="review_request_changes",
+        )
+        return True
+
+    _finalize(
+        session,
+        task,
+        run,
+        outcome="review_changes_exhausted",
+        exit_code=run.exit_code,
+        error_code="review_changes_exhausted",
+    )
+    return True
 
 
 def _maybe_trigger_deploy(

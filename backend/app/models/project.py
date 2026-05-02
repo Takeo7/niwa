@@ -67,6 +67,9 @@ class Project(Base):
     plan_approval_mode: Mapped[str] = mapped_column(
         String, nullable=False, server_default="auto"
     )
+    max_review_iterations: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

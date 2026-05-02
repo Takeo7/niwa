@@ -27,6 +27,9 @@ class TaskReview(Base):
         index=True,
     )
     decision: Mapped[str] = mapped_column(String, nullable=False)
+    iteration: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     findings_json: Mapped[str] = mapped_column(Text, nullable=False)
     reviewer: Mapped[str] = mapped_column(

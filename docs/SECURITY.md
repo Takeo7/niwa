@@ -32,8 +32,8 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 ### T2 — Compromised MCP client
 **Scenario:** An MCP client with a valid token creates malicious tasks.  
 **Impact:** Same as T1.  
-**Mitigations:** API token scope `task:create` required; `task:write` for mutations; audit log records all MCP actions.  
-**Gap:** A `task:create` token can create unlimited tasks.
+**Mitigations:** API token scope `task:create` required; `task:write` for mutations; audit log records all MCP actions; `NIWA_MAX_QUEUED_TASKS_PER_PROJECT` caps queued task buildup per project.
+**Gap:** Limits are process-level application guards, not a distributed quota system.
 
 ### T3 — Token leakage in logs
 **Scenario:** Build command outputs a token to stdout; it gets stored in `build_log` or `run_events`.  
@@ -50,8 +50,8 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 ### T5 — Runaway process (deploy)
 **Scenario:** Process deployment starts a long-running process that doesn't stop.  
 **Impact:** Port exhaustion, resource drain.  
-**Mitigations:** `stop_process` sends SIGTERM then SIGKILL after 5s; port allocator checks OS-bound ports; the ops kill switch marks active runs cancelled and sends SIGTERM to recorded run process groups when available.  
-**Gap:** No global max-process limit yet (Phase 8, QA-07).
+**Mitigations:** `stop_process` sends SIGTERM then SIGKILL after 5s; port allocator checks OS-bound ports; the ops kill switch marks active runs cancelled and sends SIGTERM to recorded run process groups when available; `executor.max_concurrent_runs` blocks new claims when the configured run limit is reached.
+**Gap:** Executor mode is still designed for a local serial worker. The project lock is enforced against active `running` runs and is not a strong distributed lock for multiple independent worker fleets.
 
 ### T6 — Public endpoint exposure
 **Scenario:** Niwa is deployed on a public server without auth enabled.  
@@ -71,6 +71,12 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 **Mitigations:** `shlex.split()` used instead of `shell=True` — commands are tokenized and executed without a shell, preventing injection.  
 **Gap:** The first token is the executable; a malicious path could still be used if the user controls `build_command` (which they do, as the project owner).
 
+### T9 — Oversized attachment upload
+**Scenario:** UI or MCP clients upload very large attachments to fill disk.
+**Impact:** Disk exhaustion, slow task preparation.
+**Mitigations:** `NIWA_MAX_ATTACHMENT_BYTES` defaults to 10 MiB and rejects oversized uploads before creating DB rows; MCP returns a stable JSON-RPC error.
+**Gap:** The limit is per attachment, not a total storage quota per project.
+
 ## Risk Matrix
 
 | Threat | Likelihood | Impact | Mitigation Status |
@@ -83,6 +89,7 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 | T6 Public exposure | High if deployed | Critical | Good (auth module) |
 | T7 Auto-merge | Low (opt-in) | Medium | Good (UI warning) |
 | T8 Shell injection | Low (trusted user) | Critical | Good (shlex.split) |
+| T9 Oversized attachment | Medium | Medium | Good (per-file limit) |
 
 ## Security Checklist for Production Deployment
 
@@ -91,6 +98,8 @@ Niwa executes Claude Code CLI against local git repositories. This document desc
 - [ ] Enable auth before exposing to network
 - [ ] Do NOT use `autonomy_mode = "dangerous"` without understanding implications
 - [ ] Keep `~/.niwa/` permissions restricted (`chmod 700 ~/.niwa`)
+- [ ] Set explicit `executor.max_concurrent_runs` for your host capacity
+- [ ] Tune `NIWA_MAX_ATTACHMENT_BYTES` and `NIWA_MAX_QUEUED_TASKS_PER_PROJECT`
 - [ ] Review `audit_events` table periodically
 - [ ] Use Caddy with TLS for any network exposure (Phase 5)
 

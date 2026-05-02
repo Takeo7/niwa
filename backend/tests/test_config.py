@@ -136,6 +136,23 @@ def test_executor_section_is_read(
     assert settings.executor_poll_interval_s == 9
 
 
+def test_pipeline_section_is_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _write_toml(
+        tmp_path,
+        cli="/bin/claude",
+        db=str(tmp_path / "db.sqlite3"),
+    )
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('\n[pipeline]\nplanner_mode = "claude-code"\nreviewer_mode = "claude-code"\n')
+    monkeypatch.setenv("NIWA_CONFIG_PATH", str(path))
+    monkeypatch.delenv("NIWA_CONFIG", raising=False)
+
+    settings = load_settings()
+
+    assert settings.pipeline_planner_mode == "claude-code"
+    assert settings.pipeline_reviewer_mode == "claude-code"
+
+
 def test_missing_toml_falls_back_to_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

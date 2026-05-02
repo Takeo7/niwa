@@ -1,8 +1,14 @@
-import { Button, Group, Select, Stack, Switch, TextInput, Title } from "@mantine/core";
+import { Button, Group, NumberInput, Select, Stack, Switch, TextInput, Title } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useEffect, useState } from "react";
 
-import type { AutonomyMode, DeployTrigger, DeployType, Project } from "../../api";
+import type {
+  AutonomyMode,
+  DeployTrigger,
+  DeployType,
+  PlanApprovalMode,
+  Project,
+} from "../../api";
 import { usePatchProject } from "./api";
 
 interface Props {
@@ -13,6 +19,12 @@ export function ProjectSettingsTab({ project }: Props) {
   const patchProject = usePatchProject(project.slug);
   const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>(project.autonomy_mode);
   const [deployTrigger, setDeployTrigger] = useState<DeployTrigger>(project.deploy_trigger);
+  const [planApprovalMode, setPlanApprovalMode] = useState<PlanApprovalMode>(
+    project.plan_approval_mode,
+  );
+  const [maxReviewIterations, setMaxReviewIterations] = useState(
+    project.max_review_iterations,
+  );
   const [deployType, setDeployType] = useState<DeployType>(project.deploy_type);
   const [publicEnabled, setPublicEnabled] = useState(project.public_enabled);
   const [gitRemote, setGitRemote] = useState(project.git_remote ?? "");
@@ -23,6 +35,8 @@ export function ProjectSettingsTab({ project }: Props) {
   useEffect(() => {
     setAutonomyMode(project.autonomy_mode);
     setDeployTrigger(project.deploy_trigger);
+    setPlanApprovalMode(project.plan_approval_mode);
+    setMaxReviewIterations(project.max_review_iterations);
     setDeployType(project.deploy_type);
     setPublicEnabled(project.public_enabled);
     setGitRemote(project.git_remote ?? "");
@@ -36,6 +50,8 @@ export function ProjectSettingsTab({ project }: Props) {
       {
         autonomy_mode: autonomyMode,
         deploy_trigger: deployTrigger,
+        plan_approval_mode: planApprovalMode,
+        max_review_iterations: maxReviewIterations,
         deploy_type: deployType,
         public_enabled: publicEnabled,
         git_remote: gitRemote.trim() || null,
@@ -85,6 +101,24 @@ export function ProjectSettingsTab({ project }: Props) {
             ]}
             value={deployTrigger}
             onChange={(value) => setDeployTrigger((value ?? "manual") as DeployTrigger)}
+          />
+        </Group>
+        <Group grow align="end">
+          <Select
+            label="Plan approval"
+            data={[
+              { value: "auto", label: "auto" },
+              { value: "manual", label: "manual" },
+            ]}
+            value={planApprovalMode}
+            onChange={(value) => setPlanApprovalMode((value ?? "auto") as PlanApprovalMode)}
+          />
+          <NumberInput
+            label="Review retries"
+            min={0}
+            max={5}
+            value={maxReviewIterations}
+            onChange={(value) => setMaxReviewIterations(Number(value) || 0)}
           />
         </Group>
       </Stack>

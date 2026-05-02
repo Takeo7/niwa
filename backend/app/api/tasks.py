@@ -79,6 +79,11 @@ def create_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="project not found",
         )
+    except service.TaskQueueLimitExceeded:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="project task queue limit reached",
+        )
     return TaskRead.model_validate(task)
 
 
@@ -362,6 +367,11 @@ def create_attachment(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="task already started; attachments are frozen",
+        )
+    except attachments_service.AttachmentTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=str(exc),
         )
     return AttachmentRead.model_validate(row)
 

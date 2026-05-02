@@ -4,13 +4,14 @@ This guide explains how to connect OpenClaw (or any other MCP client) to a Niwa 
 
 ## Overview
 
-Niwa exposes an MCP server at `POST /api/mcp`. All communication is JSON-RPC 2.0 over HTTP with Bearer token authentication.
+Niwa exposes an MCP server at `POST /api/mcp`. All communication is
+request/response JSON-RPC 2.0 over HTTP with Bearer token authentication.
+Niwa does not provide stdio transport or streaming responses.
 
 The MCP server is a thin layer over Niwa's internal services — it does not expose filesystem access or shell execution directly.
 
 Current truth: this is an HTTP JSON-RPC tool surface, not stdio MCP. It supports
-`ping`, `tools/list`, `tools/call`, and the tools listed below. Minimal
-`initialize`/client conformance hardening is planned for PR-CLOSE-07.
+`initialize`, `ping`, `tools/list`, `tools/call`, and the tools listed below.
 
 ## Requirements
 
@@ -71,21 +72,52 @@ For a remote Niwa instance, replace `localhost:8000` with your domain (e.g. `htt
 
 ## Available Tools
 
+Every request uses the JSON-RPC envelope:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "<method>", "params": {}}
+```
+
+`tools/call` is also supported for clients that call MCP tools through the
+standard wrapper:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "project_list",
+    "arguments": {}
+  }
+}
+```
+
 ### Project Tools
+
+**`initialize`** — Return MCP handshake metadata. No auth required.
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+```
 
 **`ping`** — Check connectivity. No auth required.
 ```json
-{"method": "ping", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+```
+
+**`tools/list`** — List tool definitions. Requires any valid token.
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 ```
 
 **`project_list`** — List all projects. Scope: `read`.
 ```json
-{"method": "project_list", "params": {}}
+{"jsonrpc": "2.0", "id": 1, "method": "project_list", "params": {}}
 ```
 
 **`project_get`** — Get project details. Scope: `read`.
 ```json
-{"method": "project_get", "params": {"slug": "my-project"}}
+{"jsonrpc": "2.0", "id": 1, "method": "project_get", "params": {"slug": "my-project"}}
 ```
 
 ### Task Tools
@@ -93,6 +125,8 @@ For a remote Niwa instance, replace `localhost:8000` with your domain (e.g. `htt
 **`task_create`** — Create a task. Scope: `task:create`.
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "method": "task_create",
   "params": {
     "project_slug": "my-project",
@@ -102,9 +136,19 @@ For a remote Niwa instance, replace `localhost:8000` with your domain (e.g. `htt
 }
 ```
 
+**`task_list`** — List tasks for a project. Scope: `read`.
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "task_list",
+  "params": {"project_slug": "my-project"}
+}
+```
+
 **`task_status`** — Poll task progress. Scope: `read`.
 ```json
-{"method": "task_status", "params": {"task_id": 42}}
+{"jsonrpc": "2.0", "id": 1, "method": "task_status", "params": {"task_id": 42}}
 ```
 
 Returns: `{id, title, status, branch_name, pr_url, pending_question, ...}`
@@ -113,6 +157,8 @@ Returns: `{id, title, status, branch_name, pr_url, pending_question, ...}`
 `task:create`.
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "method": "task_attach",
   "params": {
     "task_id": 42,
@@ -131,6 +177,8 @@ write access.
 **`task_respond`** — Unblock a waiting_input task. Scope: `task:write`.
 ```json
 {
+  "jsonrpc": "2.0",
+  "id": 1,
   "method": "task_respond",
   "params": {
     "task_id": 42,
@@ -141,28 +189,45 @@ write access.
 
 **`task_cancel`** — Cancel a queued/waiting task. Scope: `task:write`.
 ```json
-{"method": "task_cancel", "params": {"task_id": 42}}
+{"jsonrpc": "2.0", "id": 1, "method": "task_cancel", "params": {"task_id": 42}}
 ```
 
 **`task_retry`** — Re-queue a failed/cancelled task. Scope: `task:write`.
 ```json
-{"method": "task_retry", "params": {"task_id": 42}}
+{"jsonrpc": "2.0", "id": 1, "method": "task_retry", "params": {"task_id": 42}}
+```
+
+### Pull Tools
+
+**`pull_list`** — List open pull requests for a project. Scope: `read`.
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "pull_list", "params": {"project_slug": "my-project"}}
+```
+
+**`pull_merge`** — Merge a pull request. Scope: `merge`.
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "pull_merge",
+  "params": {"project_slug": "my-project", "number": 123, "method": "squash"}
+}
 ```
 
 ### Deployment Tools
 
 **`deploy_trigger`** — Trigger a deployment for a project. Scope: `deploy`.
 ```json
-{"method": "deploy_trigger", "params": {"project_slug": "my-project"}}
+{"jsonrpc": "2.0", "id": 1, "method": "deploy_trigger", "params": {"project_slug": "my-project"}}
 ```
 
 **`deployment_status`** — Fetch a deployment by id, or the latest deployment
 for a project. Scope: `read`.
 ```json
-{"method": "deployment_status", "params": {"deployment_id": 12}}
+{"jsonrpc": "2.0", "id": 1, "method": "deployment_status", "params": {"deployment_id": 12}}
 ```
 ```json
-{"method": "deployment_status", "params": {"project_slug": "my-project"}}
+{"jsonrpc": "2.0", "id": 1, "method": "deployment_status", "params": {"project_slug": "my-project"}}
 ```
 
 ## Recommended Workflow
@@ -207,5 +272,8 @@ for a project. Scope: `read`.
 
 **`-32009` JSON-RPC error**: State conflict, for example responding to a task
 that is not waiting for input.
+
+**`-32013` JSON-RPC error**: Payload/content limit exceeded, for example an
+attachment above `NIWA_MAX_ATTACHMENT_BYTES`.
 
 **`-32000` JSON-RPC error**: Internal error. Check Niwa server logs.
