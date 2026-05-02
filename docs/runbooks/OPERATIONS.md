@@ -15,6 +15,14 @@ niwa-executor logs -f    # tail ~/.niwa/logs/executor.log
 niwa-executor doctor     # local config/db/permission checks
 ```
 
+Dev server helpers:
+
+```bash
+niwa-executor dev start --detach
+niwa-executor dev status
+niwa-executor dev stop
+```
+
 ## Updates
 
 ```bash
@@ -51,6 +59,9 @@ This cancels every queued, waiting_input, and running task. If a running run has
 a recorded PID, Niwa sends SIGTERM to its process group. The audit log records
 the action.
 
+This is not a strong sandbox. Claude Code and child processes run with the OS
+permissions of the Niwa user.
+
 ## Monitoring
 
 - `GET /api/health` — liveness, returns version
@@ -78,7 +89,8 @@ niwa-executor backup --output /safe/path/niwa-backup.tar.gz
 ```
 
 The archive includes the SQLite DB, a manifest, and a redacted config snapshot.
-It does not include project repositories.
+It does not include project repositories, deployment artifacts, or secrets that
+only exist outside the SQLite DB/config snapshot.
 
 ## Restore
 

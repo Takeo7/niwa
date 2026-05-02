@@ -1,11 +1,20 @@
 # Niwa
 
-Personal autonomous code agent — turn natural language tasks into
-git commits, PRs and deploys via the Claude Code CLI.
+Local-first autonomous coding workbench. Niwa turns natural-language tasks into
+local git branches, verified runs, pull requests, and optional local/online
+deployments through the Claude Code CLI.
 
-**Status:** v1 MVP. Single-user, single-machine.
+**Status:** local-first MVP+ / post-v1.1 hardening. Single operator, local
+machine or self-hosted VPS. Smoke, auth scopes, deployments, MCP HTTP JSON-RPC,
+Caddy config generation, task plans/reviews, doctor, backup, and restore exist.
 
-See `docs/SPEC.md` for the full spec.
+Important truth boundary: the current planner and reviewer are deterministic
+`fake-json` components. They persist `TaskPlan` and `TaskReview` evidence, but
+they are not real LLM planning/review yet. Configurable real LLM
+planner/reviewer support is planned in PR-CLOSE-03.
+
+See `docs/SPEC.md` for the product contract and `docs/HANDBOOK.md` for the code
+map.
 
 ## Install
 
@@ -14,92 +23,141 @@ Tested on macOS and Linux. Requires:
 - Python 3.11+:
   - macOS: `brew install python@3.11`.
   - Ubuntu 22.04 LTS: `sudo apt install python3.11 python3.11-venv`.
-  - Ubuntu 24.04+: the system `python3` is already 3.12+
-    (≥3.11), but the venv module ships separately —
-    `sudo apt install python3-venv`.
-- Node.js 22+ — `brew install node@22` (macOS) or
-  https://nodejs.org (Linux).
+  - Ubuntu 24.04+: `sudo apt install python3-venv`.
+- Node.js 22+.
 - git.
-- Claude Code CLI authenticated:
-  `npm install -g @anthropic-ai/claude-code && claude`
-  then `/login` inside the TUI.
-- GitHub CLI (optional, needed to auto-open PRs):
-  `brew install gh && gh auth login`.
+- Claude Code CLI authenticated for real task execution:
+  `npm install -g @anthropic-ai/claude-code && claude`, then `/login`.
+- GitHub CLI authenticated if you want Niwa to open/merge PRs:
+  `gh auth login`.
 
 Then:
 
-```
+```bash
 git clone https://github.com/Takeo7/niwa.git
 cd niwa
 ./bootstrap.sh
 source ~/.niwa/venv/bin/activate
 niwa-executor start
-make dev
+niwa-executor dev start --detach
 ```
 
-Backend on :8000, frontend on :5173. Open
-http://127.0.0.1:5173 once both are up.
+Backend: http://127.0.0.1:8000. Frontend:
+http://127.0.0.1:5173.
 
-> **Note on dev mode:** `make dev` runs backend + frontend in
-> the foreground of the terminal where you invoked it. Closing
-> that terminal stops them. For persistent dev use tmux, nohup
-> or `caffeinate -s`. A `make dev-daemon` target is planned for
-> v1.1.
+Detached dev helpers:
 
-> **Single instance:** the bootstrap installs into `~/.niwa/`
-> and registers a single launchd/systemd service. Running
-> Niwa from multiple clones simultaneously is not supported —
-> the second clone overwrites the service file of the first.
+```bash
+niwa-executor dev status
+niwa-executor dev stop
+```
 
-## First project
+The bootstrap installs into `~/.niwa/` and registers one launchd/systemd user
+service. Running multiple Niwa clones against the same user home is not
+supported.
 
-Niwa works on existing git repos. Point it at one.
+## First Project
 
-1. Pick a repo you want to experiment with. It **must** be a
-   git repo with a clean working tree (no uncommitted changes).
-   Niwa creates per-task branches via `git checkout -b
-   niwa/task-<id>-<slug>` from the default branch (`main` /
-   `master`); it never touches your default directly.
+Niwa works on existing git repositories with a clean working tree.
 
-2. Open http://127.0.0.1:5173 and click "New project". Fill:
-   - **slug** — short identifier, lowercase, e.g. `playground`.
-   - **name** — human-readable label.
-   - **kind** — `library`, `web-deployable`, or `script`.
-     `library` runs the project's tests on completion;
-     `web-deployable` additionally exposes it at
-     `/api/deploy/<slug>/`; `script` skips the test step.
-   - **local_path** — absolute path to the repo on your disk,
-     e.g. `/Users/you/repos/myproject`.
-   - **git_remote** — optional. If set and `gh` is installed,
-     Niwa opens a PR automatically when each task finishes.
-   - **autonomy_mode** — `safe` (default, Niwa opens PR, you
-     merge) or `dangerous` (Niwa auto-merges after verify).
+1. Open the UI and create a project:
+   - `slug`: lowercase identifier, e.g. `playground`.
+   - `name`: display name.
+   - `kind`: `library`, `web-deployable`, or `script`.
+   - `local_path`: absolute path to the repo.
+   - `git_remote`: optional GitHub remote for PR automation.
+   - `autonomy_mode`: `safe` opens PRs for human merge; `dangerous` can merge
+     automatically after verification.
+   - `deploy_type`: `static` or `process`.
+   - `deploy_trigger`: `manual`, `on_done`, or `on_merge`.
+   - `public_enabled`: default `false`; only explicit public projects are routed
+     by generated Caddy config.
 
-3. Click into the project and hit "New task". Describe the work
-   in natural language. Task flows through: triage → execute →
-   verify → finalize (commit + push + PR).
+2. Create a task. Current flow:
+   triage -> deterministic plan -> execute -> verify -> deterministic review ->
+   finalize -> optional deploy.
 
-4. Watch the run stream in the task detail. A task that ends
-   with Claude asking you something parks in `waiting_input`
-   — respond in the UI and the executor resumes the session.
+3. Watch task detail. If Claude asks a question, the task moves to
+   `waiting_input`; respond in the UI and Niwa resumes the prior Claude session
+   when a session handle exists.
 
-## Known limitations (v1.0)
+4. For web projects, use the Deploys tab or `deploy_trigger` to create static or
+   process deployments. Public domain exposure still requires operator-owned
+   DNS/Caddy/tunnel setup.
 
-- DB lives in `~/.niwa/data/niwa-v1.sqlite3` and is shared
-  across all clones on the same user account. For isolated
-  testing use a separate user.
-- `bootstrap.sh` on macOS with brew requires `python3.11`
-  available; the script picks it automatically.
-- On Ubuntu 24.04+ the system `python3` (3.12 / 3.13) satisfies
-  the version requirement, but `python3-venv` must be installed
-  separately. Without it, `bootstrap.sh` fails at venv creation
-  with `ensurepip is not available`. Install it once with
-  `sudo apt install python3-venv` and rerun.
-- `niwa-executor stop` stops the launchd/systemd service but
-  does not kill `make dev` — use Ctrl-C in the terminal where
-  you launched it.
+## Gates
 
-See v1.1 roadmap in `docs/plans/FOUND-20260422-onboarding.md`.
+Local gates:
+
+```bash
+make test
+make smoke
+```
+
+`make smoke` is deterministic: it uses fake Claude and fake `gh`, an isolated
+`NIWA_HOME`, a temporary SQLite DB, and no real credentials or network services.
+It writes:
+
+- `.smoke/report.md`
+- `.smoke/report.json`
+- `.smoke/logs/*`
+
+Generated `.smoke/` output is ignored by git.
+
+CI runs backend tests, frontend tests, and smoke on Python 3.12 and Node 22.
+
+## Operator CLI
+
+Service and dev:
+
+```bash
+niwa-executor start|stop|restart|status|logs
+niwa-executor dev start --detach
+niwa-executor dev stop
+niwa-executor dev status
+```
+
+Diagnostics and maintenance:
+
+```bash
+niwa-executor doctor
+niwa-executor doctor --strict
+niwa-executor backup [--output /safe/path/niwa-backup.tar.gz]
+niwa-executor restore /safe/path/niwa-backup.tar.gz --yes
+niwa-executor cleanup --dry-run
+```
+
+Publication support:
+
+```bash
+niwa-executor set-password
+niwa-executor proxy render --ui-domain niwa.example.com --apps-domain apps.example.com --print
+niwa-executor proxy validate --ui-domain niwa.example.com --apps-domain apps.example.com
+```
+
+`proxy validate` requires a local `caddy` binary. Tests and smoke do not require
+Caddy, DNS, TLS, GitHub auth, or real Claude credentials.
+
+## Security Boundary
+
+Niwa is local-first and single-operator. It is not a hosted SaaS and does not
+provide a strong OS sandbox. Claude Code runs with the permissions of the user
+running Niwa. Before exposing Niwa beyond localhost, enable auth with
+`niwa-executor set-password`, use minimal MCP token scopes, keep
+`public_enabled=false` unless publication is intended, and review
+`docs/SECURITY.md`.
+
+## Known Gaps
+
+- Pipeline states exist but PR-CLOSE-02 must make the full state machine,
+  manual plan approval, and bounded `request_changes` loop real.
+- Planner/reviewer real LLM mode is planned for PR-CLOSE-03.
+- Clean-machine release gates and optional smoke-live are planned for
+  PR-CLOSE-04.
+- Online publication has deterministic Caddy support, but DNS/TLS/Caddy reloads
+  remain manual operator steps.
+- MCP is an HTTP JSON-RPC surface, not stdio. PR-CLOSE-07 will add stricter MCP
+  conformance (`initialize`, stable examples, enriched status).
 
 ## Architecture
 

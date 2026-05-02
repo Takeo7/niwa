@@ -1,3 +1,125 @@
+# Niwa — Product Contract
+
+This document contains two layers:
+
+- **Current implemented product contract**: what `main` implements after the
+  2026-05-01 WS-01..WS-10 batch.
+- **Historical MVP baseline**: the original v1 MVP spec. It is preserved for
+  context, but sections that say "no auth", "no MCP", or "no subdomains" are
+  historical, not current truth.
+
+## Current Implemented Product Contract
+
+### Scope
+
+Niwa is a local-first, single-operator coding workbench. It runs against local
+git repositories, invokes Claude Code CLI for task execution, verifies evidence,
+finalizes branches/PRs, and optionally deploys projects.
+
+Niwa can be used locally with no password. When an admin password is configured,
+critical APIs require session/API-token auth and scopes.
+
+### Current Task Flow
+
+The postmerge flow is:
+
+```
+triage -> deterministic plan -> execute -> verify -> deterministic review -> finalize -> optional deploy
+```
+
+Current truth:
+
+- Triage exists and can execute directly or split into subtasks.
+- `TaskPlan` exists and is persisted before code execution.
+- `TaskReview` exists and is persisted after verification.
+- Planner/reviewer are deterministic `fake-json` today. Real LLM
+  planner/reviewer mode is planned for PR-CLOSE-03.
+- Pipeline states (`triaging`, `planning`, `waiting_approval`, `executing`,
+  `verifying`, `reviewing`) exist in the model. PR-CLOSE-02 is responsible for
+  making them a real state machine throughout execution.
+- `waiting_input` is real: user responses are persisted and the executor resumes
+  the previous Claude session when a `session_handle` is available.
+
+### Current Data Model Additions
+
+The MVP's five core tables still exist. Current main also includes:
+
+- `attachments`
+- `deployments`
+- `sessions`
+- `api_tokens`
+- `audit_events`
+- `task_plans`
+- `task_reviews`
+
+Important current columns include:
+
+- `projects.deploy_type`
+- `projects.build_command`
+- `projects.dist_dir`
+- `projects.start_command`
+- `projects.healthcheck_path`
+- `projects.deploy_trigger` (`manual|on_done|on_merge`, default `manual`)
+- `projects.public_enabled` (default `false`)
+- `runs.pid`
+- `runs.session_handle`
+- `runs.verification_json`
+
+### Auth And Scopes
+
+Auth is disabled when no admin password exists. Once a password exists,
+protected routers require scopes:
+
+- `read`
+- `task:create`
+- `task:write`
+- `deploy`
+- `merge`
+- `admin`
+
+Public unauthenticated surfaces are intentionally narrow: health/readiness/auth
+status/login paths and explicitly public deployment serving for projects where
+`public_enabled=true`.
+
+### Deploy And Publication
+
+Niwa supports static and process deployments:
+
+- Manual deploy from UI/API.
+- Optional auto deploy on task done or PR merge through `deploy_trigger`.
+- Static deployments are served through `/api/deploy/{slug}/...`.
+- Process deployments can run behind generated Caddy routes when active.
+- Caddyfile generation exists through `niwa-executor proxy render|validate`.
+- Projects are private by default; Caddy routes are generated only for
+  `public_enabled=true`.
+
+DNS, TLS, Caddy installation/reload, and tunnels are operator-owned. CI and
+smoke do not require them.
+
+### MCP
+
+Niwa exposes HTTP JSON-RPC at `/api/mcp` with Bearer token auth. Current tools
+cover projects, tasks, attachments, pulls, deploy trigger, and deployment
+status. This is not stdio MCP. PR-CLOSE-07 will tighten conformance and add
+client-facing initialize/examples.
+
+### Smoke And Release Gates
+
+`make smoke` is deterministic and uses fake Claude/fake `gh` in an isolated
+environment. It does not require external credentials. PR-CLOSE-04 will add a
+clean-machine release gate and optional smoke-live opt-in for real integrations.
+
+### Security Boundary
+
+Niwa does not provide a strong OS sandbox. Claude Code runs with the permissions
+of the Niwa user. Online exposure requires auth, careful token scopes, and
+operator hardening. `public_enabled` defaults false.
+
+## Historical MVP Baseline
+
+The text below is the original v1 MVP baseline. It is useful historical context,
+but current implemented behavior is governed by the section above.
+
 # Niwa v1 — MVP
 
 **Objetivo:** un motor que ejecuta tareas autónomas de código sobre

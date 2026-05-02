@@ -8,6 +8,10 @@ Niwa exposes an MCP server at `POST /api/mcp`. All communication is JSON-RPC 2.0
 
 The MCP server is a thin layer over Niwa's internal services — it does not expose filesystem access or shell execution directly.
 
+Current truth: this is an HTTP JSON-RPC tool surface, not stdio MCP. It supports
+`ping`, `tools/list`, `tools/call`, and the tools listed below. Minimal
+`initialize`/client conformance hardening is planned for PR-CLOSE-07.
+
 ## Requirements
 
 - Niwa v1.1+ running locally or on a VPS
@@ -38,7 +42,7 @@ All tools (except `ping`) require a Bearer token.
 | `read` | project_list, project_get, task_list, task_status |
 | `task:create` | task_create, task_attach |
 | `task:write` | task_respond, task_cancel, task_retry |
-| `merge` | (future) pull_merge |
+| `merge` | pull_merge |
 | `deploy` | deploy_trigger |
 | `admin` | All scopes |
 

@@ -224,9 +224,9 @@ def respond_to_task(
 
     PR-V1-19 closes the clarification round-trip: the endpoint moves the
     task back to ``queued`` and logs the user text as a ``message``
-    event. Known limitation: the next adapter run does **not** receive
-    this response — composite prompt is deferred to a follow-up, the
-    event is stored for audit only.
+    event. The executor reads the latest ``user_response`` event and,
+    when a previous run has a ``session_handle``, resumes that Claude
+    session with the user's response as the prompt.
     """
 
     try:

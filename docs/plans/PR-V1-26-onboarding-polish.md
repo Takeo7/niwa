@@ -52,7 +52,7 @@ separado en este PR) para no perderlos, pero NO se arreglan aquí:
 - 8 (no per-clone): by-design decision, deferrable.
 - 9 (plist huérfano al mover): `niwa-executor doctor` futuro.
 - 10 (`make dev` foreground): añadir nota breve al README basta
-  como parche; el fix "real" es un `make dev-daemon` con nohup,
+  como parche; el fix "real" es un helper detached con nohup,
   v1.1.
 - 11 (footer del bootstrap con path absoluto): se arregla en este
   mismo PR junto a 3, son ambos el mismo mensaje → lo incluyo en
@@ -161,7 +161,7 @@ http://127.0.0.1:5173 once both are up.
 > **Note on dev mode:** `make dev` runs backend + frontend in
 > the foreground of the terminal where you invoked it. Closing
 > that terminal stops them. For persistent dev use tmux, nohup
-> or `caffeinate -s`. A `make dev-daemon` target is planned for
+> or `caffeinate -s`. A detached dev helper is planned for
 > v1.1.
 
 > **Single instance:** the bootstrap installs into `~/.niwa/`

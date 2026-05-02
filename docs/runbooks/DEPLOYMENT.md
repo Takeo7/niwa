@@ -16,12 +16,16 @@ This runbook covers production deployment of Niwa, including TLS, public exposur
 
 ```bash
 ./bootstrap.sh
-niwa-executor dev start
+niwa-executor dev start --detach
 ```
 
 UI on http://127.0.0.1:5173, backend on http://127.0.0.1:8000. No auth, no TLS, no public access. Suitable for single-user laptop use.
 
 ## VPS mode (public access)
+
+Before public exposure, enable auth and run `niwa-executor doctor --strict`.
+Niwa does not provide a strong OS sandbox; expose it only as a dedicated user
+or isolated host you are comfortable letting Claude Code mutate.
 
 ### 1. Configure base domain
 
@@ -105,6 +109,9 @@ curl -k https://niwa.example.com/api/auth/status
 ## Rollback
 
 If a deployment misbehaves, the backend tracks all versioned deployments under `~/.niwa/deployments/{slug}/{id}/`. Use the UI's Deploys tab to roll back to a previous build.
+
+Projects are not routed publicly unless `public_enabled=true`. Deployment
+triggers are configured per project as `manual`, `on_done`, or `on_merge`.
 
 ## Hardening checklist
 
