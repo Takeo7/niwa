@@ -82,6 +82,14 @@ must not be changed until the human reviews this file and gives one explicit:
   attachment size limits, run-level project/concurrency claim guards, MCP
   error mapping, backend tests, and `docs/SECURITY.md` updates. Targeted
   security/ops tests, backend, frontend, and smoke gates passed before commit.
+- 2026-05-02: PR-CLOSE-06 pushed and opened as draft PR #174, stacked on
+  PR-CLOSE-05. PR-CLOSE-07 started on
+  `codex/close-07-mcp-openclaw-conformance` for MCP handshake, tools/error
+  contract tests, OpenClaw examples, and an optional MCP smoke script.
+- 2026-05-02: PR-CLOSE-07 implemented locally with `initialize`, exact
+  `tools/list` contract tests, OpenClaw documentation examples, JSON-RPC
+  error assertions, and `scripts/mcp_smoke.py`. MCP targeted tests, backend,
+  frontend, and smoke gates passed before commit.
 
 ## Current Repo State
 

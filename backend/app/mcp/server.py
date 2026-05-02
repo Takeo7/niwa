@@ -9,6 +9,7 @@ MCP protocol:
               {"jsonrpc": "2.0", "id": ..., "error": {"code": ..., "message": ...}}
 
 Supported methods:
+    initialize                   → MCP handshake metadata
     ping                         → {pong: true, version: str}
     tools/list                   → list of tool definitions
     tools/call {name, arguments} → tool result
@@ -305,10 +306,10 @@ async def mcp_dispatch(
     if body.get("jsonrpc") != "2.0":
         return _err(rpc_id, -32600, "Invalid Request: jsonrpc must be '2.0'")
 
-    # Auth — all methods except ping require a token
+    # Auth — handshake/health methods are public; all tools require a token.
     scopes: set[str] = set()
     actor_id: str | None = None
-    if method != "ping":
+    if method not in {"initialize", "ping"}:
         try:
             scopes, actor_id = _get_mcp_token(request, db)
         except HTTPException as exc:
@@ -354,6 +355,13 @@ async def mcp_dispatch(
 
 
 def _dispatch(method: str, params: dict, scopes: set[str], db: Session) -> Any:
+    if method == "initialize":
+        return {
+            "protocolVersion": "2024-11-05",
+            "serverInfo": {"name": "niwa", "version": _VERSION},
+            "capabilities": {"tools": {"listChanged": False}},
+        }
+
     if method == "ping":
         return {"pong": True, "version": _VERSION}
 
